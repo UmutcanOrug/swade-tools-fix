@@ -331,23 +331,14 @@ Hooks.on('updateToken', async (scene, token, data, options, userId) => {
    
 });
 
-Hooks.on('renderActorSheet',(sheet,html)=>{   
+
+
+Hooks.on('renderActorSheet',(sheet,html)=>{
+
     
    // if (sheet.actor.data.type!='vehicle'){ /// not available for vehicle yet
       //  console.log(sheet);
         let sct=new SheetControl(sheet,html);
-        sct.rebindAll();
-  //  }
-    
-    
-
-})
-
-Hooks.on('renderActorSheetV2',(sheet,html)=>{   
-    
-   // if (sheet.actor.data.type!='vehicle'){ /// not available for vehicle yet
-      //  console.log(sheet);
-        let sct=new SheetControl(sheet,$(html));
         sct.rebindAll();
   //  }
     

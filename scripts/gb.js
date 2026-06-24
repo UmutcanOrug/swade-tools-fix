@@ -898,24 +898,13 @@ export const getArmorArea=(actor,area='torso')=>{
     
 }
 
-export const isHeavyWeapon=(item,action='')=>{
-   // let heavy=false;
-   let heavy=item?.system?.isHeavyWeapon;
+export const isHeavyWeapon = (item, action = '') => {
+  const itemHeavy = item?.system?.isHeavyWeapon === true;
+  const actionHeavy =
+    !!action &&
+    item?.system?.actions?.additional?.[action]?.isHeavyWeapon === true;
 
-   if (!action){
-    return heavy;
-   } else {
-        if (!heavy){
-           // console.log(action);
-            if (item?.system?.actions?.additional?.[action]!==undefined){  /// check for action
-                return item.system.actions.additional[action]?.isHeavyWeapon;
-            } else {
-                return heavy;
-            }
-            
-        }
-   }
-    
+  return itemHeavy || actionHeavy;
 }
 
 export const isHeavyArmor=(actor,area='torso')=>{
@@ -1052,7 +1041,7 @@ export const noneReloadType= async (actor,item,shots) => {
 
 
         let gearname=item.system.ammo.trim();
-            if (!gearname){               
+            if (!gearname){
                ui.notifications.error(trans('NoAmmoSet','SWADE'));
                return false;
             } else {
@@ -1127,11 +1116,8 @@ export const rechargeWeapon=async (actor,item,removeShots=false,xbullets=null)=>
     } else {
           
         if ((systemSetting('ammoFromInventory') && actor.type=='character') || (actor.type=='npc' && systemSetting('npcAmmo'))){
-
-            
             let gearname=item.system.ammo.trim();
-            if (!gearname){               
-
+            if (!gearname){
                ui.notifications.error(trans('NoAmmoSet','SWADE'));
                stop=true;
             } else {

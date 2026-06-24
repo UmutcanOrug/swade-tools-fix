@@ -68,7 +68,7 @@ export default class BasicRoll {
             }
 
             if (wildDie) {
-                wildExp = `,1dw${wildDie}x${mod}`
+                wildExp = `,1d${wildDie}x${mod}`
             }
 
             rollExp = `{1d${dieType}x${mod}${rofExp}${wildExp}}`
@@ -83,7 +83,7 @@ export default class BasicRoll {
             if (!wildDie) {
                 rollExp = `1d${dieType}${x}${this.prepareModifier(modifier)}`;
             } else {
-                rollExp = `{1d${dieType}x,1dw${wildDie}x}kh${this.prepareModifier(modifier)}`
+                rollExp = `{1d${dieType}x,1d${wildDie}x}kh${this.prepareModifier(modifier)}`
             }
         }
 
@@ -152,12 +152,12 @@ export default class BasicRoll {
             i++;
         }
 
-       /*  if (wildDie) {
+        if (wildDie) {
             this.colorWild(wildkey);
-        } */
+        }
     }
 
-   /*  colorWild(wildKey) {
+    colorWild(wildKey) {
         if (!!game.dice3d) {
             //  let colorPreset='none';
             const colorPreset = game.user.getFlag('swade', 'dsnWildDie') || 'none';
@@ -165,7 +165,7 @@ export default class BasicRoll {
                 this.roll.terms[0].dice[wildKey].options.colorset = colorPreset;
             }
         }
-    } */
+    }
 
     async buildDamageRoll(damage, modifier, raise, raisedie = 6) {
 
