@@ -1,7 +1,7 @@
-const ROF_SCRIPT_PATH =
-    'modules/swade-tools/scripts/services/rof-attack-pool.js';
+const GRENADE_SCRIPT_PATH =
+    'modules/swade-tools/scripts/services/grenade-attack.js';
 
-let compiledRofAttackPool = null;
+let compiledGrenadeAttack = null;
 
 const asArray = collection => {
     if (!collection){
@@ -14,6 +14,22 @@ const asArray = collection => {
         return collection.contents;
     }
     return Array.from(collection);
+};
+
+export const isGrenadeItem = item => {
+    if (
+        !item ||
+        !['weapon','consumable','gear'].includes(item.type)
+    ){
+        return false;
+    }
+
+    const category=String(item.system?.category ?? '');
+    const name=String(item.name ?? '');
+    return (
+        /grenade|throwable/i.test(category) ||
+        /grenade|detonator/i.test(name)
+    );
 };
 
 const findActorToken = actor => {
@@ -34,12 +50,12 @@ const findActorToken = actor => {
         null;
 };
 
-const getBundledRofAttackPool = async () => {
-    if (compiledRofAttackPool){
-        return compiledRofAttackPool;
+const getBundledGrenadeAttack = async () => {
+    if (compiledGrenadeAttack){
+        return compiledGrenadeAttack;
     }
 
-    const route=foundry.utils.getRoute(ROF_SCRIPT_PATH);
+    const route=foundry.utils.getRoute(GRENADE_SCRIPT_PATH);
     const moduleVersion=
         game.modules.get('swade-tools')?.version ?? '2.1.6';
     const response=await fetch(
@@ -48,35 +64,44 @@ const getBundledRofAttackPool = async () => {
     );
     if (!response.ok){
         throw new Error(
-            `Bundled RoF script could not be loaded (${response.status}).`
+            `Bundled grenade script could not be loaded (${response.status}).`
         );
     }
 
     const source=await response.text();
     if (
         !source.includes(
-            'SWADE RoF Attack Pool and Damage Allocator'
+            'SWADE Throw Grenade - Automatic Item Damage'
         )
     ){
-        throw new Error('Bundled RoF script marker is missing.');
+        throw new Error('Bundled grenade script marker is missing.');
     }
 
-    const AsyncFunction=foundry.utils.AsyncFunction;
-    compiledRofAttackPool=new AsyncFunction('scope',source);
-    return compiledRofAttackPool;
+    compiledGrenadeAttack=new foundry.utils.AsyncFunction(
+        'scope',
+        source
+    );
+    return compiledGrenadeAttack;
 };
 
-export const launchRofMacro = async (actor,item) => {
+export const launchGrenadeMacro = async (actor,item) => {
+    if (!isGrenadeItem(item)){
+        ui.notifications.warn(
+            'Bu oge el bombasi olarak algilanmadi.'
+        );
+        return false;
+    }
+
     const selectedToken=findActorToken(actor);
     if (!selectedToken){
         ui.notifications.warn(
-            'RoF kullanmadan once silahin sahibi olan tokeni sec.'
+            'El bombasi kullanmadan once oge sahibinin tokenini sec.'
         );
         return false;
     }
 
     try {
-        const execute=await getBundledRofAttackPool();
+        const execute=await getBundledGrenadeAttack();
         await execute({
             actor,
             item,
@@ -87,15 +112,15 @@ export const launchRofMacro = async (actor,item) => {
         return true;
     } catch (error){
         console.error(
-            'SWADE Tools | Bundled RoF attack failed',
+            'SWADE Tools | Bundled grenade attack failed',
             error
         );
         ui.notifications.error(
-            'Modun RoF sistemi calistirilamadi. '+
+            'Modun el bombasi sistemi calistirilamadi. '+
             'Ayrinti icin F12 konsolunu kontrol et.'
         );
         return false;
     }
 };
 
-export default launchRofMacro;
+export default launchGrenadeMacro;

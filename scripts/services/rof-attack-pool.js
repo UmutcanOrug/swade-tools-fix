@@ -115,6 +115,16 @@ const initialWeapon = isRangedWeapon(contextualItem)
 const escapeHTML = (value) =>
   foundry.utils.escapeHTML(String(value ?? ""));
 
+const SCROLLABLE_DIALOG_STYLE = [
+  "max-height:calc(100vh - 10rem)",
+  "max-height:calc(100dvh - 10rem)",
+  "min-height:0",
+  "overflow-y:auto",
+  "overflow-x:hidden",
+  "padding-right:0.5rem",
+  "scrollbar-gutter:stable",
+].join(";");
+
 const getOptionalSetting = (scopeName, settingName, fallback) => {
   try {
     const fullKey = `${scopeName}.${settingName}`;
@@ -215,7 +225,8 @@ try {
     window: { title: "SWADE RoF Attack Pool" },
     position: { width: 520 },
     content: `
-      <div class="standard-form">
+      <div class="standard-form"
+           style="${SCROLLABLE_DIALOG_STYLE}">
         <div class="form-group">
           <label>Weapon</label>
           <div class="form-fields">
@@ -840,31 +851,42 @@ const rollAttackPool = async ({
   };
 };
 
-const compareAttackPools = (left, right) => {
-  if (left.criticalFailure !== right.criticalFailure) {
-    return left.criticalFailure ? -1 : 1;
-  }
-
-  const leftTotals = left.usableResults.map(
-    (candidate) => candidate.total
-  );
-  const rightTotals = right.usableResults.map(
-    (candidate) => candidate.total
-  );
-  const resultCount = Math.max(leftTotals.length, rightTotals.length);
-  for (let index = 0; index < resultCount; index += 1) {
-    const difference =
-      (leftTotals[index] ?? -Infinity) -
-      (rightTotals[index] ?? -Infinity);
-    if (difference !== 0) return difference;
-  }
-  return 0;
-};
-
 const formatPoolTotals = (pool) =>
   pool.usableResults
     .map((candidate) => candidate.total)
     .join(", ");
+
+const getPoolTableHTML = (pool) => {
+  const usableIds = new Set(
+    pool.usableResults.map((candidate) => candidate.id)
+  );
+  const rows = pool.candidates.map((candidate) => `
+    <tr>
+      <td>${escapeHTML(candidate.label)}</td>
+      <td>${candidate.rawTotal}</td>
+      <td>
+        ${candidate.modifier >= 0 ? "+" : ""}${candidate.modifier}
+      </td>
+      <td><strong>${candidate.total}</strong></td>
+      <td>${usableIds.has(candidate.id) ? "Usable" : "Discarded"}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Die</th>
+          <th>Raw</th>
+          <th>Mod</th>
+          <th>Total</th>
+          <th>Pool</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+};
 
 const getActorBennies = () => {
   const value = Number(
@@ -886,20 +908,6 @@ const reviewAttackPool = async (pool, statusText) => {
   const gmBennies = getGmBennies();
   const rerollLocked =
     pool.criticalFailure && !dumbLuckEnabled;
-  const keptIds = new Set(
-    pool.usableResults.map((candidate) => candidate.id)
-  );
-  const rows = pool.candidates.map((candidate) => `
-    <tr>
-      <td>${escapeHTML(candidate.label)}</td>
-      <td>${candidate.rawTotal}</td>
-      <td>
-        ${candidate.modifier >= 0 ? "+" : ""}${candidate.modifier}
-      </td>
-      <td><strong>${candidate.total}</strong></td>
-      <td>${keptIds.has(candidate.id) ? "Usable" : "Discarded"}</td>
-    </tr>
-  `).join("");
   const buttons = [
     {
       action: "continue",
@@ -927,7 +935,7 @@ const reviewAttackPool = async (pool, statusText) => {
   const rerollHint = rerollLocked
     ? "Critical Failure: Benny reroll is locked unless Dumb Luck is enabled."
     : actorBennies > 0 || gmBennies > 0
-      ? "A Benny rerolls every Shooting die and the Wild Die. The better whole pool is kept; results from different attempts are never mixed."
+      ? "A Benny rerolls every Shooting die and the Wild Die. After the roll, you choose the previous or rerolled whole pool; results from different attempts are never mixed."
       : "No available Benny source. Continue with this pool.";
 
   return foundry.applications.api.DialogV2.wait({
@@ -936,7 +944,8 @@ const reviewAttackPool = async (pool, statusText) => {
     },
     position: { width: 720 },
     content: `
-      <div class="standard-form">
+      <div class="standard-form"
+           style="${SCROLLABLE_DIALOG_STYLE}">
         <p>
           <strong>Current usable totals:</strong>
           ${escapeHTML(formatPoolTotals(pool))}
@@ -946,18 +955,7 @@ const reviewAttackPool = async (pool, statusText) => {
             ? `<p><strong>${escapeHTML(statusText)}</strong></p>`
             : ""
         }
-        <table>
-          <thead>
-            <tr>
-              <th>Die</th>
-              <th>Raw</th>
-              <th>Mod</th>
-              <th>Total</th>
-              <th>Pool</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+        ${getPoolTableHTML(pool)}
         <p class="hint">${escapeHTML(rerollHint)}</p>
         ${
           bennyTraitModifiers.length
@@ -978,10 +976,66 @@ const reviewAttackPool = async (pool, statusText) => {
   });
 };
 
+const chooseBennyPool = async (previousPool, rerolledPool) =>
+  foundry.applications.api.DialogV2.wait({
+    window: {
+      title: `${weapon.name} - Choose Benny Result`,
+    },
+    position: { width: 760 },
+    content: `
+      <div class="standard-form"
+           style="${SCROLLABLE_DIALOG_STYLE}">
+        <p>
+          Benny has already been spent. Choose which complete attack pool
+          to use. The macro will not decide by highest single die and will
+          not mix dice between the two pools.
+        </p>
+
+        <section style="margin-bottom:1rem">
+          <h3>
+            Previous Pool:
+            ${escapeHTML(formatPoolTotals(previousPool))}
+          </h3>
+          ${getPoolTableHTML(previousPool)}
+        </section>
+
+        <section>
+          <h3>
+            Benny Reroll:
+            ${escapeHTML(formatPoolTotals(rerolledPool))}
+          </h3>
+          ${getPoolTableHTML(rerolledPool)}
+        </section>
+
+        <p class="hint">
+          Closing this window keeps the previous pool. The window is
+          non-modal, so chat and the canvas remain usable.
+        </p>
+      </div>
+    `,
+    buttons: [
+      {
+        action: "keep-previous",
+        label: "Keep Previous Pool",
+        icon: "fa-solid fa-rotate-left",
+        default: true,
+      },
+      {
+        action: "use-reroll",
+        label: "Use Benny Reroll",
+        icon: "fa-solid fa-dice",
+      },
+    ],
+    close: () => "keep-previous",
+    rejectClose: false,
+    modal: false,
+  });
+
 let attackPool = await rollAttackPool({
   attemptNumber: 1,
   isBennyReroll: false,
 });
+attackPool.selectionNote = "Initial pool";
 const poolAttempts = [attackPool];
 let poolReviewStatus = "";
 
@@ -1025,18 +1079,22 @@ while (true) {
   });
   poolAttempts.push(rerolledPool);
   const previousPool = attackPool;
-  const rerollIsBetter =
-    compareAttackPools(rerolledPool, previousPool) > 0;
-  if (rerollIsBetter) attackPool = rerolledPool;
+  const poolChoice = await chooseBennyPool(
+    previousPool,
+    rerolledPool
+  );
+  const useReroll = poolChoice === "use-reroll";
+  rerolledPool.selectionNote = useReroll
+    ? "Chosen by player"
+    : "Rejected by player";
+  if (useReroll) attackPool = rerolledPool;
 
-  poolReviewStatus =
-    `Benny attempt ${rerolledPool.attemptNumber}: ` +
-    `[${formatPoolTotals(rerolledPool)}]. ` +
-    (rerollIsBetter
-      ? "The rerolled pool is better and was kept."
-      : `The previous pool [${formatPoolTotals(
-          previousPool
-        )}] is equal or better and was kept.`);
+  poolReviewStatus = useReroll
+    ? `Benny attempt ${rerolledPool.attemptNumber} ` +
+      `[${formatPoolTotals(rerolledPool)}] was chosen by the player.`
+    : `Previous pool [${formatPoolTotals(previousPool)}] was kept ` +
+      `instead of Benny attempt ${rerolledPool.attemptNumber} ` +
+      `[${formatPoolTotals(rerolledPool)}].`;
 }
 
 const candidates = attackPool.candidates;
@@ -1103,7 +1161,13 @@ const rerollHistoryRows = poolAttempts.map((pool) => `
     <td>${pool.attemptNumber}</td>
     <td>${pool.isBennyReroll ? "Benny reroll" : "Initial roll"}</td>
     <td>${escapeHTML(formatPoolTotals(pool))}</td>
-    <td>${pool === attackPool ? "Final pool" : "Not kept"}</td>
+    <td>
+      ${
+        pool === attackPool
+          ? "Final pool"
+          : escapeHTML(pool.selectionNote ?? "Not kept")
+      }
+    </td>
   </tr>
 `).join("");
 
@@ -1758,7 +1822,8 @@ try {
     window: { title: `${weapon.name} - Assign RoF Results` },
     position: { width: 940 },
     content: `
-      <div class="standard-form">
+      <div class="standard-form"
+           style="${SCROLLABLE_DIALOG_STYLE}">
         <p>
           Her sonucu istedigin hedefe ver. Ayni hedefi birden fazla kez
           secebilirsin. Ayni isimli hedefler #1, #2, #3 diye ayrilir.

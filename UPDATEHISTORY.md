@@ -1,6 +1,16 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.6
+
+- Made all RoF workflow dialogs scrollable on short/small screens.
+- Benny rerolls now ask the player to keep the previous pool or use the
+  rerolled pool instead of selecting one mathematically.
+- Added the grenade automation directly to grenade rows on the native
+  character sheet.
+- Replaced the normal blast-template (MBT/SBT/LBT) shortcut with a grenade
+  button on grenade items only.
+
 ## 2.1.5
 
 - Bundled the RoF Attack Pool and Damage Allocator directly in the module.
