@@ -1,4 +1,7 @@
-const ROF_MACRO_MARKER = 'SWADE RoF Attack Pool and Damage Allocator';
+const ROF_SCRIPT_PATH =
+    'modules/swade-tools/scripts/services/rof-attack-pool.js';
+
+let compiledRofAttackPool = null;
 
 const asArray = collection => {
     if (!collection){
@@ -11,29 +14,6 @@ const asArray = collection => {
         return collection.contents;
     }
     return Array.from(collection);
-};
-
-const findRofMacro = macros => {
-    const candidates=asArray(macros).filter(macro =>
-        macro && (!macro.type || macro.type==='script')
-    );
-
-    const marked=candidates.find(macro =>
-        String(macro.command ?? macro._source?.command ?? '')
-            .includes(ROF_MACRO_MARKER)
-    );
-    if (marked){
-        return marked;
-    }
-
-    const knownNames=new Set([
-        'swade rof attack pool',
-        'swade rof attack pool and damage allocator',
-        'rof attack pool'
-    ]);
-    return candidates.find(macro =>
-        knownNames.has(String(macro.name ?? '').trim().toLowerCase())
-    ) ?? null;
 };
 
 const findActorToken = actor => {
@@ -54,6 +34,38 @@ const findActorToken = actor => {
         null;
 };
 
+const getBundledRofAttackPool = async () => {
+    if (compiledRofAttackPool){
+        return compiledRofAttackPool;
+    }
+
+    const route=foundry.utils.getRoute(ROF_SCRIPT_PATH);
+    const moduleVersion=
+        game.modules.get('swade-tools')?.version ?? '2.1.5';
+    const response=await fetch(
+        `${route}?v=${encodeURIComponent(moduleVersion)}`,
+        {cache:'no-store'}
+    );
+    if (!response.ok){
+        throw new Error(
+            `Bundled RoF script could not be loaded (${response.status}).`
+        );
+    }
+
+    const source=await response.text();
+    if (
+        !source.includes(
+            'SWADE RoF Attack Pool and Damage Allocator'
+        )
+    ){
+        throw new Error('Bundled RoF script marker is missing.');
+    }
+
+    const AsyncFunction=foundry.utils.AsyncFunction;
+    compiledRofAttackPool=new AsyncFunction('scope',source);
+    return compiledRofAttackPool;
+};
+
 export const launchRofMacro = async (actor,item) => {
     const selectedToken=findActorToken(actor);
     if (!selectedToken){
@@ -63,23 +75,27 @@ export const launchRofMacro = async (actor,item) => {
         return false;
     }
 
-    const macro=findRofMacro(game.macros);
-    if (!macro || typeof macro.execute!=='function'){
-        ui.notifications.warn(
-            'Bu dunyada SWADE RoF Attack Pool makrosu bulunamadi. '+
-            'Once en yeni RoF makrosunu olustur veya ice aktar.'
+    try {
+        const execute=await getBundledRofAttackPool();
+        await execute({
+            actor,
+            item,
+            token:selectedToken,
+            weapon:item,
+            itemUuid:item.uuid
+        });
+        return true;
+    } catch (error){
+        console.error(
+            'SWADE Tools | Bundled RoF attack failed',
+            error
+        );
+        ui.notifications.error(
+            'Modun RoF sistemi calistirilamadi. '+
+            'Ayrinti icin F12 konsolunu kontrol et.'
         );
         return false;
     }
-
-    await macro.execute({
-        actor,
-        item,
-        token:selectedToken,
-        weapon:item,
-        itemUuid:item.uuid
-    });
-    return true;
 };
 
 export default launchRofMacro;

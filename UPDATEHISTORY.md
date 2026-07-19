@@ -1,6 +1,15 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.5
+
+- Bundled the RoF Attack Pool and Damage Allocator directly in the module.
+- The weapon RoF button no longer requires a separate world macro.
+- Added native Actor/GM Benny spending and whole-pool RoF rerolls.
+- Benny rerolls respect SWADE Benny Trait modifiers, Critical Failure, and
+  Dumb Luck.
+- Ammunition is consumed once, after the final attack pool is accepted.
+
 ## Features Available (v1.0.0)
 
 1. Automatically rolls initiative when combat starts 
