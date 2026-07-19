@@ -137,6 +137,24 @@ restricted: true
         config: false
         });
 
+      game.settings.register(gb.moduleName, 'nativeSheetIntegration', {
+        name: gb.trans('NativeSheetIntegration'),
+        hint: gb.trans('NativeSheetIntegrationHint'),
+        default: true,
+        scope: "world",
+        type: Boolean,
+        config: true
+        });
+
+      game.settings.register(gb.moduleName, 'nativeRofNormalization', {
+        name: gb.trans('NativeRofNormalization'),
+        hint: gb.trans('NativeRofNormalizationHint'),
+        default: true,
+        scope: "world",
+        type: Boolean,
+        config: true
+        });
+
 
         game.settings.register(gb.moduleName, 'bloodAndGoreRifts', {
           name: gb.trans('bloodAndGoreRifts'),

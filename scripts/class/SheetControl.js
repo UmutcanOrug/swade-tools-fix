@@ -4,6 +4,9 @@ import CharRoll from './CharRoll.js';
 import ItemDialog from './ItemDialog.js';
 import ItemRoll from './ItemRoll.js';
 import SystemRoll from './SystemRoll.js';
+import AutomationService from '../services/AutomationService.js';
+import ResolutionService from '../services/ResolutionService.js';
+import LastAttackService from '../services/LastAttackService.js';
 
 export default class SheetControl {
 
@@ -200,6 +203,92 @@ export default class SheetControl {
         
     }
 
+    bindNativeTools(){
+        const container=this.html?.jquery ? this.html : $(this.html);
+        const supportedTypes=new Set([
+            'weapon',
+            'power',
+            'gear',
+            'consumable',
+            'action',
+            'shield'
+        ]);
+
+        container.find('[data-item-id]').each((_index,element)=>{
+            const row=$(element);
+            const itemId=row.attr('data-item-id') ?? row.data('itemId');
+            const item=this.sheet.actor.items.get(itemId);
+
+            if (!item || !supportedTypes.has(item.type)){
+                return;
+            }
+
+            let controls=row.find('.item-controls').first();
+
+            if (!controls.length){
+                controls=row.children('.swade-tools-inline-controls').first();
+
+                if (!controls.length){
+                    controls=$(
+                        '<span class="swade-tools-inline-controls"></span>'
+                    );
+                    row.append(controls);
+                }
+            }
+
+            if (!controls.find('.swade-tools-native-open').length){
+                const button=$(
+                    `<button type="button" class="swade-tools-native-open" `+
+                    `title="${gb.trans('OpenCombatAssistant')}">`+
+                    `<i class="fas fa-crosshairs"></i></button>`
+                );
+
+                button.on('click',(event)=>{
+                    event.preventDefault();
+                    event.stopPropagation();
+                    new ItemDialog(this.sheet.actor,item.id).showDialog();
+                });
+                controls.prepend(button);
+            }
+
+            const profile=AutomationService.getResolutionProfile(item);
+
+            if (profile.mode!=='none' &&
+                !controls.find('.swade-tools-native-workflow').length){
+                const automationButton=$(
+                    `<button type="button" class="swade-tools-native-workflow" `+
+                    `title="${gb.trans('RunAutomationWorkflow')}">`+
+                    `<i class="fas fa-wand-magic-sparkles"></i></button>`
+                );
+                automationButton.on('click',async event=>{
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await ResolutionService.startItemWorkflow(this.sheet.actor,item);
+                });
+                controls.prepend(automationButton);
+            } else if (profile.mode==='none'){
+                controls.find('.swade-tools-native-workflow').remove();
+            }
+
+            if (LastAttackService.matches(this.sheet.actor,item) &&
+                !controls.find('.swade-tools-repeat-last').length){
+                const repeatButton=$(
+                    `<button type="button" class="swade-tools-repeat-last" `+
+                    `title="${gb.trans('RepeatLastAttack')}">`+
+                    `<i class="fas fa-clock-rotate-left"></i></button>`
+                );
+                repeatButton.on('click',async event=>{
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await LastAttackService.repeat(this.sheet.actor);
+                });
+                controls.prepend(repeatButton);
+            } else if (!LastAttackService.matches(this.sheet.actor,item)){
+                controls.find('.swade-tools-repeat-last').remove();
+            }
+        });
+    }
+
     doItem(target){
         let parentDiv=target.parents('.item')
         let itemId=parentDiv.data('itemId')
@@ -227,11 +316,12 @@ export default class SheetControl {
                 })
 
 
-                if (type=='power' && !target.closest('li').find('.swade-tools-template-buttons').length){
+                let templatehtml=gb.getTemplatesHTML(actorItem);
+                if (templatehtml && !target.closest('li').find('.swade-tools-template-buttons').length){
 
                    
 
-                    target.closest('li').find('.item-controls').prepend(`<span class="swade-tools-template-buttons">${gb.getTemplatesHTML(actorItem)}</span>`).on('click','button[data-template]',button=>{
+                    target.closest('li').find('.item-controls').prepend(`<span class="swade-tools-template-buttons">${templatehtml}</span>`).on('click','button[data-template]',button=>{
                         
                         let templateType=$(button.currentTarget).data("template");
 
@@ -253,6 +343,11 @@ export default class SheetControl {
    
 
     rebindAll(){
+        if (gb.setting('nativeSheetIntegration')){
+            this.bindNativeTools();
+            return;
+        }
+
         this.bindAttributes();
         this.bindSkills();
         this.bindDamage();

@@ -2,6 +2,8 @@
 import BasicRoll from './BasicRoll.js';
 import * as gb from './../gb.js';
 import Char from './Char.js';
+import WeaponResourceService from '../services/WeaponResourceService.js';
+import PowerPointService from '../services/PowerPointService.js';
 
 
 export default class CharRoll extends BasicRoll{
@@ -23,6 +25,10 @@ export default class CharRoll extends BasicRoll{
         this.targetShow='';
         this.item=false;
         this.rof=1;
+        this.resourcesCommitted=false;
+        this.resourceCostExplicit=false;
+        this.resourceAttackRanged=null;
+        this.powerResourcesCommitted=false;
        // this.itemid=false;
         this.rolltype=false;
         this.shotsUsed=1;
@@ -63,7 +69,17 @@ export default class CharRoll extends BasicRoll{
 
     addModifier(mod,reason){
      //   console.log(mod,reason);
-        if (typeof mod == "string" && mod.includes('d')){
+        if (mod===undefined || mod===null || mod===''){
+            return;
+        }
+
+        if (typeof mod == "string" && mod.toLowerCase().includes('d')){
+            const validationFormula=mod.trim().replace(/^\+/,'');
+
+            if (!Roll.validate(validationFormula)){
+                console.warn(`${gb.moduleName} | Ignored invalid dice modifier`,mod);
+                return;
+            }
 
             
             mod=this.addDiceModifier(mod); // add the plus
@@ -71,7 +87,11 @@ export default class CharRoll extends BasicRoll{
            
             this.reasons.push(`${reason}: ${mod}`);
         } else {
-        mod=gb.realInt(eval(mod));
+        mod=Number(String(mod).trim());
+        if (!Number.isFinite(mod)){
+            console.warn(`${gb.moduleName} | Ignored invalid numeric modifier`,mod);
+            return;
+        }
         if (mod!=0){
         this.mod+=mod;
         
@@ -226,6 +246,18 @@ export default class CharRoll extends BasicRoll{
     }
 
     async rollAtt(attribute,rof=1){
+        this.rof=rof;
+        this.setResourceAttackContext(attribute,rof);
+
+        if (this.item){
+            await this.addItemFlavor(this.item);
+        }
+
+        if (this.item && this.manageshots &&
+            !await this.countShots()){
+            return null;
+        }
+
         let dieType=this.actor.system.attributes[attribute].die.sides;
         
       //  let modDice=this.actor.data.data.attributes[attribute].die.modifier+modifier;
@@ -283,7 +315,13 @@ export default class CharRoll extends BasicRoll{
 
         this.addFlag('rolltype','attribute');
 
-        return await this.buildRoll(dieType,wildDie,this.mod,rof);
+        const roll=await this.buildRoll(dieType,wildDie,this.mod,rof);
+
+        if (roll && !await this.commitShotResources()){
+            return null;
+        }
+
+        return roll;
     }
 
 
@@ -303,7 +341,9 @@ export default class CharRoll extends BasicRoll{
     async rollArcaneDevice(){
 
         this.manageshots=true;
-        this.countShots();
+        if (!await this.countShots()) {
+            return null;
+        }
         this.flavor+=`<div>${gb.trans('ActivateArcaneDevice','SWADE')}</div>`;
         this.rolltype='skill';
         this.addFlag('arcanedevice',1);
@@ -332,6 +372,7 @@ export default class CharRoll extends BasicRoll{
       //  console.log(skillName,rof)
 
         this.rof=rof;
+        this.setResourceAttackContext(skillName,rof);
 
         if (this.item){
             await this.addItemFlavor(this.item)
@@ -339,19 +380,26 @@ export default class CharRoll extends BasicRoll{
        
 
         if (this.item && this.manageshots){
-           
-            this.countShots();
+            if (!await this.countShots()) {
+                return null;
+            }
         }
 
         
         if (this.item && this.item.system?.innate){ ///innate power -> no roll
 
             if (this.canCast){
-                this.powerCount();
-                gb.say(`${await this.getItemCard(this.item)}${gb.trans('InnatePower')}`,this.actor.name);
+                const committed=await this.powerCount();
+
+                if (committed){
+                    await gb.say(
+                        `${await this.getItemCard(this.item)}${gb.trans('InnatePower')}`,
+                        this.actor.name
+                    );
+                }
             }
             this.dontDisplay=true;            
-            return 
+            return null;
         }
 
         if (this.item && this.item.type=='weapon' && skillName==gb.setting('shootingSkill')){
@@ -447,7 +495,13 @@ export default class CharRoll extends BasicRoll{
        
 
 
-        return await this.buildRoll(dieType,wildDie,this.mod,rof);
+        const roll=await this.buildRoll(dieType,wildDie,this.mod,rof);
+
+        if (roll && !await this.commitShotResources()){
+            return null;
+        }
+
+        return roll;
        
 
     }
@@ -530,151 +584,112 @@ export default class CharRoll extends BasicRoll{
     } */
   
 
-    powerCount(){
-
-       // console.log(this.rolltype);
-
-        if (this.item && 
-            (this.item.system?.innate || this.rolltype=='skill') && 
-            (this.item.isArcaneDevice || (!gb.systemSetting('noPowerPoints') &&  this.item.type=='power'))){
-            let ppspent=1;
-
-           // let arcane=this.item.system.arcane
-
-            if (this.item.system?.innate || this.raiseCount()>=0){
-                ppspent=this.shotsUsed;
-            } else {
-                this.flavorAdd.end+=`<div>${gb.trans('FailedPP')}</div>`
-                this.addFlag('arcanefail',{pp:this.shotsUsed-1,arcaneItem:this.item._id});
-              //  this.addFlag('failedarcane',arcane);
+    async powerCount(){
+        if (this.item &&
+            (this.item.system?.innate || this.rolltype=='skill') &&
+            (this.item.isArcaneDevice ||
+                (!gb.systemSetting('noPowerPoints') &&
+                    this.item.type=='power'))){
+            if (this.powerResourcesCommitted){
+                return true;
             }
 
-            let char=new Char(this.actor);
-            char.spendPP(ppspent,this.item._id)
+            const success=this.item.system?.innate ||
+                (this.roll && this.raiseCount()>=0);
+            const result=await PowerPointService.commitActivation(this.item,{
+                costOverride: this.shotsUsed,
+                success
+            });
 
-            /* let actualPP=this.getActualPP();
-           // let updateKey='data.powerPoints.general.value';
-           
-
-            if (!arcane){
-               // actualPP=this.actor.data.data.powerPoints[arcane].value;
-                arcane='general';
+            if (!result.ok){
+                this.noPowerPointsMsg(this.item);
+                return false;
             }
 
-            let updateKey='data.powerPoints.'+arcane+'.value'
+            this.powerResourcesCommitted=true;
 
-            let newpp=gb.realInt(actualPP)-ppspent;
-           
-            this.actor.update({[updateKey]:newpp}) */
-           
+            if (!success){
+                this.flavorAdd.end+=`<div>${gb.trans('FailedPP')}</div>`;
+                this.addFlag('arcanefail',{
+                    pp: Math.max(0,this.shotsUsed-1),
+                    arcaneItem: this.item.id
+                });
+            }
         }
-        
+
+        return true;
     }
 
     async countShots(){
         
         if (this.manageshots){
-       //let item=this.actor.items.get(this.itemid);
-     
-        let maxshots;
-        let currentShots;
-        let update;
-       // let entity;
-       if (this.item.isArcaneDevice){
-
-        maxshots=gb.realInt(this.item.system.powerPoints.value)
-        currentShots=maxshots;
-
-        
-        if (!maxshots){
-            this.noPowerPointsMsg(this.item);
-        }
-    }else 
-        if (this.item.type=='weapon'){
-
-
-            maxshots=gb.realInt(this.item.system.shots);
-
-            if (this.item.system.reloadType=="none" && maxshots){  /// autoReload
-
-                maxshots=false;
-
-                let reload=await gb.noneReloadType(this.actor,this.item,this.shotsUsed);
-                //console.log(reload);
-
-               if (!reload){
-
-                    this.dontDisplay=true;
-               }
-
-            } else {
-
-               
-            currentShots=gb.realInt(this.item.system.currentShots)
-         //   entity=this.item
-            update='system.currentShots';
-            }
-            
-        } else if (this.item.type=='power'){
-            let char=new Char(this.actor);
-            maxshots=gb.realInt(char.getActualPP(this.item.system.arcane))
-            currentShots=maxshots;
-            if (!maxshots){
-                this.noPowerPointsMsg();
-                
-            }
-           // entity=this.actor;
-            update=false;
-        } 
-       
-        
-        
-        
-
-            if (maxshots){ /// check again for weapon and count
-                currentShots-=this.shotsUsed;
-
-                if (currentShots<0){
-                    if (this.item.type=='weapon'){
-                        /* if (this.item.system.reloadType=="none"){  /// autoReload
-
-                           // decrease ammo from inventory
-                           
-                           if (!gb.noneReloadType(this.actor,this.item,this.shotsUsed)){
-
-                            this.noShotsMsg(this.item);
-                        }
-                           
-
-                           // gb.rechargeWeapon(this.actor,this.item,this.shotsUsed) /// removed SWADE system 2.3
-                            
-                            //this.item.reload();
-                            
-                            
-                           
-                        } else { */
-                            this.noShotsMsg(this.item);
-                       /*  } */
-                        
-                    } else if (this.item.type=='power' || this.item.isArcaneDevice){
-                        this.noPowerPointsMsg(this.item);
-                    }
-                   
-                    return false;
-                } else {
-                    if (update){ /// only for shots
-                        this.item.update({[update]:currentShots});
-                    }
-                   
-                  //  console.log(entity);
-                    return true;
-                }
-            } else {
+        if (this.item?.type=='weapon'){
+            if (this.resourcesCommitted){
                 return true;
             }
+
+            const result=WeaponResourceService.validate(
+                this.item,
+                this.shotsUsed,
+                {rangedAttack: this.resourceAttackRanged}
+            );
+
+            if (!result.ok){
+                if (result.reason==='unsupported'){
+                    ui.notifications.error(gb.trans('ResourceApiUnavailable'));
+                    this.dontDisplay=true;
+                } else {
+                    this.noShotsMsg(this.item);
+                }
+                return false;
+            }
+
+            return true;
+        }
+
+        const validation=PowerPointService.validate(
+            this.item,
+            this.shotsUsed
+        );
+
+        if (!validation.ok){
+            this.noPowerPointsMsg(this.item);
+            return false;
+        }
+
+        return true;
         } else {
             return true;
         }
+    }
+
+    async commitShotResources(){
+        if (!this.manageshots || this.item?.type!=='weapon' ||
+            this.resourcesCommitted){
+            return true;
+        }
+
+        const result=await WeaponResourceService.commit(
+            this.item,
+            this.shotsUsed,
+            {rangedAttack: this.resourceAttackRanged}
+        );
+
+        if (!result.ok){
+            if (result.reason==='busy'){
+                ui.notifications.warn(gb.trans('ResourceTransactionBusy'));
+                this.dontDisplay=true;
+            } else if (result.reason==='unsupported'){
+                ui.notifications.error(gb.trans('ResourceApiUnavailable'));
+                this.dontDisplay=true;
+            } else {
+                this.noShotsMsg(this.item);
+            }
+            return false;
+        }
+
+        this.resourcesCommitted=true;
+        return true;
     }
 
 
@@ -683,7 +698,7 @@ export default class CharRoll extends BasicRoll{
     noShotsMsg(item){
        // let char=new Char(this.actor);
 
-       let buttons = {
+    let buttons = {
         cancel: {
             label: `<i class="fas fa-times"></i> ${gb.trans('Cancel','SWADE')}`,
             callback: ()=>{
@@ -692,15 +707,19 @@ export default class CharRoll extends BasicRoll{
         },
         ok: {
             label: `<i class="fas fa-redo"></i> ${gb.trans('Reload','SWADE')}`,
-            callback: ()=>{
+            callback: async ()=>{
               //  gb.rechargeWeapon(this.actor,this.item); /// removed swade system 2.3
 
-              this.item.reload();
+              await this.item.reload();
 
             }
         }
 
         
+    }
+
+    if (['none','self'].includes(item.system?.reloadType)){
+        delete buttons.ok;
     }
 
     /* SWADE SYSTEM now handles reload
@@ -741,9 +760,26 @@ export default class CharRoll extends BasicRoll{
 
     
 
-    useShots(shots){
+    useShots(shots,explicit=true){
         this.shotsUsed=gb.realInt(shots);
+        this.resourceCostExplicit=explicit;
         
+    }
+
+    setResourceAttackContext(traitName,rof=1){
+        if (!WeaponResourceService.isMixedWeapon(this.item)){
+            this.resourceAttackRanged=null;
+            return;
+        }
+
+        this.resourceAttackRanged=WeaponResourceService.isRangedAttack(
+            this.item,
+            traitName,
+            {
+                fightingSkill: gb.setting('fightingSkill'),
+                shootingSkill: gb.setting('shootingSkill')
+            }
+        );
     }
 
     async wildAttack(){
@@ -860,6 +896,7 @@ export default class CharRoll extends BasicRoll{
             this.addFlag('useactor',this.actor.id);
             this.addFlag('rolltype',this.rolltype);
             this.addFlag('userof',this.rof);
+            this.addFlag('resourcesUsed',this.shotsUsed);
             this.addFlag('usetarget',this.usetarget);
 
            // gb.log(this.actor,'actor');
@@ -877,7 +914,7 @@ export default class CharRoll extends BasicRoll{
         this.action=action;
     }
 
-   display(flags=false){
+   async display(flags=false){
 
        
         
@@ -890,10 +927,12 @@ export default class CharRoll extends BasicRoll{
             this.flavor+=`<div>${this.reasons.join(', ')}</div>`
         }
 
-        this.powerCount(); /// check for power failure/success and spend pp
+        if (!await this.powerCount()){
+            return null;
+        }
         
       let  dataformodules='';
-        if (this.rolltype=='skill'){
+        if (this.rolltype=='skill' && this.item){
             let actorid=this.actor.id;
             if (this.vehicle){
                 actorid=this.vehicle.id;
@@ -943,7 +982,28 @@ export default class CharRoll extends BasicRoll{
 
       // console.log(this.roll);
 
-       this.roll.toMessage(chatData,{rollMode:game.settings.get("core","rollMode")})
+       const message=await this.roll.toMessage(
+           chatData,
+           {rollMode:game.settings.get("core","rollMode")}
+       );
+
+       if (message && this.rolltype==='skill' && this.item?.type==='weapon'){
+           const targetUuids=Array.from(game.user.targets ?? [])
+               .map(target=>target.document?.uuid)
+               .filter(Boolean);
+           Hooks.call(
+               'swadeToolsAttackComplete',
+               this.actor,
+               this.item,
+               this.action,
+               this.rof,
+               this.shotsUsed,
+               targetUuids,
+               message
+           );
+       }
+
+       return message;
        /* .then((chat)=>{ => already in chatData
        
         
@@ -965,5 +1025,7 @@ export default class CharRoll extends BasicRoll{
 
        
         }
+
+        return null;
     }
 }

@@ -2,6 +2,11 @@ import CharRoll from './CharRoll.js';
 import * as gb from './../gb.js';
 import ItemRoll from './ItemRoll.js';
 import Char from './Char.js';
+import {
+    buildAttackModes,
+    getStandardRofResourceCost
+} from '../services/AttackModeResolver.js';
+import WeaponResourceService from '../services/WeaponResourceService.js';
 
 export default class ItemDialog {
     constructor(actor,itemId){
@@ -175,7 +180,7 @@ export default class ItemDialog {
        
         content+=`</div>`
 
-        if (item.type=='power' || item.type=='weapon'){
+        if (['power','weapon','gear','consumable'].includes(item.type)){
             let templatehtml=gb.getTemplatesHTML(item);
             if (templatehtml){
                 content+=`<span class="swade-tools-template-buttons"><strong>Templates:</strong>${templatehtml}</span>`
@@ -314,7 +319,9 @@ export default class ItemDialog {
         /// ==> END POWER MODIFIERS
 
 
-        if ( gb.setting('selectModifiers') || gb.setting('askCalledShots')){
+        if (gb.setting('selectModifiers') ||
+            gb.setting('askCalledShots') ||
+            Boolean(weaponactions.trait)){
         content+=`<div class="swadetools-damage-actions swadetools-mod-add swadetools-mid-title"><h3>${gb.trans("ModOther",'SWADE')}</h3></div>`;
         }
 
@@ -341,7 +348,7 @@ export default class ItemDialog {
         }
  */
 
-        if ( gb.setting('selectModifiers') ){
+        if (gb.setting('selectModifiers') || Boolean(weaponactions.trait)){
             content+=`<div class="swadetools-damage-actions swadetools-mod-add"><label><strong>${gb.trans('MAPenalty.Label','SWADE')}:</strong></label> <select id="multiaction">`
             //<option value="">${gb.trans('Default')}</option>`;
             let multiaction=[
@@ -472,8 +479,10 @@ export default class ItemDialog {
                 
                 
                 await this.processItemFormDialog(html,itemRoll);               
-                await itemRoll.rollBaseSkill();               
-                itemRoll.display();
+                const roll=await itemRoll.rollBaseSkill();
+                if (roll){
+                    await itemRoll.display();
+                }
                
 
                 /* let data={
@@ -490,6 +499,44 @@ export default class ItemDialog {
             }
         }
     }
+
+        const isRangedWeapon=WeaponResourceService.isRangedAttack(
+            this.item,
+            skillName,
+            {
+                fightingSkill: gb.setting('fightingSkill'),
+                shootingSkill: gb.setting('shootingSkill')
+            }
+        );
+        const attackModes=isRangedWeapon
+            ? buildAttackModes(gb.realInt(this.item.system?.rof))
+            : [];
+
+        attackModes.filter(mode=>mode.rof>1).forEach(mode=>{
+            const buttonKey=`rof${mode.rof}`;
+            const costLabel=mode.resourcesUsed===null
+                ? gb.trans('RofCustomCost')
+                : `${mode.resourcesUsed} ${gb.trans('AmmoUnits')}`;
+
+            buttons[buttonKey]={
+                label: `<i class="fas fa-burst"></i> ${gb.trans('RofMode')} ${mode.rof} (${costLabel})`,
+                callback: async (html)=>{
+                    if (mode.resourcesUsed===null){
+                        ui.notifications.warn(gb.trans('RofExplicitCostRequired'));
+                        return;
+                    }
+
+                    const itemRoll=new ItemRoll(this.actor,this.item);
+                    itemRoll.useShots(mode.resourcesUsed);
+                    await this.processItemFormDialog(html,itemRoll,'skill');
+                    const roll=await itemRoll.rollBaseSkill(mode.rof);
+
+                    if (roll){
+                        await itemRoll.display();
+                    }
+                }
+            };
+        });
         
         if (showDamage){
         buttons.mainDamage={
@@ -499,8 +546,10 @@ export default class ItemDialog {
                
                 let itemRoll=new ItemRoll(this.actor,this.item)
                 await this.processItemFormDialog(html,itemRoll,'damage');
-                await itemRoll.rollBaseDamage();
-                itemRoll.display();
+                const roll=await itemRoll.rollBaseDamage();
+                if (roll){
+                    await itemRoll.display();
+                }
 
                 /* let data={
                     mod: {
@@ -518,11 +567,12 @@ export default class ItemDialog {
     }
       
 
-    if (weaponinfo.shots>0 && weaponinfo.reloadType!="none"){ /// autoReload
+    if (weaponinfo.shots>0 &&
+        !['none','self'].includes(weaponinfo.reloadType)){ /// autoReload
         buttons.reload={
             label: `<i class="fas fa-redo"></i> `+gb.trans('Reload','SWADE'),
-            callback: ()=> {
-                this.item.reload(); // swade system reload
+            callback: async ()=> {
+                await this.item.reload(); // swade system reload
                 //gb.rechargeWeapon(this.actor,this.item);
             }
         }
@@ -580,9 +630,11 @@ export default class ItemDialog {
             //    console.log(this.item);
                     await this.processItemFormDialog(html,itemRoll,'skill');                    
                     
-                    await itemRoll.rollBaseSkill(frenzyRof);                  
-                   
-                    itemRoll.display();
+                    const roll=await itemRoll.rollBaseSkill(frenzyRof);
+
+                    if (roll){
+                        await itemRoll.display();
+                    }
                     }
                 }
             }
@@ -591,18 +643,27 @@ export default class ItemDialog {
 
         if (skillName == gb.setting('shootingSkill')) {
             let rof = gb.realInt(this.item?.system?.rof)+1;
+            const rapidFireCost=getStandardRofResourceCost(rof);
               
             let char = new Char(this.actor);
             if (char.hasEdgeSetting('Rapid Fire')) {
                 buttons.rapidFire={
-                    label: gb.settingKeyName('Rapid Fire') +' ('+gb.trans('RoF','SWADE')+' '+rof+')',
+                    label: gb.settingKeyName('Rapid Fire') +' ('+gb.trans('RoF','SWADE')+' '+rof+
+                        (rapidFireCost===null ? '' : `; ${rapidFireCost} ${gb.trans('AmmoUnits')}`)+')',
                     callback: async (html)=>{
+                        if (rapidFireCost===null){
+                            ui.notifications.warn(gb.trans('RofExplicitCostRequired'));
+                            return;
+                        }
+
                         let itemRoll=new ItemRoll(this.actor,this.item);
-                        itemRoll.useShots(gb.RoFBullets[rof])
+                        itemRoll.useShots(rapidFireCost)
                         await this.processItemFormDialog(html,itemRoll,'skill');
                         
-                        await itemRoll.rollBaseSkill(rof);
-                        itemRoll.display();
+                        const roll=await itemRoll.rollBaseSkill(rof);
+                        if (roll){
+                            await itemRoll.display();
+                        }
                     }
                 }
             }
@@ -618,9 +679,11 @@ export default class ItemDialog {
                     let itemRoll=new ItemRoll(this.actor,this.item)
                 await this.processItemFormDialog(html,itemRoll,'skill');
 
-                await itemRoll.rollArcaneDevice();
+                const roll=await itemRoll.rollArcaneDevice();
               //  itemRoll.rollBaseDamage();
-                itemRoll.display();
+                if (roll){
+                    await itemRoll.display();
+                }
                 }
             }
         }
@@ -653,15 +716,25 @@ export default class ItemDialog {
 
                         if (action.type=='resist'){ 
 
-                            gb.rollResist(action.skillOverride,action.traitMod);
+                            await gb.rollResist(
+                                action.override ?? action.skillOverride,
+                                action.modifier ?? action.traitMod
+                            );
                         
                         } else if (action.type=='macro'){                            
-                            game.swade.itemChatCardHelper.handleAdditionalActions(this.item,this.actor,id) /// swade system handles macros
+                            await game.swade.itemChatCardHelper.handleAdditionalActions(
+                                this.item,
+                                this.actor,
+                                id,
+                                {mods: [], event: null}
+                            ); /// swade system handles macros
                         }else  {
                             let itemRoll=new ItemRoll(this.actor,this.item)
                             await this.processItemFormDialog(html,itemRoll,action.type);
-                            await itemRoll.rollAction(id);
-                            itemRoll.display();
+                            const roll=await itemRoll.rollAction(id);
+                            if (roll){
+                                await itemRoll.display();
+                            }
                         }
 
                     }

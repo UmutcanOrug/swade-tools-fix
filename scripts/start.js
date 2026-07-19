@@ -6,11 +6,20 @@ import ItemRoll from './class/ItemRoll.js';
 import ItemDialog from './class/ItemDialog.js';
 import SheetControl from './class/SheetControl.js';
 import RollControl from './class/RollControl.js';
+import TemplateControl from './class/TemplateControl.js';
 import { registerSettings } from './settings.js';
 import TokenHud from './class/TokenHud.js';
 //import Char from './class/Char.js';
 import CharRoll from './class/CharRoll.js';
 import CharUp from './class/CharUp.js';
+import NativeActionBridge from './services/NativeActionBridge.js';
+import AutomationService from './services/AutomationService.js';
+import ItemAutomationConfig from './apps/ItemAutomationConfig.js';
+import ResolutionService from './services/ResolutionService.js';
+import LastAttackService from './services/LastAttackService.js';
+import NativeRofService from './services/NativeRofService.js';
+import AutomationSocketService from './services/AutomationSocketService.js';
+import AmmoDamageService from './services/AmmoDamageService.js';
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)
@@ -47,6 +56,21 @@ var foundryIsReady=false;
 
 
 Hooks.on('ready',async()=>{
+    await registerSettings();
+    LastAttackService.install();
+    AutomationSocketService.install();
+    AutomationSocketService.registerTemplateConfirmHandler(
+        (sceneId,templateId)=>TemplateControl.confirm(sceneId,templateId)
+    );
+    AmmoDamageService.install();
+    NativeRofService.install();
+    NativeActionBridge.install();
+    AutomationService.install();
+    ItemAutomationConfig.install();
+    ResolutionService.install();
+    gb.btnAction.confirmTemplate=async args=>{
+        await AutomationSocketService.confirmTemplate(args[0],args[1]);
+    };
 
 
     /// only socket to fix permission for gb.setFlagCombatant (remove it => or rework)
@@ -87,9 +111,11 @@ Hooks.on('ready',async()=>{
         let itemRoll=new ItemRoll(actor,item)
         //  console.log(this.item);
             
-            await itemRoll.rollBaseSkill();
-            
-            itemRoll.display();
+            const roll=await itemRoll.rollBaseSkill();
+
+            if (roll) {
+                await itemRoll.display();
+            }
       }
     
   };
@@ -114,14 +140,14 @@ Hooks.on('ready',async()=>{
                         
                         
 
-                        char.display();
+                        await char.display();
+                        return char;
     
     
 
   }
 
      
-  await registerSettings();
     foundryIsReady=true;
 
 
@@ -229,14 +255,29 @@ Hooks.on("renderChatMessageHTML", async (chatItem, element) => {
 
    const html = $(element);
     
-    html.on('click','a[data-swade-tools-action],button[data-swade-tools-action]',(event)=>{ /// remove and change for Hooks.once ?
+    html.on('click','a[data-swade-tools-action],button[data-swade-tools-action]',async (event)=>{ /// remove and change for Hooks.once ?
         let el=event.currentTarget;
-        let data=el.getAttribute('data-swade-tools-action').split(':');
+            let data=el.getAttribute('data-swade-tools-action').split(':');
             let func=data[0];
-            let args=data[1].split(',')
+            let args=(data[1] ?? '').split(',').filter(Boolean)
 
-         
-                  gb.btnAction[func](args);
+            if (func==='confirmTemplate' && el.disabled){
+                return;
+            }
+
+            if (func==='confirmTemplate'){
+                el.disabled=true;
+            }
+
+            try {
+                if (typeof gb.btnAction[func]==='function'){
+                    await gb.btnAction[func](args);
+                }
+            } finally {
+                if (func==='confirmTemplate'){
+                    el.disabled=false;
+                }
+            }
 
                 
 
@@ -261,6 +302,10 @@ Hooks.on("renderChatMessageHTML", async (chatItem, element) => {
 
     }
    
+});
+
+Hooks.on("createMeasuredTemplate", async (templateDocument, options, userId) => {
+    await TemplateControl.handleCreate(templateDocument, options, userId);
 });
 
 
@@ -322,7 +367,7 @@ Hooks.on("updateActiveEffect", async (effect,info,diff,userId) => {
    
 }) */
 
-Hooks.on('updateToken', async (scene, token, data, options, userId) => {
+Hooks.on('updateToken', async (token, data, options, userId) => {
     if (game.user.id==userId){
       //  console.log(token);
    let upToken=new StatusIcon(token,'token',data)
@@ -344,6 +389,22 @@ Hooks.on('renderActorSheet',(sheet,html)=>{
     
     
 
+})
+
+Hooks.on('renderApplicationV2',(application,element)=>{
+    const actor=application.actor ??
+        (application.document?.documentName==='Actor' ? application.document : null);
+
+    if (!actor || !element) {
+        return;
+    }
+
+    const sheet={
+        actor,
+        document: actor,
+        application
+    };
+    new SheetControl(sheet,$(element)).rebindAll();
 })
 
 Hooks.on('renderTokenActionHUD',()=>{
@@ -699,9 +760,3 @@ Hooks.on('renderCombatTracker',(obj,html,data)=>{
     }
 }
 }) */
-
-
-
-
-
-
