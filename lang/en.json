@@ -1,8 +1,4 @@
 {
-    "SWADETOOLS.RofAllocatorButton": "RoF",
-    "SWADETOOLS.RofWeaponOwnerMissing": "RoF could not resolve the weapon owner.",
-    "SWADETOOLS.RofSelectOwnerToken": "Select the token that owns this weapon before using RoF.",
-    "SWADETOOLS.RofAllocatorMacroMissing": "SWADE RoF Attack Pool macro was not found in this world. Create or import the latest RoF macro first.",
     "SWADETOOLS.Joker":"Joker",
     "SWADETOOLS.UnShakenAttempt": "tries to Unshaken",
     "SWADETOOLS.UnStunnedAttempt": "tries to remove Stunned",
