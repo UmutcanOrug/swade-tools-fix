@@ -1,5 +1,11 @@
 # SWADE Tools
 
+This 2.2.0 fix branch preserves the native SWADE sheet and adds corrected RoF
+ammunition costs, configurable item automation, area/opposed defense rolls,
+Power Point handling, macro-free grenades and repeat-last-attack controls.
+
+[Türkçe kurulum ve kullanım notları](README-TR.md)
+
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
@@ -92,7 +98,6 @@ async game.swadetools.skill(actor,skillItemId) => skill dialog
 async game.swadetools.run(actor) => run dialog
 
 game.swadetools.item(actor,itemId) => item dialog
-
 
 
 

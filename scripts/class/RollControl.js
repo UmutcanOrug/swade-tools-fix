@@ -2,6 +2,8 @@ import * as gb from './../gb.js';
 import Char from './Char.js';
 import CharRoll from './CharRoll.js';
 import ItemRoll from './ItemRoll.js';
+import AutomationService from '../services/AutomationService.js';
+import {extractAttackDice} from '../services/AttackDiceResolver.js';
 
 export default class RollControl {
     
@@ -13,6 +15,7 @@ export default class RollControl {
       //  console.log(chat);
         this.targetShow='';
         this.targetPrint=[];
+        this.damageContexts=new Map();
         this.targetFunction=false;
         this.soakFunction;
         this.titleshow=false;
@@ -202,7 +205,10 @@ export default class RollControl {
 
    
     getResults(){
-        let rof=1;
+        let rof=Math.max(
+            1,
+            gb.realInt(this.chat.flags["swade-tools"]?.userof) || 1
+        );
            if (this.chat.flags?.["swade-tools"]?.userof){
             rof=this.chat.flags?.["swade-tools"]?.userof
             }
@@ -452,7 +458,10 @@ export default class RollControl {
         if (this.chat.flags["swade-tools"]?.itemroll || this.rolltype=='soak'){ /// show only for items (weapons, powers) and soak
 
             let rolltype=this.rolltype;
-            let rof=this.chat.flags["swade-tools"].userof;
+            let rof=Math.max(
+                1,
+                Number(this.chat.flags["swade-tools"].userof) || 1
+            );
 
 
 
@@ -462,7 +471,10 @@ export default class RollControl {
                 this.targets=new Array;
 
                 usetargets.map(target=>{
-                    this.targets.push(canvas.tokens.get(target))
+                    const token=canvas.tokens.get(target);
+                    if (token){
+                        this.targets.push(token);
+                    }
                 })
                // this.targets=[canvas.tokens.get(this.chat.flags["swade-tools"].usetarget)];
               //  console.log(this.targets);
@@ -483,6 +495,10 @@ export default class RollControl {
 
           //  console.log(this.targets);
             if (this.targets && this.targets.length>0){
+                const attackDice=rolltype==='skill' && Number(rof)>1
+                    ? extractAttackDice(this.roll,rof)
+                    : [];
+
                 this.targets.map(target=>{
                 // let raise=false;
                     if (rolltype=='skill'){
@@ -492,15 +508,9 @@ export default class RollControl {
                         if (rof<2){
                             this.attackTarget(target,this.roll.total,1);
                         } else {
-
-                            let results=this.roll.terms[0].results;
-
-                           // results.sort((a, b) => (a.result < b.result) ? 1 : -1)
-                            let i=0;
-                            results.map(result=>{
-                                i++
-                                this.attackTarget(target,result.result,i);
-                            })
+                            attackDice.forEach(die=>{
+                                this.attackTarget(target,die.total,die.id);
+                            });
                            
                             
                         }
@@ -899,13 +909,19 @@ export default class RollControl {
        
         let targetNumber=4;
         let gangup=0;
+        const nativeRoll=this.chat.flags["swade-tools"]?.nativeRoll===true;
 
 
    
         let char=new Char(target.actor);
         /// range, gangup
 
-        if (!powertype){
+        if (nativeRoll){
+            const isMelee=skill==gb.setting('fightingSkill') ||
+                (item.system?.isMelee && !item.system?.isRanged);
+            targetNumber=isMelee ? this.getParry(target.actor) : 4;
+            targetInfo+=`<li>${gb.trans('NativeModifiersApplied')}</li>`;
+        } else if (!powertype){
         let targetRange=gb.getRange(this.getActor(true,true),target)*canvas.dimensions.distance; /// use Grid Scale for distance (but not for gang up)
 
        // console.log(targetRange);
@@ -929,7 +945,7 @@ export default class RollControl {
             } else {
                 /// using Fighting
                 if (gb.setting('gangUp')){
-                    let gangup=this.gangUp(this.getActor(true),target);
+                    gangup=this.gangUp(this.getActor(true),target);
                     if (gangup>0){
 
                         let reason='';
@@ -960,11 +976,36 @@ export default class RollControl {
 
             
 
-           
-            if (char.hasEdgeSetting('Dodge')){
-                targetNumber+=2;
-                targetInfo+=`<li>${gb.settingKeyName('Dodge')}: -2`
+            const configuredRules=AutomationService
+                .getLegacyIncomingAttackRules(target.actor,'ranged');
+            const configuredDodge=configuredRules.some(({item:ruleItem})=>
+                ruleItem.system?.swid==='dodge' ||
+                ruleItem.name.trim()===gb.settingKeyName('Dodge').trim()
+            );
+            const coverCandidates=[];
+
+            if (!configuredDodge && char.hasEdgeSetting('Dodge')){
+                coverCandidates.push({
+                    label: gb.settingKeyName('Dodge'),
+                    value: -2
+                });
             }
+
+            configuredRules.forEach(({item:ruleItem,rule})=>{
+                const value=Number(rule.value);
+
+                if (!Number.isFinite(value) || value===0){
+                    return;
+                }
+
+                if (rule.group==='cover' && rule.mode!=='stack'){
+                    coverCandidates.push({label: ruleItem.name,value});
+                    return;
+                }
+
+                targetNumber-=value;
+                targetInfo+=`<li>${ruleItem.name}: ${value>0?'+':''}${value}</li>`;
+            });
 
             
 
@@ -1027,12 +1068,22 @@ export default class RollControl {
                 })
     
                 if (finalcover<0){
-                    let coverBonus=Math.abs(finalcover);
-                    targetNumber+=coverBonus;
-                    targetInfo+=`<li>${itemname}: -${coverBonus}`
+                    coverCandidates.push({
+                        label: itemname,
+                        value: finalcover
+                    });
                 }
     
                 }
+
+            const bestCover=coverCandidates
+                .filter(candidate=>Number.isFinite(Number(candidate.value)))
+                .sort((left,right)=>Number(left.value)-Number(right.value))[0];
+
+            if (bestCover){
+                targetNumber-=Number(bestCover.value);
+                targetInfo+=`<li>${bestCover.label}: ${bestCover.value}</li>`;
+            }
             
         }
 
@@ -1097,7 +1148,7 @@ export default class RollControl {
     }
 
 
-    if (powertype!='template' && char.is('isVulnerable')){
+    if (!nativeRoll && powertype!='template' && char.is('isVulnerable')){
         targetInfo+=`<li>${target.name} ${gb.trans('IsVulnerable')}: +2</li>`;
          targetNumber-=2;
      }
@@ -1108,20 +1159,13 @@ export default class RollControl {
         if (this.failedPower(item)) { /// failed power
             raisecount=-1 /// force failure
         } else {
-
-            
-    
-            
-            if (rof<2){
-                raisecount=gb.raiseCount(total,targetNumber);
-            }
-            
+            raisecount=gb.raiseCount(total,targetNumber);
         }
 
         
 
      //   console.log(raisecount);
-        if (rof<2 && raisecount>=0){
+        if (raisecount>=0){
             rollDmg=true;
             addTarget='hit';
             if (raisecount>0){
@@ -1136,11 +1180,6 @@ export default class RollControl {
        
 
        
-        if (rof>1){
-           
-            addTarget='rof';
-        }
-
         print+=`<div class="swadetools-targetwrap  swadetools-term-${addTarget}">`
 
        
@@ -1212,6 +1251,16 @@ export default class RollControl {
       
            
             let charRoll=new ItemRoll(this.getItemOwner(),item);
+            const attackFlags=this.chat.flags[gb.moduleName] ?? {};
+
+            if (Object.prototype.hasOwnProperty.call(
+                attackFlags,
+                'ammoDamageSnapshot'
+            )){
+                charRoll.useAmmoDamageSnapshot(
+                    attackFlags.ammoDamageSnapshot
+                );
+            }
 
             if (this.chat.flags["swade-tools"]?.usevehicle){
                 charRoll.usingVehicle(this.getItemOwner());
@@ -1251,20 +1300,26 @@ export default class RollControl {
             }
 
 
+            let damageRoll;
+
             if (this.chat.flags["swade-tools"].damageaction){
-                await charRoll.rollAction(this.chat.flags["swade-tools"].damageaction)
+                damageRoll=await charRoll.rollAction(
+                    this.chat.flags["swade-tools"].damageaction
+                );
             } else {
-                await charRoll.rollBaseDamage();
+                damageRoll=await charRoll.rollBaseDamage();
             }
 
-            
+            if (damageRoll){
+                await charRoll.display();
+            }
+
           //  charRoll.combatRoll(argsArray[1]);
           //  charRoll.damageTarget(target);
            //   charRoll.addFlavor(item.name);
            /*    charRoll.addModifier(item.data.data.actions.dmgMod,gb.trans('ModItem'));
               
             charRoll.rollDamage(`${item.data.data.damage}`); */
-            charRoll.display();
         }
         }
     }
@@ -1473,6 +1528,13 @@ export default class RollControl {
 
         this.targetShow+=`<div class="swadetools-targetwrap swadetools-term-${addTarget}${soakClass}">`
 
+        this.damageContexts.set(target.id,{
+            area,
+            isvehicle,
+            raisecount,
+            unstoppable
+        });
+
        
 
         if (applyDmg){
@@ -1508,9 +1570,13 @@ export default class RollControl {
 
         this.soakFunction=async (targetid)=>{
             let target=canvas.tokens.get(targetid);
+            const damageContext=this.damageContexts.get(targetid) ?? {};
+            const targetIsVehicle=damageContext.isvehicle ?? false;
+            const targetWounds=damageContext.raisecount ?? 0;
+            const targetUnstoppable=damageContext.unstoppable ?? 0;
             let tactor=target.actor;
             
-            if (isvehicle){
+            if (targetIsVehicle){
                 tactor=gb.getDriver(target.actor);
             }
             let charRoll=new CharRoll(tactor);
@@ -1519,7 +1585,7 @@ export default class RollControl {
 
             if (char.spendBenny()){
 
-                if (!isvehicle){
+                if (!targetIsVehicle){
 
                 
 
@@ -1541,9 +1607,9 @@ export default class RollControl {
                 charRoll.addFlavor(gb.trans('DoSoak'))
                 
                 charRoll.addFlag('usetarget',target.id);
-                charRoll.addFlag('wounds',raisecount);
-                charRoll.addFlag('unstoppable_wounds',unstoppable);
-                if (isvehicle){
+                charRoll.addFlag('wounds',targetWounds);
+                charRoll.addFlag('unstoppable_wounds',targetUnstoppable);
+                if (targetIsVehicle){
                     await charRoll.rollSkill(gb.getDriverSkill(target.actor));
                 } else {
                     await charRoll.rollAtt('vigor');
@@ -1559,6 +1625,11 @@ export default class RollControl {
 
         this.targetFunction=async (targetid,raisecount)=>{
             let target=canvas.tokens.get(targetid);
+            const damageContext=this.damageContexts.get(targetid) ?? {};
+            const targetArea=damageContext.area ?? 'torso';
+            raisecount=Number.isFinite(Number(raisecount))
+                ? Number(raisecount)
+                : Number(damageContext.raisecount ?? -1);
            // let target=canvas.tokens.get(argsArray[0]).actor
       //  let raisecount=argsArray[1];
 
@@ -1605,7 +1676,7 @@ export default class RollControl {
                     
                     let useditem=this.getItemOwner().items.get(this.chat.flags["swade-tools"].itemroll);
 
-                    if (gb.systemSetting('injuryTable') && (gb.systemSetting('grittyDamage') || (gb.setting('bloodAndGoreRifts') && useditem.system.isHeavyWeapon && !gb.isHeavyArmor(target.actor,area)))){
+                    if (gb.systemSetting('injuryTable') && (gb.systemSetting('grittyDamage') || (gb.setting('bloodAndGoreRifts') && useditem.system.isHeavyWeapon && !gb.isHeavyArmor(target.actor,targetArea)))){
                         let table=await fromUuid(gb.systemSetting('injuryTable'));
                         await char.rollTable(table);
                     }

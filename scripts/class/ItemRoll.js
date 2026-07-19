@@ -1,5 +1,7 @@
 import CharRoll from "./CharRoll.js";
 import * as gb from './../gb.js';
+import WeaponResourceService from '../services/WeaponResourceService.js';
+import AmmoDamageService from '../services/AmmoDamageService.js';
 
 export default class ItemRoll extends CharRoll{
     constructor(actor,item){
@@ -8,6 +10,10 @@ export default class ItemRoll extends CharRoll{
         this.item=item;
         this.data=item.system.actions;
         this.actions=this.data.additional;
+        this.attackAmmoDamageCaptured=false;
+        this.attackAmmoDamageSnapshot=null;
+        this.ammoDamageOverrideSet=false;
+        this.ammoDamageOverride=null;
         
         //this.combatRoll(this.item._id);
 
@@ -37,24 +43,7 @@ export default class ItemRoll extends CharRoll{
 
 
         if (action.type=='trait'){
-
-      
-
-
-                  
-          
-           if (gb.realInt(action.resourcesUsed)>0){
-            this.useShots(action.resourcesUsed);
-            } 
-            
-            
-
-            
-           
-           // this.addModifier(action.traitMod,action.name);
-           this.addModifier(action.modifier,action.name); /// => changed name
-
-            
+            this.captureAttackAmmoDamage();
             let rof=1;
             if (action.dice!==undefined){
                rof=action.dice;
@@ -62,11 +51,35 @@ export default class ItemRoll extends CharRoll{
 
             let skill=this.data.trait;
 
-           // console.log(skill,'skill1');
-            
             if (action.override){
                 skill=action.override;
             }
+
+            if (this.item.type=='weapon'){
+                if (this.usesRangedWeaponResources(skill)){
+                    const resourcesUsed=WeaponResourceService.resolveCost(
+                        action,
+                        rof
+                    );
+
+                    if (resourcesUsed===null){
+                        ui.notifications.warn(
+                            gb.trans('RofExplicitCostRequired')
+                        );
+                        this.dontDisplay=true;
+                        return null;
+                    }
+
+                    this.useShots(resourcesUsed);
+                } else {
+                    this.useShots(0);
+                }
+            } else if (gb.realInt(action.resourcesUsed)>0){
+                this.useShots(action.resourcesUsed);
+            }
+
+            // this.addModifier(action.traitMod,action.name);
+            this.addModifier(action.modifier,action.name); /// => changed name
 
            // console.log(skill,'skill2');
             
@@ -74,7 +87,11 @@ export default class ItemRoll extends CharRoll{
 
            
             
-            await this.rollSkill(skill,rof);
+            const roll=await this.rollSkill(skill,rof);
+
+            if (!roll){
+                return null;
+            }
             
 
         } else if (action.type=='damage'){
@@ -97,10 +114,7 @@ export default class ItemRoll extends CharRoll{
             await this.rollDamage(damage,this.getApInfo(action),this.raiseDie());
         }
 
-        
-        
-
-        
+        return this.roll ?? null;
     }
 
     raiseDie(){
@@ -125,6 +139,13 @@ export default class ItemRoll extends CharRoll{
 
     addDmgMod(){
         this.addModifier(this.data.dmgMod,gb.trans('ModItem'));        
+        const ammoModifier=this.ammoDamageOverrideSet
+            ? this.ammoDamageOverride
+            : AmmoDamageService.getDamageModifier(this.item);
+
+        if (ammoModifier){
+            this.addModifier(ammoModifier.value,ammoModifier.label);
+        }
        
         if (this.actor?.system?.stats?.globalMods?.damage && this.actor?.system?.stats?.globalMods?.damage.length > 0) {
             this.actor?.system?.stats?.globalMods?.damage.forEach(el => {
@@ -157,10 +178,31 @@ export default class ItemRoll extends CharRoll{
 
 
     async rollBaseSkill(rof=1){
+        this.captureAttackAmmoDamage();
+        const usesRangedResources=
+            this.usesRangedWeaponResources(this.data.trait);
 
         let rofstr='';
         if (rof>1){
             rofstr=rof;
+
+            if (this.item.type=='weapon' &&
+                usesRangedResources &&
+                !this.resourceCostExplicit){
+                const resourcesUsed=WeaponResourceService.resolveCost({},rof);
+
+                if (resourcesUsed===null){
+                    ui.notifications.warn(gb.trans('RofExplicitCostRequired'));
+                    this.dontDisplay=true;
+                    return null;
+                }
+
+                this.useShots(resourcesUsed,false);
+            }
+        }
+
+        if (this.item.type==='weapon' && !usesRangedResources){
+            this.useShots(0);
         }
         this.defineAction('formula'+rofstr);
         
@@ -170,16 +212,57 @@ export default class ItemRoll extends CharRoll{
 
         let attr=gb.findAttr(this.data.trait)
        // gb.log(this.data.skill,attr);
+        let roll;
+
         if (attr){
-            await this.rollAtt(attr,rof);
+            roll=await this.rollAtt(attr,rof);
         } else {
-            await this.rollSkill(this.data.trait,rof);
+            roll=await this.rollSkill(this.data.trait,rof);
         }
-        
-       
-        
-        
-        
+
+        return roll ?? null;
+    }
+
+    usesRangedWeaponResources(traitName){
+        return WeaponResourceService.isRangedAttack(
+            this.item,
+            traitName,
+            {
+                fightingSkill: gb.setting('fightingSkill'),
+                shootingSkill: gb.setting('shootingSkill')
+            }
+        );
+    }
+
+    captureAttackAmmoDamage(){
+        if (this.item?.type!=='weapon') {
+            return;
+        }
+
+        this.attackAmmoDamageCaptured=true;
+        this.attackAmmoDamageSnapshot=
+            AmmoDamageService.normalizeSnapshot(
+                AmmoDamageService.getDamageModifier(this.item)
+            );
+    }
+
+    useAmmoDamageSnapshot(snapshot){
+        this.ammoDamageOverrideSet=true;
+        this.ammoDamageOverride=
+            AmmoDamageService.normalizeSnapshot(snapshot);
+    }
+
+    autoItemFlags(){
+        super.autoItemFlags();
+
+        if (this.rolltype==='skill' && this.item?.type==='weapon'){
+            const snapshot=this.attackAmmoDamageCaptured
+                ? this.attackAmmoDamageSnapshot
+                : AmmoDamageService.normalizeSnapshot(
+                    AmmoDamageService.getDamageModifier(this.item)
+                );
+            this.addFlag('ammoDamageSnapshot',snapshot);
+        }
     }
 
     getApInfo(action=false){
@@ -252,6 +335,7 @@ export default class ItemRoll extends CharRoll{
         
         
         await this.rollDamage(this.item.system.damage,this.getApInfo(),this.raiseDie());
+        return this.roll ?? null;
     }
 
     

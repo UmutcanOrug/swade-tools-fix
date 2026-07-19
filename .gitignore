@@ -1,2 +1,12 @@
 
 .vscode/settings.json
+
+# Foundry/LevelDB runtime artifacts (the numbered WAL file is pack data).
+packs/*/LOCK
+packs/*/LOG
+packs/*/LOG.old
+packs/*/LOG (*)
+packs/*/lost/
+
+# Legacy Foundry v10-style packs; V13 uses the LevelDB directory.
+packs/*.db

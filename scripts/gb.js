@@ -2,6 +2,10 @@ import Char from "./class/Char.js";
 import CharRoll from "./class/CharRoll.js";
 import ItemDialog from './class/ItemDialog.js';
 import SystemRoll from './class/SystemRoll.js';
+import {
+    toSwadeTemplatePreset
+} from './services/TemplatePresetResolver.js';
+export {toSwadeTemplatePreset};
 export const moduleName='swade-tools'
 
 
@@ -126,7 +130,7 @@ export const getDriverSkill=(vehicle)=>{
         ui.notifications.error(trans('NoOperatorSkill'));
         return false;
     }
-   
+
 }
 
 // canvas.tokens.placeables => all tokens in the scene
@@ -664,7 +668,7 @@ export const getTemplatesHTML=item=>{
     let html='';
 
     templateTypes.map(type=>{
-        if (item.system.templates[type.model]){
+        if (item.system?.templates?.[type.model]){
             html+=`<button data-template="${type.model}" title="${type.name}"><i class="${type.icon}"></i></button>`
         }
     })
@@ -676,10 +680,11 @@ export const getTemplatesHTML=item=>{
 
 
 
-export const rollResist=(traitName,skillMod)=>{
+export const rollResist=async (traitName,skillMod)=>{
     let tokens=Array.from(game.user.targets);
     if (tokens.length<1){
-        ui.notifications.warn(trans('NoTarget'))
+        ui.notifications.warn(trans('NoTarget'));
+        return [];
     } else {
     
         let name=traitName;
@@ -701,16 +706,15 @@ export const rollResist=(traitName,skillMod)=>{
 
                       
                     
-                    tokens.map(t=>{
+        const rolls=[];
 
-                        //console.log(t.actor,name,mod,att);
+        for (const target of tokens){
+            // Keep target rolls ordered so chat results remain readable.
+            rolls.push(await game.swade.swadetoolsRollTrait(target.actor,name,mod,att));
+        }
 
-                        game.swade.swadetoolsRollTrait(t.actor,name,mod,att)
-
-                        
-
-                    })
-                }
+        return rolls;
+    }
 }
 
 /* export const attModifier=(actor,att)=>{
@@ -739,43 +743,77 @@ export const rollResist=(traitName,skillMod)=>{
    
 
 
-export const showTemplate=(type,item)=>{
+export const showTemplate=(type,item,options={})=>{
+    const profile=options.profile ??
+        item?.getFlag?.(moduleName,'resolution') ??
+        {mode: 'none',autoTarget: false};
+    const workflowFlags={
+        explicitWorkflow: true,
+        activationResolved: options.activationResolved===true,
+        autoTarget: profile.mode!=='none' && profile.autoTarget!==false,
+        itemUuid: item?.uuid ?? null,
+        actorUuid: item?.actor?.uuid ?? null,
+        sourceTokenUuid: options.sourceTokenUuid ?? null,
+        templateType: type,
+        resolutionMode: profile.mode ?? 'none',
+        profileSnapshot: foundry.utils.deepClone(profile),
+        transactionId: foundry.utils.randomID(),
+        workflowState: 'placed',
+        user: game.user.id
+    };
+    const TemplateClass=CONFIG.MeasuredTemplate?.objectClass;
 
-    
-   
-        let templateData = {
-            user: game.user.id,
-            distance: 0,
-            direction: 0,
-            x: 0,
-            y: 0,
-            fillColor: game.user.color,
-            flags: item ? { swade: { origin: item.uuid } } : {}
-        };
-       
-        if (type === 'cone') {
-            templateData.t = 'cone'
-            templateData.distance = 9
-        } else if (type === 'stream') {
-            templateData.t = 'ray'
-            templateData.distance = 12
-            templateData.width = 1
-        } else {
-            templateData.t = 'circle'
-            templateData.distance = type === 'small' ? 1 : (type === 'medium' ? 2 : 3)
+    if (typeof TemplateClass?.fromPreset==='function'){
+        TemplateClass.fromPreset(toSwadeTemplatePreset(type),item);
+        const preview=CONFIG.SWADE?.activeMeasuredTemplatePreview;
+
+        if (!preview?.document){
+            ui.notifications.warn(trans('TemplatePresetUnavailable'));
+            return null;
         }
-        // Adjust to grid distance
 
-        templateData.distance = templateData.distance*canvas.grid.distance /// v12
-        
-        // noinspection JSPotentiallyInvalidConstructorUsage
-        const template_base = new CONFIG.MeasuredTemplate.documentClass(
-            templateData, {parent: canvas.scene});
-        // noinspection JSPotentiallyInvalidConstructorUsage
-        let template = new CONFIG.MeasuredTemplate.objectClass(template_base)
-      
-        template.drawPreview()
+        preview?.document?.updateSource({
+            [`flags.${moduleName}`]: workflowFlags
+        });
+
+        return preview ?? null;
+    }
+
+    let templateData = {
+        user: game.user.id,
+        distance: 0,
+        direction: 0,
+        x: 0,
+        y: 0,
+        fillColor: game.user.color,
+        flags: item ? {
+            swade: { origin: item.uuid },
+            [moduleName]: workflowFlags
+        } : {}
+    };
+
+    if (type === 'cone') {
+        templateData.t = 'cone';
+        templateData.distance = 9;
+    } else if (type === 'stream') {
+        templateData.t = 'ray';
+        templateData.distance = 12;
+        templateData.width = 1;
+    } else {
+        templateData.t = 'circle';
+        templateData.distance = type === 'small' ? 1 : (type === 'medium' ? 2 : 3);
+    }
+
+    templateData.distance = templateData.distance*canvas.grid.distance;
     
+    const templateBase = new CONFIG.MeasuredTemplate.documentClass(
+        templateData,
+        {parent: canvas.scene}
+    );
+    const template = new CONFIG.MeasuredTemplate.objectClass(templateBase);
+
+    template.drawPreview();
+    return template;
 }
 
 export const say=(what,who,flavor='')=>{
