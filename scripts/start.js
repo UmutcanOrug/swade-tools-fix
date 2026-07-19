@@ -6,6 +6,7 @@ import ItemRoll from './class/ItemRoll.js';
 import ItemDialog from './class/ItemDialog.js';
 import SheetControl from './class/SheetControl.js';
 import RollControl from './class/RollControl.js';
+import TemplateControl from './class/TemplateControl.js';
 import { registerSettings } from './settings.js';
 import TokenHud from './class/TokenHud.js';
 //import Char from './class/Char.js';
@@ -261,6 +262,10 @@ Hooks.on("renderChatMessageHTML", async (chatItem, element) => {
 
     }
    
+});
+
+Hooks.on("createMeasuredTemplate", async (templateDocument, options, userId) => {
+    await TemplateControl.handleCreate(templateDocument, options, userId);
 });
 
 
@@ -699,7 +704,6 @@ Hooks.on('renderCombatTracker',(obj,html,data)=>{
     }
 }
 }) */
-
 
 
 

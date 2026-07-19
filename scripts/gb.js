@@ -664,7 +664,7 @@ export const getTemplatesHTML=item=>{
     let html='';
 
     templateTypes.map(type=>{
-        if (item.system.templates[type.model]){
+        if (item.system?.templates?.[type.model]){
             html+=`<button data-template="${type.model}" title="${type.name}"><i class="${type.icon}"></i></button>`
         }
     })
@@ -750,7 +750,16 @@ export const showTemplate=(type,item)=>{
             x: 0,
             y: 0,
             fillColor: game.user.color,
-            flags: item ? { swade: { origin: item.uuid } } : {}
+            flags: item ? {
+                swade: { origin: item.uuid },
+                [moduleName]: {
+                    autoTarget: true,
+                    itemUuid: item.uuid,
+                    actorUuid: item.actor?.uuid,
+                    templateType: type,
+                    user: game.user.id
+                }
+            } : {}
         };
        
         if (type === 'cone') {

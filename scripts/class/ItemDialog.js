@@ -2,6 +2,7 @@ import CharRoll from './CharRoll.js';
 import * as gb from './../gb.js';
 import ItemRoll from './ItemRoll.js';
 import Char from './Char.js';
+import launchRofMacro from '../services/RofMacroLauncher.js';
 
 export default class ItemDialog {
     constructor(actor,itemId){
@@ -490,6 +491,18 @@ export default class ItemDialog {
             }
         }
     }
+
+        if (
+            this.item.type=='weapon' &&
+            skillName==gb.setting('shootingSkill')
+        ){
+            buttons.rofAllocator={
+                label: `<i class="fas fa-burst"></i> RoF`,
+                callback: async ()=>{
+                    await launchRofMacro(this.actor,this.item);
+                }
+            };
+        }
         
         if (showDamage){
         buttons.mainDamage={

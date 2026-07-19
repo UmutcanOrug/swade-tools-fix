@@ -227,11 +227,12 @@ export default class SheetControl {
                 })
 
 
-                if (type=='power' && !target.closest('li').find('.swade-tools-template-buttons').length){
+                let templatehtml=gb.getTemplatesHTML(actorItem);
+                if (templatehtml && !target.closest('li').find('.swade-tools-template-buttons').length){
 
                    
 
-                    target.closest('li').find('.item-controls').prepend(`<span class="swade-tools-template-buttons">${gb.getTemplatesHTML(actorItem)}</span>`).on('click','button[data-template]',button=>{
+                    target.closest('li').find('.item-controls').prepend(`<span class="swade-tools-template-buttons">${templatehtml}</span>`).on('click','button[data-template]',button=>{
                         
                         let templateType=$(button.currentTarget).data("template");
 
