@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0-beta.2
+
+- Replaced the separate built-in RoF mode buttons in the SWADE Tools weapon
+  dialog with one `RoF` button.
+- The new button finds the SWADE RoF Attack Pool macro in the current world
+  and launches it with the open weapon, owning actor and selected token.
+- Added clear warnings for a missing owner token or missing RoF macro.
+
 ## 2.2.0
 
 - Preserved the native SWADE actor sheet and added non-destructive module

@@ -3,10 +3,10 @@ import * as gb from './../gb.js';
 import ItemRoll from './ItemRoll.js';
 import Char from './Char.js';
 import {
-    buildAttackModes,
     getStandardRofResourceCost
 } from '../services/AttackModeResolver.js';
 import WeaponResourceService from '../services/WeaponResourceService.js';
+import launchRofAllocatorMacro from '../services/RofMacroLauncher.js';
 
 export default class ItemDialog {
     constructor(actor,itemId){
@@ -508,35 +508,14 @@ export default class ItemDialog {
                 shootingSkill: gb.setting('shootingSkill')
             }
         );
-        const attackModes=isRangedWeapon
-            ? buildAttackModes(gb.realInt(this.item.system?.rof))
-            : [];
-
-        attackModes.filter(mode=>mode.rof>1).forEach(mode=>{
-            const buttonKey=`rof${mode.rof}`;
-            const costLabel=mode.resourcesUsed===null
-                ? gb.trans('RofCustomCost')
-                : `${mode.resourcesUsed} ${gb.trans('AmmoUnits')}`;
-
-            buttons[buttonKey]={
-                label: `<i class="fas fa-burst"></i> ${gb.trans('RofMode')} ${mode.rof} (${costLabel})`,
-                callback: async (html)=>{
-                    if (mode.resourcesUsed===null){
-                        ui.notifications.warn(gb.trans('RofExplicitCostRequired'));
-                        return;
-                    }
-
-                    const itemRoll=new ItemRoll(this.actor,this.item);
-                    itemRoll.useShots(mode.resourcesUsed);
-                    await this.processItemFormDialog(html,itemRoll,'skill');
-                    const roll=await itemRoll.rollBaseSkill(mode.rof);
-
-                    if (roll){
-                        await itemRoll.display();
-                    }
+        if (isRangedWeapon){
+            buttons.rofAllocator={
+                label: `<i class="fas fa-burst"></i> ${gb.trans('RofAllocatorButton')}`,
+                callback: async ()=>{
+                    await launchRofAllocatorMacro(this.actor,this.item);
                 }
             };
-        });
+        }
         
         if (showDamage){
         buttons.mainDamage={

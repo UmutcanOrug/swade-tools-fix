@@ -1,4 +1,8 @@
 {
+    "SWADETOOLS.RofAllocatorButton": "RoF",
+    "SWADETOOLS.RofWeaponOwnerMissing": "RoF silahin sahibini bulamadi.",
+    "SWADETOOLS.RofSelectOwnerToken": "RoF kullanmadan once bu silahin sahibi olan tokeni sec.",
+    "SWADETOOLS.RofAllocatorMacroMissing": "Bu dunyada SWADE RoF Attack Pool makrosu bulunamadi. Once en yeni RoF makrosunu olustur veya ice aktar.",
     "SWADETOOLS.RofExplicitCostRequired": "Bu RoF standart tablonun dışında. Action üzerindeki Kullanılan Kaynak değerini açıkça ayarlayın.",
     "SWADETOOLS.RofCustomCost": "özel maliyet gerekli",
     "SWADETOOLS.AmmoUnits": "mermi",
