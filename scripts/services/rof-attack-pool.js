@@ -5,7 +5,7 @@
  * Workflow:
  * 1. Select one attacker token and target every possible target.
  * 2. Select a ranged weapon, RoF, recoil, and a shared attack modifier.
- * 3. Roll RoF Shooting dice plus the Wild Die.
+ * 3. Roll RoF dice for the weapon's assigned skill plus the Wild Die.
  * 4. Optionally spend an Actor or GM Benny and reroll the whole pool.
  * 5. Keep the better whole pool and assign each result to any target.
  * 6. Choose Miss, Hit, or Raise for each result.
@@ -89,10 +89,24 @@ if (!contextualItem && macroScope.itemUuid) {
 }
 if (contextualItem) {
   contextualItem =
-    actingActor.items.get(contextualItem.id) ?? contextualItem;
+    macroScope.weaponActor?.items?.get?.(contextualItem.id) ??
+    contextualItem.actor?.items?.get?.(contextualItem.id) ??
+    contextualItem.parent?.items?.get?.(contextualItem.id) ??
+    actingActor.items.get(contextualItem.id) ??
+    contextualItem;
 }
 
-const rangedWeapons = actingActor.items
+let weaponActor =
+  macroScope.weaponActor ??
+  contextualItem?.actor ??
+  (contextualItem?.parent?.items ? contextualItem.parent : null) ??
+  actingActor;
+if (typeof weaponActor === "string") {
+  weaponActor = await fromUuid(weaponActor);
+}
+if (!weaponActor?.items) weaponActor = actingActor;
+
+const rangedWeapons = weaponActor.items
   .filter(isRangedWeapon)
   .sort((left, right) => {
     const equippedDifference =
@@ -309,7 +323,7 @@ try {
             </select>
           </div>
           <p class="hint">
-            The attack penalty is added to every Shooting die. Head also
+            The attack penalty is added to every attack skill die. Head also
             adds +4 damage through SWADE Tools.
           </p>
         </div>
@@ -368,10 +382,20 @@ try {
 
 if (!setup) return;
 
-const weapon = actingActor.items.get(setup.weaponId);
+const weapon = rangedWeapons.find(
+  (candidate) => candidate.id === setup.weaponId
+);
 if (!weapon || !isRangedWeapon(weapon)) {
   return ui.notifications.error("Secilen menzilli silah bulunamadi.");
 }
+const weaponOwner =
+  weapon.actor ??
+  (weapon.parent?.items ? weapon.parent : null) ??
+  weaponActor ??
+  actingActor;
+const mountedVehicle =
+  macroScope.vehicle ??
+  (weaponOwner?.type === "vehicle" ? weaponOwner : null);
 
 const weaponMaxRof = Math.max(
   1,
@@ -400,16 +424,32 @@ if (!Number.isFinite(ammoCost)) {
   );
 }
 
-const shooting = actingActor.items.find((skillItem) => {
-  if (skillItem.type !== "skill") return false;
-  const swid = String(skillItem.system?.swid ?? "").toLowerCase();
-  const name = String(skillItem.name ?? "").trim().toLowerCase();
-  return swid === "shooting" || name === "shooting";
-});
+const configuredShootingSkill = String(
+  getOptionalSetting("swade-tools", "shootingSkill", "Shooting")
+).trim() || "Shooting";
+const attackSkillReference = String(
+  weapon.system?.actions?.trait ?? configuredShootingSkill
+).trim() || configuredShootingSkill;
+const normalizedAttackSkillReference =
+  normalizeRuleName(attackSkillReference);
+const normalizedAttackSkillSwid =
+  normalizeSwid(attackSkillReference);
+const attackSkillById = actingActor.items.get?.(attackSkillReference);
+const attackSkill =
+  (attackSkillById?.type === "skill" ? attackSkillById : null) ??
+  actingActor.items.find((skillItem) => {
+    if (skillItem.type !== "skill") return false;
+    const swid = normalizeSwid(skillItem.system?.swid);
+    const name = normalizeRuleName(skillItem.name);
+    return (
+      name === normalizedAttackSkillReference ||
+      swid === normalizedAttackSkillSwid
+    );
+  });
 
-if (!shooting) {
+if (!attackSkill) {
   return ui.notifications.error(
-    `${actingActor.name} uzerinde Shooting skilli bulunamadi.`
+    `${actingActor.name} uzerinde ${attackSkillReference} skilli bulunamadi.`
   );
 }
 
@@ -417,6 +457,7 @@ const weaponMinimumStrengthSides = parseMinimumStrength(
   weapon.system?.minStr
 );
 const minimumStrengthPenalty =
+  !mountedVehicle &&
   Number.isFinite(weaponMinimumStrengthSides) &&
   Number.isFinite(effectiveStrengthSides) &&
   effectiveStrengthSides < weaponMinimumStrengthSides
@@ -427,8 +468,10 @@ const minimumStrengthPenalty =
 const minimumStrengthSummary = Number.isFinite(
   weaponMinimumStrengthSides
 )
-  ? `Min Str d${weaponMinimumStrengthSides}; ` +
-    `${effectiveStrengthLabel}; penalty ${minimumStrengthPenalty}`
+  ? mountedVehicle
+    ? `Mounted on ${mountedVehicle.name}; Min Str penalty 0`
+    : `Min Str d${weaponMinimumStrengthSides}; ` +
+      `${effectiveStrengthLabel}; penalty ${minimumStrengthPenalty}`
   : `Min Str not set; ${effectiveStrengthLabel}; penalty 0`;
 
 const readResourceNumber = (value) => {
@@ -457,7 +500,7 @@ const findAmmoItem = () => {
     if (typeof reference === "object") {
       const referenceId = reference.id ?? reference._id;
       const embeddedById = referenceId
-        ? actingActor.items.get(referenceId)
+        ? weaponOwner.items?.get?.(referenceId)
         : null;
       if (embeddedById) return embeddedById;
       if (typeof reference.update === "function") return reference;
@@ -465,8 +508,8 @@ const findAmmoItem = () => {
       const referenceName = String(reference.name ?? "").trim();
       if (referenceName) {
         const embeddedByName =
-          actingActor.items.getName?.(referenceName) ??
-          actingActor.items.find(
+          weaponOwner.items?.getName?.(referenceName) ??
+          weaponOwner.items?.find?.(
             (candidate) =>
               String(candidate.name ?? "").trim().toLowerCase() ===
               referenceName.toLowerCase()
@@ -479,9 +522,9 @@ const findAmmoItem = () => {
     const textReference = String(reference).trim();
     if (!textReference) continue;
     const embedded =
-      actingActor.items.get(textReference) ??
-      actingActor.items.getName?.(textReference) ??
-      actingActor.items.find(
+      weaponOwner.items?.get?.(textReference) ??
+      weaponOwner.items?.getName?.(textReference) ??
+      weaponOwner.items?.find?.(
         (candidate) =>
           String(candidate.name ?? "").trim().toLowerCase() ===
           textReference.toLowerCase()
@@ -723,7 +766,7 @@ const fatigueValue = Number(actingActor.system.fatigue?.value ?? 0);
 const fatigueIgnored = Number(actingActor.system.fatigue?.ignored ?? 0);
 const woundPenalty = -Math.max(0, woundValue - woundIgnored);
 const fatiguePenalty = -Math.max(0, fatigueValue - fatigueIgnored);
-const skillModifier = Number(shooting.system.die?.modifier ?? 0);
+const skillModifier = Number(attackSkill.system.die?.modifier ?? 0);
 const recoilPenalty =
   selectedRof > 1 && setup.recoil === true ? -2 : 0;
 const theDropAttackBonus = setup.theDrop === true ? 4 : 0;
@@ -748,13 +791,13 @@ const commonModifier =
   otherModifier +
   calledShotPenalty;
 
-const shootingSides = Math.max(
+const attackSkillSides = Math.max(
   4,
-  Number(shooting.system.die?.sides ?? 4)
+  Number(attackSkill.system.die?.sides ?? 4)
 );
 const wildSides = Math.max(
   4,
-  Number(shooting.system["wild-die"]?.sides ?? 6)
+  Number(attackSkill.system["wild-die"]?.sides ?? 6)
 );
 const isWildCard = Boolean(actingActor.system.wildcard);
 const bennyTraitModifiers = Array.from(
@@ -793,11 +836,11 @@ const rollAttackPool = async ({
 }) => {
   const attemptModifier =
     commonModifier + (isBennyReroll ? bennyTraitBonus : 0);
-  const [shootingRolls, wildRoll] = await Promise.all([
+  const [attackSkillRolls, wildRoll] = await Promise.all([
     Promise.all(
       Array.from(
         { length: selectedRof },
-        () => new Roll(`1d${shootingSides}x`).evaluate()
+        () => new Roll(`1d${attackSkillSides}x`).evaluate()
       )
     ),
     isWildCard
@@ -805,10 +848,10 @@ const rollAttackPool = async ({
       : Promise.resolve(null),
   ]);
 
-  const attemptCandidates = shootingRolls.map((roll, index) => ({
-    id: `shooting-${index}`,
-    label: `Shooting Die ${index + 1}`,
-    source: "shooting",
+  const attemptCandidates = attackSkillRolls.map((roll, index) => ({
+    id: `skill-${index}`,
+    label: `${attackSkill.name} Die ${index + 1}`,
+    source: "skill",
     roll,
     rawTotal: Number(roll.total ?? 0),
     modifier: attemptModifier,
@@ -935,7 +978,7 @@ const reviewAttackPool = async (pool, statusText) => {
   const rerollHint = rerollLocked
     ? "Critical Failure: Benny reroll is locked unless Dumb Luck is enabled."
     : actorBennies > 0 || gmBennies > 0
-      ? "A Benny rerolls every Shooting die and the Wild Die. After the roll, you choose the previous or rerolled whole pool; results from different attempts are never mixed."
+      ? `A Benny rerolls every ${attackSkill.name} die and the Wild Die. After the roll, you choose the previous or rerolled whole pool; results from different attempts are never mixed.`
       : "No available Benny source. Continue with this pool.";
 
   return foundry.applications.api.DialogV2.wait({
@@ -1121,7 +1164,9 @@ if (setup.consumeAmmo) {
 const modifierParts = [
   `Wounds ${woundPenalty >= 0 ? "+" : ""}${woundPenalty}`,
   `Fatigue ${fatiguePenalty >= 0 ? "+" : ""}${fatiguePenalty}`,
-  `Skill ${skillModifier >= 0 ? "+" : ""}${skillModifier}`,
+  `Skill (${attackSkill.name}) ${skillModifier >= 0 ? "+" : ""}${
+    skillModifier
+  }`,
   `Recoil ${recoilPenalty >= 0 ? "+" : ""}${recoilPenalty}`,
   `Min Str ${minimumStrengthPenalty >= 0 ? "+" : ""}${
     minimumStrengthPenalty
@@ -1185,6 +1230,10 @@ const attackPoolMessage = await ChatMessage.create({
     <p>
       <strong>Ammo spent:</strong>
       ${setup.consumeAmmo ? ammoCost : "Disabled"}
+    </p>
+    <p>
+      <strong>Attack skill:</strong>
+      ${escapeHTML(attackSkill.name)}
     </p>
     <p>
       <strong>Base common modifier:</strong>
@@ -1570,7 +1619,7 @@ const collectTargetAttackProfile = (targetToken) => {
   }
 
   const attackerScale = Number(
-    actingActor.system?.stats?.scale ?? 0
+    (selectedToken.actor ?? actingActor).system?.stats?.scale ?? 0
   );
   const defenderScale = Number(
     targetActor?.system?.stats?.scale ?? 0
@@ -1603,7 +1652,7 @@ const collectTargetAttackProfile = (targetToken) => {
       "swadeCalculateDefaultAttackMods",
       selectedToken.document ?? selectedToken,
       targetDocument,
-      shooting,
+      attackSkill,
       weapon,
       true,
       false,
@@ -2178,7 +2227,7 @@ const combineDamageModifiers = (...values) => {
 
 const rollSwadeToolsDamage = async (assignment) => {
   const dialogPromise = waitForSwadeToolsDialog();
-  await game.swadetools.item(actingActor, weapon.id);
+  await game.swadetools.item(weaponOwner, weapon.id);
   const dialogInfo = await dialogPromise;
 
   if (!dialogInfo?.root) {

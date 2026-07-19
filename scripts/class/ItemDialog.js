@@ -492,14 +492,21 @@ export default class ItemDialog {
         }
     }
 
-        if (
+        const isRangedWeapon=
             this.item.type=='weapon' &&
-            skillName==gb.setting('shootingSkill')
-        ){
+            (
+                this.item.system?.isRanged===true ||
+                String(this.item.system?.range ?? '').trim()!==''
+            );
+        if (isRangedWeapon && !noMainSkill){
             buttons.rofAllocator={
                 label: `<i class="fas fa-burst"></i> RoF`,
                 callback: async ()=>{
-                    await launchRofMacro(this.actor,this.item);
+                    await launchRofMacro(
+                        this.actor,
+                        this.item,
+                        this.vehicle
+                    );
                 }
             };
         }

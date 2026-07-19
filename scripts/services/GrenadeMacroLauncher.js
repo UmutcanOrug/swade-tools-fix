@@ -57,7 +57,7 @@ const getBundledGrenadeAttack = async () => {
 
     const route=foundry.utils.getRoute(GRENADE_SCRIPT_PATH);
     const moduleVersion=
-        game.modules.get('swade-tools')?.version ?? '2.1.6';
+        game.modules.get('swade-tools')?.version ?? '2.1.7';
     const response=await fetch(
         `${route}?v=${encodeURIComponent(moduleVersion)}`,
         {cache:'no-store'}

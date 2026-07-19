@@ -1,6 +1,15 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.7
+
+- The RoF button is now available for ranged weapons whose assigned attack
+  skill is Gunnery or another custom skill, not only Shooting.
+- RoF attack dice, skill modifiers, Wild Die data, labels, and target hooks
+  now use the weapon's assigned skill.
+- Vehicle-mounted weapons can use the operator's assigned attack skill while
+  range and ammunition continue to come from the vehicle weapon.
+
 ## 2.1.6
 
 - Made all RoF workflow dialogs scrollable on short/small screens.

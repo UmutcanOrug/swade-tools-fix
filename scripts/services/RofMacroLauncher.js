@@ -41,7 +41,7 @@ const getBundledRofAttackPool = async () => {
 
     const route=foundry.utils.getRoute(ROF_SCRIPT_PATH);
     const moduleVersion=
-        game.modules.get('swade-tools')?.version ?? '2.1.6';
+        game.modules.get('swade-tools')?.version ?? '2.1.7';
     const response=await fetch(
         `${route}?v=${encodeURIComponent(moduleVersion)}`,
         {cache:'no-store'}
@@ -66,8 +66,9 @@ const getBundledRofAttackPool = async () => {
     return compiledRofAttackPool;
 };
 
-export const launchRofMacro = async (actor,item) => {
-    const selectedToken=findActorToken(actor);
+export const launchRofMacro = async (actor,item,vehicle=null) => {
+    const firingActor=vehicle ?? actor;
+    const selectedToken=findActorToken(firingActor);
     if (!selectedToken){
         ui.notifications.warn(
             'RoF kullanmadan once silahin sahibi olan tokeni sec.'
@@ -82,7 +83,9 @@ export const launchRofMacro = async (actor,item) => {
             item,
             token:selectedToken,
             weapon:item,
-            itemUuid:item.uuid
+            itemUuid:item.uuid,
+            weaponActor:item.actor ?? item.parent ?? firingActor,
+            vehicle
         });
         return true;
     } catch (error){
