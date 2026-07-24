@@ -1,0 +1,58 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Build Foundry module package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          package_dir="$RUNNER_TEMP/swade-tools-package"
+          archive="swade-tools-${version}.zip"
+
+          mkdir -p "$package_dir"
+          git archive HEAD | tar -x -C "$package_dir"
+          rm -rf "$package_dir/.github"
+          (
+            cd "$package_dir"
+            zip -qr "$GITHUB_WORKSPACE/$archive" .
+          )
+
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          ## SWADE Tools 2.1.8
+
+          - Fixed Macro-type Item Actions in the SWADE Tools item dialog for
+            current SWADE V5 releases.
+          - Macro actions now use the supported asynchronous item-action API
+            while preserving the selected item and actor context.
+          - Added a guarded compatibility fallback for older SWADE V5 item
+            action APIs.
+          EOF
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "swade-tools-${version}.zip" \
+            "module.json#module.json" \
+            --verify-tag \
+            --title "SWADE Tools ${version}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
