@@ -23,6 +23,32 @@ export default class ItemDialog {
         this.dontDisplay=false;
     }
 
+    async executeSystemItemAction(actionId){
+        const helper=game.swade?.itemChatCardHelper;
+
+        if (typeof helper?.handleAction=='function'){
+            return await helper.handleAction(
+                this.item,
+                this.actor,
+                actionId,
+                {additionalMods:[]}
+            );
+        }
+
+        if (typeof helper?.handleAdditionalActions=='function'){
+            return await helper.handleAdditionalActions(
+                this.item,
+                this.actor,
+                actionId,
+                {mods:[]}
+            );
+        }
+
+        const message='SWADE Tools: SWADE item action API is unavailable.';
+        ui.notifications.error(message);
+        throw new Error(message);
+    }
+
 
     saveSkill(newSkill){
         this.item.update({'system.actions.trait':newSkill});
@@ -675,8 +701,8 @@ export default class ItemDialog {
 
                             gb.rollResist(action.skillOverride,action.traitMod);
                         
-                        } else if (action.type=='macro'){                            
-                            game.swade.itemChatCardHelper.handleAdditionalActions(this.item,this.actor,id) /// swade system handles macros
+                        } else if (action.type=='macro'){
+                            await this.executeSystemItemAction(id);
                         }else  {
                             let itemRoll=new ItemRoll(this.actor,this.item)
                             await this.processItemFormDialog(html,itemRoll,action.type);

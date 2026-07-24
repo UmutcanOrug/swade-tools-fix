@@ -1,6 +1,14 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.8
+
+- Fixed Macro-type Item Actions in the SWADE Tools item dialog for current
+  SWADE V5 releases.
+- Macro actions now use the supported asynchronous item-action API and preserve
+  the item/actor context.
+- Added a guarded compatibility fallback for older SWADE V5 item-action APIs.
+
 ## 2.1.7
 
 - The RoF button is now available for ranged weapons whose assigned attack
