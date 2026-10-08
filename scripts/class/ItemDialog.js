@@ -5,15 +5,19 @@ import Char from './Char.js';
 import launchRofMacro from '../services/RofMacroLauncher.js';
 
 export default class ItemDialog {
-    constructor(actor,itemId){
+    constructor(actor,itemId,operator=null,options={}){
         this.item=actor.items.get(itemId);
+        this.damageOnly=options.damageOnly===true;
      //   this.vehicle=false;
        
 
         if (actor.type=='vehicle'){
             this.vehicle=actor;
            // console.log(this.vehicle);
-            actor=gb.getDriver(actor);
+            actor=operator ??
+                actor.system?.getCrewMemberForWeapon?.(this.item) ??
+                actor.system?.operator ??
+                gb.getDriver(actor);
          //   console.log(actor);
         }
 
@@ -158,6 +162,14 @@ export default class ItemDialog {
                 damageActions.push({id:id,name:weaponactions.additional[id].name});
             }
            
+        }
+
+        // AoE has already rolled its saved skill. Do not require or change the
+        // item's native Trait merely to open its normal damage workflow.
+        if (this.damageOnly){
+            showDamage=Boolean(String(weaponinfo.damage ?? '').trim());
+            showRaiseDmg=showDamage || damageActions.length>0;
+            hasDefaultDamage=showDamage;
         }
 
        // let raise=false;
@@ -455,13 +467,13 @@ export default class ItemDialog {
 
         let skillName=weaponactions.trait;
         let skillflag=item.getFlag('swade-tools','skillitem')
-        let noMainSkill=false;
+        let noMainSkill=this.damageOnly;
 
         if (this.item.system?.innate){
             skillName=gb.trans('InnatePower');
         }
        
-        if (!skillName){
+        if (!skillName && !this.damageOnly){
 
             if (skillflag!==true && this.item.type!='action'){
                 skillName=this.noSkillItem();

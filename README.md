@@ -3,6 +3,35 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
+## Configurable AoE attacks (2.1.9)
+
+1. Open an owned weapon, consumable or gear item and enable `Enable AoE`.
+   You can also toggle `AoE` directly on its inventory row.
+2. Open `AoE Settings` (the gear icon). Choose its attack skill, Small/Medium/
+   Large blast, damage action and ammunition options. Gunnery and other custom
+   skill names are supported. The normal weapon trait remains unchanged.
+3. Click the explosion icon in the inventory and place the blast area. The
+   attack resolves automatically; there is no second confirmation window.
+   Shift-click the icon to override the operator, skill or modifier for one attack.
+4. If needed, click `Benny Reroll` on its attack chat card before the GM applies
+   damage. It rerolls the same attack without consuming another round.
+
+For tank HE, keep the weapon on the vehicle, assign its gunner/operator, and
+configure the weapon's loaded or linked ammunition using SWADE's normal item
+fields. The firing origin and ammunition belong to the vehicle; skill, wounds
+and Bennies belong to its operator. No gun quantity is spent as ammunition.
+
+Sequencer is required for placement. If optional JB2A animation assets are
+missing, the attack still resolves. Blast targets are listed in chat and each
+gets a native SWADE Tools damage card; the player's target rings are unchanged.
+If an already-rolled attack gains a Raise on a later Benny reroll, the GM is
+warned to review the existing damage bonus rather than receiving duplicate
+damage cards. Reroll buttons are available in the throwing/firing user's
+current browser session.
+
+Update this fork using its stable Foundry manifest:
+https://github.com/UmutcanOrug/swade-tools-fix/releases/latest/download/module.json
+
 ## Buy me a coffee
 If you like the module and want to buy me a coffee: https://ko-fi.com/lipefl
 

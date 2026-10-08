@@ -4,9 +4,7 @@ import CharRoll from './CharRoll.js';
 import ItemDialog from './ItemDialog.js';
 import ItemRoll from './ItemRoll.js';
 import SystemRoll from './SystemRoll.js';
-import launchGrenadeMacro, {
-    isGrenadeItem
-} from '../services/GrenadeMacroLauncher.js';
+import { bindAoeInventoryControls } from '../services/AoeItemConfig.js';
 
 export default class SheetControl {
 
@@ -216,9 +214,7 @@ export default class SheetControl {
 
             let actorItem=this.sheet.actor.items.find(el=>el.id==itemId)
             let type=actorItem?.type;
-            const grenadeItem=isGrenadeItem(actorItem);
-
-            if (grenadeItem || type=='power' || type=='weapon' || (type=='gear' && (actorItem.system.isArcaneDevice===true || actorItem.system.actions.trait || !$.isEmptyObject(actorItem.system.actions.additional))) || (type=='shield' && actorItem.system.actions.trait) || type=='action'){
+            if (type=='power' || type=='weapon' || (type=='gear' && (actorItem.system.isArcaneDevice===true || actorItem.system.actions?.trait || !$.isEmptyObject(actorItem.system.actions?.additional ?? {}))) || (type=='shield' && actorItem.system.actions?.trait) || type=='action'){
 
 
                 if(!gb.setting('itemNameClick')){
@@ -231,14 +227,7 @@ export default class SheetControl {
                 })
 
 
-                const templatehtml=grenadeItem
-                    ? `<button type="button"
-                        data-swade-tools-grenade
-                        title="Throw Grenade"
-                        aria-label="Throw Grenade">
-                        <i class="fa-solid fa-bomb"></i>
-                       </button>`
-                    : gb.getTemplatesHTML(actorItem);
+                const templatehtml=gb.getTemplatesHTML(actorItem);
                 if (templatehtml && !target.closest('li').find('.swade-tools-template-buttons').length){
 
                    
@@ -251,13 +240,6 @@ export default class SheetControl {
                         gb.showTemplate(templateType,this.sheet.actor.items.get(itemId));
                         
                        
-                    }).on('click','button[data-swade-tools-grenade]',async button=>{
-                        button.preventDefault();
-                        button.stopPropagation();
-                        await launchGrenadeMacro(
-                            this.sheet.actor,
-                            this.sheet.actor.items.get(itemId)
-                        );
                     });
                 }
             }
@@ -279,6 +261,7 @@ export default class SheetControl {
         this.bindItem();
         this.bindRun();
         this.bindManeuver();
+        bindAoeInventoryControls(this.sheet, this.html);
 
         
     }

@@ -16,11 +16,22 @@ jobs:
       - name: Check out tagged source
         uses: actions/checkout@v4
 
+      - name: Use Node.js for module checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify AoE workflows
+        shell: bash
+        run: node --test tests/*.test.cjs
+
       - name: Build Foundry module package
         shell: bash
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(node -p 'JSON.parse(require("fs").readFileSync("module.json", "utf8")).version')"
+          test "$version" = "$manifest_version"
           package_dir="$RUNNER_TEMP/swade-tools-package"
           archive="swade-tools-${version}.zip"
 
@@ -32,16 +43,7 @@ jobs:
             zip -qr "$GITHUB_WORKSPACE/$archive" .
           )
 
-          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
-          ## SWADE Tools 2.1.8
-
-          - Fixed Macro-type Item Actions in the SWADE Tools item dialog for
-            current SWADE V5 releases.
-          - Macro actions now use the supported asynchronous item-action API
-            while preserving the selected item and actor context.
-          - Added a guarded compatibility fallback for older SWADE V5 item
-            action APIs.
-          EOF
+          cp RELEASE-NOTES.md "$RUNNER_TEMP/release-notes.md"
 
       - name: Create GitHub release
         env:

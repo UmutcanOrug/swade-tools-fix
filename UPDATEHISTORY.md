@@ -1,6 +1,16 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.9
+
+- Replaced the grenade-only shortcut with opt-in, configurable AoE attacks.
+- Added item/inventory AoE checkboxes, saved AoE Settings, and explosion icons.
+- Supports the item's assigned skill and custom skills such as Gunnery.
+- Mounted weapon attacks preserve vehicle resources and the chosen operator.
+- Native ammunition handling consumes once; chat-card Benny rerolls never
+  fire a second round or require a Use Result confirmation.
+- AoE targets remain in chat/native damage cards, not on player target rings.
+
 ## 2.1.8
 
 - Fixed Macro-type Item Actions in the SWADE Tools item dialog for current

@@ -12,6 +12,9 @@ import TokenHud from './class/TokenHud.js';
 //import Char from './class/Char.js';
 import CharRoll from './class/CharRoll.js';
 import CharUp from './class/CharUp.js';
+import { registerAoeItemControls } from './services/AoeItemConfig.js';
+
+registerAoeItemControls();
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)
@@ -343,7 +346,8 @@ Hooks.on('renderActorSheet',(sheet,html)=>{
     
    // if (sheet.actor.data.type!='vehicle'){ /// not available for vehicle yet
       //  console.log(sheet);
-        let sct=new SheetControl(sheet,html);
+        const sheetHtml=html?.jquery ? html : $(html);
+        let sct=new SheetControl(sheet,sheetHtml);
         sct.rebindAll();
   //  }
     

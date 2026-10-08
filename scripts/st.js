@@ -18,11 +18,16 @@ export const run=async(actor)=>{
 }
 
 
-export const item=async(actor,itemId)=>{
+export const item=async(actor,itemId,operator=null,options={})=>{
     let item=actor.items.get(itemId)
-    if (item.type=='weapon' || item.type=='power'){
-        let itemshow=new ItemDialog(actor,itemId);
-        itemshow.showDialog();
+    if (!item){
+        ui.notifications.warn('The selected item could not be found.');
+        return false;
+    }
+    if (item.type=='weapon' || item.type=='power' ||
+        (options.damageOnly===true && ['gear','consumable'].includes(item.type))){
+        let itemshow=new ItemDialog(actor,itemId,operator,options);
+        return itemshow.showDialog();
     } else {
         item.show();
     }
