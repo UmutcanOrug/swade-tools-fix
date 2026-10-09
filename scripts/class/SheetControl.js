@@ -5,6 +5,10 @@ import ItemDialog from './ItemDialog.js';
 import ItemRoll from './ItemRoll.js';
 import SystemRoll from './SystemRoll.js';
 import { bindAoeInventoryControls } from '../services/AoeItemConfig.js';
+import { isAoeItem } from '../services/AoeItemFlags.js';
+import { getWeaponSettingsClickOptions } from '../services/LastWeaponSettings.js';
+
+const nativeWeaponRecallTargets = new WeakSet();
 
 export default class SheetControl {
 
@@ -176,6 +180,46 @@ export default class SheetControl {
     }
 
 
+    bindNativeWeaponRecallClicks(){
+        const root=this.html?.nodeType===1 ? this.html : this.html?.[0];
+        const actor=this.sheet.actor ??
+            (this.sheet.document?.documentName==='Actor' ? this.sheet.document : null);
+        if (!root?.querySelectorAll || !actor?.items) return;
+        const controlsSelector='.item-controls, .item-actions, .controls, [data-item-controls], '+
+            '[data-swade-tools-aoe-controls], .item-edit, .item-delete, '+
+            '[data-action="editItem"], [data-action="deleteItem"]';
+        for (const row of root.querySelectorAll('[data-item-id]')){
+            const itemId=row.dataset.itemId;
+            if (actor.items.get(itemId)?.type!=='weapon') continue;
+            const targets=new Set(row.querySelectorAll(
+                '.name[data-action="showItem"], .item-name, .item-show, .item-image, .item-img'
+            ));
+            for (const child of row.children){
+                if (child.tagName==='IMG') targets.add(child);
+            }
+            for (const target of targets){
+                if (nativeWeaponRecallTargets.has(target) || target.closest(controlsSelector)) continue;
+                nativeWeaponRecallTargets.add(target);
+                target.addEventListener('click',async event=>{
+                    if (event.shiftKey!==true || event.button>0) return;
+                    const item=actor.items.get(itemId);
+                    // AoE owns its capture route; do not also open a regular
+                    // weapon dialog or suppress its independent click handler.
+                    if (!item || item.type!=='weapon' || isAoeItem(item) ||
+                        !item.isOwner || this.sheet.isEditable===false) return;
+                    const clicked=event.target?.nodeType===1
+                        ? event.target : event.target?.parentElement;
+                    if (clicked?.closest(controlsSelector)) return;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    event.stopPropagation();
+                    await st.item(actor,item.id,null,
+                        getWeaponSettingsClickOptions(event,this.sheet));
+                },true);
+            }
+        }
+    }
+
     bindItem(){
 
 
@@ -222,8 +266,9 @@ export default class SheetControl {
                 }
                 
                 target.off('click').on('click',ev=>{
-                    let item=new ItemDialog(this.sheet.actor,itemId);
-                     item.showDialog();
+                    const item=new ItemDialog(this.sheet.actor,itemId,null,
+                        getWeaponSettingsClickOptions(ev,this.sheet));
+                    return item.showDialog();
                 })
 
 
@@ -261,6 +306,7 @@ export default class SheetControl {
         this.bindItem();
         this.bindRun();
         this.bindManeuver();
+        this.bindNativeWeaponRecallClicks();
         bindAoeInventoryControls(this.sheet, this.html);
 
         
@@ -268,3 +314,10 @@ export default class SheetControl {
 
     
 }
+
+// Native V13 DocumentSheetV2 does not inherit the legacy ActorSheet render
+// hook. Install only the new Shift shortcut here; ordinary clicks are untouched.
+globalThis.Hooks?.on('renderApplicationV2',(sheet,html)=>{
+    if (sheet?.document?.documentName!=='Actor' && !sheet?.actor) return;
+    new SheetControl(sheet,html).bindNativeWeaponRecallClicks();
+});

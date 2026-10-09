@@ -3,6 +3,23 @@ import {
     getAoeItemSettings, saveAoeItemSettings
 } from './AoeItemFlags.js';
 import launchAoeMacro from './AoeMacroLauncher.js';
+import { getWeaponSettingsClickOptions } from './LastWeaponSettings.js';
+
+const openInventoryAoePanel = (actor, item, sheet, event) => {
+    const options=getWeaponSettingsClickOptions(event,sheet);
+    let unified=false;
+    try { unified=game.settings?.get('swade-tools','unifiedRofExperimental')===true; }
+    catch { /* Older worlds retain their existing AoE panel. */ }
+    if (unified && item.type==='weapon' &&
+        (item.system?.isRanged===true || String(item.system?.range ?? '').trim()!=='')){
+        if (typeof game.swadetools?.item!=='function'){
+            ui.notifications.warn('The unified weapon panel is not available. Reload Foundry before using this shortcut.');
+            return false;
+        }
+        return game.swadetools.item(actor,item.id,null,options);
+    }
+    return launchAoeMacro(actor,item,{promptAoeSetup:true,...options});
+};
 
 const asElement = html => {
     // HTMLFormElement is indexed by its form controls. V13 DocumentSheetV2
@@ -57,7 +74,7 @@ const bindAoeItemNameClicks = (sheet, actor, row, itemId) => {
             event.preventDefault();
             event.stopImmediatePropagation();
             event.stopPropagation();
-            await launchAoeMacro(actor, currentItem, { promptAoeSetup: true });
+            await openInventoryAoePanel(actor,currentItem,sheet,event);
         }, true);
     }
 };
@@ -210,9 +227,7 @@ export const bindAoeInventoryControls = (sheet, html) => {
                 if (attack.disabled) return;
                 attack.disabled = true;
                 try {
-                    await launchAoeMacro(actor, item, {
-                        promptAoeSetup: true
-                    });
+                    await openInventoryAoePanel(actor,item,sheet,event);
                 } finally {
                     attack.disabled = !isEditable(sheet, item);
                 }

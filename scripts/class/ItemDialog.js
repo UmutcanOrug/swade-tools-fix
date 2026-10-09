@@ -2,15 +2,22 @@ import CharRoll from './CharRoll.js';
 import * as gb from './../gb.js';
 import ItemRoll from './ItemRoll.js';
 import Char from './Char.js';
-import launchRofMacro from '../services/RofMacroLauncher.js';
+import launchRofMacro, { getInlineRofMaximum } from '../services/RofMacroLauncher.js';
 import launchAoeMacro from '../services/AoeMacroLauncher.js';
-import { isAoeItem } from '../services/AoeItemFlags.js';
+import { isAoeItem, getAoeItemSettings } from '../services/AoeItemFlags.js';
+import { resolveWeaponSettingsContext, getLastWeaponSettings, saveLastWeaponSettings } from '../services/LastWeaponSettings.js';
+import { readWeaponPanelSettings, restoreWeaponPanelSettings, toInlineRofSetup, bindUnifiedRofControls } from '../services/WeaponPanelSettings.js';
+import { getShotgunSettings } from '../services/ShotgunRules.js';
+import { prepareNativeShotgunAttack, applyNativeShotgunProfile } from '../services/NativeShotgunAttack.js';
 
 export default class ItemDialog {
     constructor(actor,itemId,operator=null,options={}){
         this.item=actor.items.get(itemId);
         this.weaponActor=actor;
         this.damageOnly=options.damageOnly===true;
+        this.options=options;
+        this.damageOverride=this.damageOnly && typeof options.damageOverride==='string'
+            ? options.damageOverride.trim() || null : null;
      //   this.vehicle=false;
        
 
@@ -28,6 +35,19 @@ export default class ItemDialog {
         this.charRoll=new CharRoll(actor);
 
         this.dontDisplay=false;
+    }
+
+    weaponSettingsContext(){
+        if (this.damageOnly || this.item?.type!=='weapon') return null;
+        return resolveWeaponSettingsContext({weaponOwner:this.weaponActor,
+            operator:this.actor,item:this.item,token:this.options.token});
+    }
+
+    rememberWeaponPanel(html){
+        const values=readWeaponPanelSettings(html);
+        const context=this.weaponSettingsContext();
+        if (context) saveLastWeaponSettings(context,values);
+        return values;
     }
 
     async executeSystemItemAction(actionId){
@@ -125,19 +145,36 @@ export default class ItemDialog {
     }
 
     showDialog(){
+        const experimentalUnified=!this.damageOnly && typeof gb.setting==='function' &&
+            gb.setting('unifiedRofExperimental')===true;
+        const unifiedWeapon=experimentalUnified && this.item.type==='weapon' &&
+            (this.item.system.isRanged===true || String(this.item.system.range ?? '').trim()!=='');
+        if (unifiedWeapon && this.weaponActor.type==='vehicle' && !this.actor){
+            ui.notifications.warn('Assign a weapon operator on the vehicle before opening its unified attack panel.');
+            return;
+        }
         // All normal item entry points share this dialog. Opted-in weapons use
         // the AoE attack panel; internal native damage calls bypass the route.
-        if (!this.damageOnly && isAoeItem(this.item)){
+        if (!this.damageOnly && isAoeItem(this.item) && !unifiedWeapon){
             return launchAoeMacro(this.weaponActor,this.item,{
                 operatorActor:this.actor?.type!=='vehicle' ? this.actor : null,
-                promptAoeSetup:true
+                promptAoeSetup:true, token:this.options.token, restoreLast:this.options.restoreLast===true
             });
         }
         
       //  let actor=this.sheet.actor;
         let item=this.item;
-        let weaponinfo=item.system;
+        let weaponinfo=this.damageOverride ? {...item.system,damage:this.damageOverride} : item.system;
         let weaponactions=item.system.actions;
+        const rangedWeapon=item.type==='weapon' &&
+            (item.system.isRanged===true || String(item.system.range ?? '').trim()!=='');
+        const unifiedRof=!this.damageOnly && rangedWeapon && experimentalUnified;
+        const aoeWeaponPanel=unifiedRof && isAoeItem(item);
+        const aoeSettings=aoeWeaponPanel ? getAoeItemSettings(item) : null;
+        const shotgunSettings=unifiedRof ? getShotgunSettings(item) : {enabled:false};
+        const maxRof=unifiedRof ? getInlineRofMaximum(this.actor,item) : 1;
+        const savedSettings=!this.damageOnly && this.options.restoreLast===true
+            ? getLastWeaponSettings(this.weaponSettingsContext()) : null;
         let showDamage=true;
         let showRaiseDmg=true;
         let char=new Char(this.actor)
@@ -193,12 +230,14 @@ export default class ItemDialog {
 
 
         if (item.type=='weapon'){
-        content+=`<div><strong>${gb.trans('Dmg','SWADE')}</strong>: ${weaponinfo.damage}${patxt}</div>
+        content+=`<div><strong>${gb.trans('Dmg','SWADE')}</strong>: ${shotgunSettings.enabled ? '<span data-shotgun-damage title="Short / Medium / Long range">3d6 / 2d6 / 1d6</span>' : weaponinfo.damage}${patxt}</div>
         <div><strong>${gb.trans('Mag','SWADE')}</strong>: ${weaponinfo.currentShots}/${weaponinfo.shots}</div>
         
         
         <div><strong>${gb.trans('Range._name','SWADE')}</strong>: ${weaponinfo.range}</div>
-        <div><strong>${gb.trans('RoF','SWADE')}</strong>: ${weaponinfo.rof}</div>`
+            <div><strong>${gb.trans('RoF','SWADE')}</strong>: ${unifiedRof
+                ? `<select id="rof" aria-label="Rate of Fire" style="width:55px;display:inline-block">${Array.from({length:maxRof},(_,index)=>`<option value="${index+1}">${index+1}</option>`).join('')}</select> <label style="font-size:11px;white-space:nowrap" title="Apply Recoil -2 when firing at RoF 2 or higher"><input id="rof-recoil" type="checkbox" disabled style="width:14px;height:14px;margin:0 2px">Recoil</label>`
+                : weaponinfo.rof}</div>`
         }  else if (item.type=='power'){
 
             if (showDamage){
@@ -364,7 +403,7 @@ export default class ItemDialog {
         /// ==> END POWER MODIFIERS
 
 
-        if ( gb.setting('selectModifiers') || gb.setting('askCalledShots')){
+        if ( gb.setting('selectModifiers') || gb.setting('askCalledShots') || unifiedRof){
         content+=`<div class="swadetools-damage-actions swadetools-mod-add swadetools-mid-title"><h3>${gb.trans("ModOther",'SWADE')}</h3></div>`;
         }
 
@@ -391,7 +430,7 @@ export default class ItemDialog {
         }
  */
 
-        if ( gb.setting('selectModifiers') ){
+        if ( gb.setting('selectModifiers') || unifiedRof ){
             content+=`<div class="swadetools-damage-actions swadetools-mod-add"><label><strong>${gb.trans('MAPenalty.Label','SWADE')}:</strong></label> <select id="multiaction">`
             //<option value="">${gb.trans('Default')}</option>`;
             let multiaction=[
@@ -441,7 +480,7 @@ export default class ItemDialog {
             </div>`;
         }
 
-        if (gb.setting('askCalledShots')){
+        if ((gb.setting('askCalledShots') || unifiedRof) && !aoeWeaponPanel){
             content+=`<div class="swadetools-damage-actions swadetools-mod-add"><label><strong>${gb.trans('CalledShot')}:</strong> <i class="far fa-question-circle swadetools-hint" title="${gb.trans('CalledShotHint')}"></i></label> <select id="calledshots">`
             //<option value="">${gb.trans('Default')}</option>`;
 
@@ -473,6 +512,18 @@ export default class ItemDialog {
 
 
        
+
+        if (shotgunSettings.enabled) content+=`<div class="swadetools-2grid" style="align-items:center;margin:4px 0">
+            <label for="shotgun-mode">Ammunition</label><select id="shotgun-mode"><option value="shot">Shot</option><option value="slug">Slug</option></select>
+            ${shotgunSettings.doubleBarrel ? '<label style="grid-column:1 / -1"><input id="shotgun-both-barrels" type="checkbox">Both Barrels (one target, +4 damage)</label>' : ''}
+            </div>`;
+        if (unifiedRof) content+=`<details data-unified-rof-options ${aoeWeaponPanel ? 'data-aoe-consumption' : ''} hidden style="margin:4px 0;font-size:12px"><summary style="cursor:pointer">Attack Options</summary>
+            <div class="swadetools-2grid" style="margin-top:4px">
+              ${aoeWeaponPanel ? '' : '<label data-rof-multiple-only><input id="rof-drop" type="checkbox">The Drop</label><label data-rof-multiple-only><input id="rof-vulnerable" type="checkbox">Vulnerable</label>'}
+              <label data-rof-multiple-only for="rof-damage-modifier">Damage Mod.</label><input data-rof-multiple-only id="rof-damage-modifier" type="text" placeholder="+2 or +1d6x">
+              <label><input id="rof-consume-ammo" type="checkbox" ${aoeSettings?.consumeMode==='none' ? 'disabled' : 'checked'}>${aoeSettings?.consumeMode==='item' ? 'Consume Item' : 'Consume Ammo'}</label>
+            </div></details>`;
+        if (savedSettings) content+='<div style="font-size:11px;margin-top:3px">Last settings restored.</div>';
 
         let buttons={};
 
@@ -517,11 +568,44 @@ export default class ItemDialog {
         buttons.mainSkill={
             label: skillIcon+skillName+gb.stringMod(gb.itemSkillMod(this.item)),
             callback: async (html)=>{
+                if (unifiedRof){
+                    const values=readWeaponPanelSettings(html);
+                    const selectedRof=Number(values.rof ?? 1);
+                    if (!Number.isInteger(selectedRof) || selectedRof<1 || selectedRof>maxRof){
+                        ui.notifications.warn('Select a valid Rate of Fire for this weapon.');
+                        return;
+                    }
+                    if (selectedRof>1){
+                        this.rememberWeaponPanel(html);
+                        return launchRofMacro(this.actor,this.item,this.vehicle,{setup:{...toInlineRofSetup(values),aoe:aoeWeaponPanel},token:this.options.token});
+                    }
+                    if (aoeWeaponPanel){
+                        if (shotgunSettings.enabled){ui.notifications.warn('Shotgun and AoE damage profiles cannot be enabled together. Choose the appropriate item profile.');return;}
+                        this.rememberWeaponPanel(html);
+                        const selected=toInlineRofSetup(values);
+                        const cover={None:0,Light:-2,Medium:-4,Heavy:-6,Total:-8}[selected.cover] ?? 0;
+                        const illumination={None:0,Dim:-2,Dark:-4,Pitch:-6}[selected.illumination] ?? 0;
+                        return launchAoeMacro(this.weaponActor,this.item,{operatorActor:this.actor,
+                            token:this.options.token,attackSetup:{otherModifierFormula:selected.otherModifierFormula,
+                                situationalModifier:selected.multiAction+cover+illumination,consume:selected.consumeAmmo,
+                                modifierParts:{modifier:selected.otherModifierFormula,multiAction:selected.multiAction,cover,illumination}}});
+                    }
+                }
                 
                 let itemRoll=new ItemRoll(this.actor,this.item);
+                let shotgun;
+                if (shotgunSettings.enabled){
+                    const values=readWeaponPanelSettings(html);
+                    shotgun=await prepareNativeShotgunAttack({item:this.item,weaponOwner:this.weaponActor,
+                        operator:this.actor,token:this.options.token,mode:values.shotgunMode,
+                        bothBarrels:values.bothBarrels,consumeAmmo:values.consumeAmmo,
+                        modifierFormula:values.modifier,action:'attack'});
+                    if (!shotgun.ok){ui.notifications.warn(shotgun.reason);return;}
+                }
                 
                 
-                await this.processItemFormDialog(html,itemRoll);               
+                await this.processItemFormDialog(html,itemRoll,undefined,shotgun?.modifierFormulaResolved);
+                if (shotgun) applyNativeShotgunProfile(itemRoll,shotgun);
                 await itemRoll.rollBaseSkill();               
                 itemRoll.display();
                
@@ -547,7 +631,7 @@ export default class ItemDialog {
                 this.item.system?.isRanged===true ||
                 String(this.item.system?.range ?? '').trim()!==''
             );
-        if (isRangedWeapon && !noMainSkill){
+        if (isRangedWeapon && !noMainSkill && !unifiedRof){
             buttons.rofAllocator={
                 label: `<i class="fas fa-burst"></i> RoF`,
                 callback: async ()=>{
@@ -567,8 +651,23 @@ export default class ItemDialog {
             callback: async (html)=>{
                
                 let itemRoll=new ItemRoll(this.actor,this.item)
-                await this.processItemFormDialog(html,itemRoll,'damage');
-                await itemRoll.rollBaseDamage();
+                let damageOverride=this.damageOverride;
+                let modifierOverride;
+                let shotgunDamage;
+                if (shotgunSettings.enabled){
+                    if (aoeWeaponPanel){ui.notifications.warn('Choose either Shotgun or AoE damage rules for this weapon.');return;}
+                    const values=readWeaponPanelSettings(html);
+                    const shotgun=await prepareNativeShotgunAttack({item:this.item,weaponOwner:this.weaponActor,
+                        operator:this.actor,token:this.options.token,mode:values.shotgunMode,
+                        bothBarrels:values.bothBarrels,modifierFormula:values.modifier,action:'damage'});
+                    if (!shotgun.ok){ui.notifications.warn(shotgun.reason);return;}
+                    damageOverride=shotgun.damage;
+                    modifierOverride=shotgun.modifierFormulaResolved;
+                    shotgunDamage=shotgun;
+                }
+                await this.processItemFormDialog(html,itemRoll,'damage',modifierOverride);
+                if (shotgunDamage) applyNativeShotgunProfile(itemRoll,shotgunDamage);
+                await itemRoll.rollBaseDamage(damageOverride);
                 itemRoll.display();
 
                 /* let data={
@@ -662,7 +761,7 @@ export default class ItemDialog {
             let rof = gb.realInt(this.item?.system?.rof)+1;
               
             let char = new Char(this.actor);
-            if (char.hasEdgeSetting('Rapid Fire')) {
+            if (char.hasEdgeSetting('Rapid Fire') && !unifiedRof) {
                 buttons.rapidFire={
                     label: gb.settingKeyName('Rapid Fire') +' ('+gb.trans('RoF','SWADE')+' '+rof+')',
                     callback: async (html)=>{
@@ -747,6 +846,9 @@ export default class ItemDialog {
             content: content,
             buttons: buttons,
             render: (html)=>{
+
+               if (savedSettings) restoreWeaponPanelSettings(html,savedSettings,{maxRof:unifiedRof?maxRof:6});
+               if (unifiedRof) bindUnifiedRofControls(html,savedSettings);
 
                gb.modButtons(html);
 
@@ -834,13 +936,14 @@ export default class ItemDialog {
         charRoll.display();
     } */
 
-    async processItemFormDialog(html,charRoll,actionType){
+    async processItemFormDialog(html,charRoll,actionType,modifierOverride){
+        if (!this.damageOnly && actionType!=='damage') this.rememberWeaponPanel(html);
         
         if (this.vehicle){
             charRoll.usingVehicle(this.vehicle);
         }
         
-           charRoll.addModifier(html.find("#mod")[0].value,gb.trans('Additional'))
+           charRoll.addModifier(modifierOverride ?? html.find("#mod")[0].value,gb.trans('Additional'))
             if (html.find("#raise")[0]?.checked){
                 charRoll.raiseDmg();
             } 

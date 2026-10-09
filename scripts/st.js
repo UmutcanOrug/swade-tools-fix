@@ -27,7 +27,12 @@ export const item=async(actor,itemId,operator=null,options={})=>{
     }
     if (item.type=='weapon' || item.type=='power' || isAoeItem(item) ||
         (options.damageOnly===true && ['gear','consumable'].includes(item.type))){
-        let itemshow=new ItemDialog(actor,itemId,operator,options);
+        const dialogOptions={
+            ...options,
+            restoreLast:options.restoreLast===true,
+            token:options.token ?? (actor?.isToken ? actor.token ?? actor.parent : undefined)
+        };
+        let itemshow=new ItemDialog(actor,itemId,operator,dialogOptions);
         return itemshow.showDialog();
     } else {
         item.show();

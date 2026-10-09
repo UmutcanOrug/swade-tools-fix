@@ -44,11 +44,11 @@ const actingActor =
   selectedToken?.actor;
 
 if (!actingActor || !selectedToken) {
-  return ui.notifications.warn("Once atis yapacak tokeni sec.");
+  return ui.notifications.warn("Select the source token before attacking.");
 }
 
 if (!actingActor.isOwner) {
-  return ui.notifications.error("Bu tokeni kullanma yetkin yok.");
+  return ui.notifications.error("You do not have permission to use this token.");
 }
 
 if (
@@ -56,7 +56,7 @@ if (
   typeof game.swadetools?.item !== "function"
 ) {
   return ui.notifications.error(
-    "Bu makro SWADE Tools 2.1.x aktif olmadan hasar atmaz."
+    "SWADE Tools 2.1.x must be active to roll damage with this macro."
   );
 }
 
@@ -64,9 +64,10 @@ const possibleTargets = Array.from(game.user.targets ?? []).filter(
   (targetToken) => targetToken?.actor && targetToken?.document
 );
 
-if (!possibleTargets.length) {
+const requestsInlineAoe = macroScope.rofSetup?.aoe === true;
+if (!possibleTargets.length && !requestsInlineAoe) {
   return ui.notifications.warn(
-    "Once hasar dagitabilecegin olasi hedefleri target olarak isaretle."
+    "Target the potential recipients before using the RoF damage allocator."
   );
 }
 
@@ -117,7 +118,7 @@ const rangedWeapons = weaponActor.items
 
 if (!rangedWeapons.length) {
   return ui.notifications.warn(
-    `${actingActor.name} uzerinde menzilli bir Weapon bulunamadi.`
+    `No ranged weapon was found on ${actingActor.name}.`
   );
 }
 
@@ -233,7 +234,49 @@ const weaponOptions = rangedWeapons.map((weapon) => {
   ].join("");
 }).join("");
 
+const hasInlineSetup = Object.hasOwn(macroScope, "rofSetup");
 let setup;
+if (hasInlineSetup) {
+  const supplied = macroScope.rofSetup;
+  if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) {
+    return ui.notifications.error("The inline RoF setup is invalid. Reopen the weapon panel.");
+  }
+  const modifierValue = (value, namedValues, allowedValues) => {
+    const normalized = typeof value === "string" && Object.hasOwn(namedValues, value)
+      ? namedValues[value] : Number(value ?? 0);
+    return allowedValues.includes(normalized) ? normalized : null;
+  };
+  const multiAction = modifierValue(supplied.multiAction, {}, [0, -2, -4]);
+  const cover = modifierValue(supplied.cover,
+    {None:0, Light:-2, Medium:-4, Heavy:-6, Total:-8}, [0, -2, -4, -6, -8]);
+  const illumination = modifierValue(supplied.illumination,
+    {None:0, Dim:-2, Dark:-4, Pitch:-6}, [0, -2, -4, -6]);
+  const calledShot = supplied.calledShot ?? "None";
+  const booleanFields = ["recoil", "theDrop", "forceVulnerable", "consumeAmmo", "aoe", "bothBarrels"];
+  if (multiAction === null || cover === null || illumination === null ||
+    !Object.hasOwn(CALLED_SHOT_ATTACK_PENALTY, calledShot) ||
+    booleanFields.some((key) => supplied[key] !== undefined && typeof supplied[key] !== "boolean")) {
+    return ui.notifications.error("The inline RoF modifiers are invalid. Reopen the weapon panel.");
+  }
+  const formula = supplied.otherModifierFormula ?? supplied.otherModifier ?? "0";
+  if (!["string", "number"].includes(typeof formula) || String(formula).length > 256 ||
+    typeof (supplied.damageModifier ?? "") !== "string") {
+    return ui.notifications.error("The inline RoF roll formula is invalid. Reopen the weapon panel.");
+  }
+  setup = {
+    ...supplied,
+    rof:Number(supplied.rof),
+    recoil:supplied.recoil ?? true,
+    theDrop:supplied.theDrop ?? false,
+    forceVulnerable:supplied.forceVulnerable ?? false,
+    consumeAmmo:supplied.consumeAmmo ?? true,
+    aoe:supplied.aoe ?? false,
+    bothBarrels:supplied.bothBarrels ?? false,
+    otherModifierFormula:String(formula).trim() || "0",
+    multiAction, cover, illumination, calledShot,
+    damageModifier:String(supplied.damageModifier ?? "").trim(),
+  };
+} else {
 try {
   setup = await foundry.applications.api.DialogV2.prompt({
     window: { title: "SWADE RoF Attack Pool" },
@@ -379,6 +422,7 @@ try {
 } catch {
   return;
 }
+}
 
 if (!setup) return;
 
@@ -386,7 +430,7 @@ const weapon = rangedWeapons.find(
   (candidate) => candidate.id === setup.weaponId
 );
 if (!weapon || !isRangedWeapon(weapon)) {
-  return ui.notifications.error("Secilen menzilli silah bulunamadi.");
+  return ui.notifications.error("The selected ranged weapon was not found.");
 }
 const weaponOwner =
   weapon.actor ??
@@ -397,32 +441,57 @@ const mountedVehicle =
   macroScope.vehicle ??
   (weaponOwner?.type === "vehicle" ? weaponOwner : null);
 
-const weaponMaxRof = Math.max(
-  1,
-  Math.floor(Number(weapon.system?.rof ?? 1))
+const inlineContextChanged = () => (
+  !contextualItem || weapon.uuid !== contextualItem.uuid ||
+  setup.itemUuid !== weapon.uuid || setup.weaponId !== weapon.id ||
+  setup.weaponActorUuid !== weaponOwner?.uuid || setup.actorUuid !== actingActor.uuid ||
+  !weaponOwner?.isOwner || !actingActor?.isOwner || weaponOwner.items?.get?.(weapon.id) !== weapon ||
+  (selectedToken.actor !== weaponOwner && selectedToken.actor?.uuid !== weaponOwner.uuid) ||
+  (weapon.actor ?? weapon.parent)?.uuid !== weaponOwner.uuid ||
+  String(setup.trait ?? "").trim() !== String(weapon.system?.actions?.trait ?? "").trim() ||
+  !String(weapon.system?.actions?.trait ?? "").trim()
 );
-const selectedRof = Math.floor(Number(setup.rof));
+if (hasInlineSetup && inlineContextChanged()) {
+  return ui.notifications.error("The inline RoF weapon, owner, or Trait changed. Reopen the weapon panel.");
+}
+const rofServices = macroScope.rofServices ?? {};
+const isInlineAoe = hasInlineSetup && setup.aoe === true;
+if (isInlineAoe && (typeof rofServices.isAoeItem !== "function" || !rofServices.isAoeItem(weapon) ||
+  typeof rofServices.prepareAoePoolPoints !== "function" || typeof rofServices.launchAoeMacro !== "function" ||
+  !rofServices.aoeResource?.describe || !rofServices.aoeResource?.validate || !rofServices.aoeResource?.spend ||
+  typeof rofServices.getAoeItemSettings !== "function" || typeof rofServices.withSuppressedAoeAutomation !== "function")) {
+  return ui.notifications.error("This weapon's combined AoE/RoF workflow is unavailable. Reopen the weapon panel.");
+}
+
+const configuredWeaponRof = Number(weapon.system?.rof ?? 1);
+const baseWeaponMaxRof = Number.isFinite(configuredWeaponRof)
+  ? Math.max(1, Math.floor(configuredWeaponRof)) : 1;
+const selectedRof = hasInlineSetup ? Number(setup.rof) : Math.floor(Number(setup.rof));
 
 if (
-  !Number.isFinite(selectedRof) ||
+  !Number.isInteger(selectedRof) ||
   selectedRof < 1 ||
   selectedRof > 6
 ) {
-  return ui.notifications.error("RoF 1 ile 6 arasinda olmali.");
+  return ui.notifications.error("RoF must be between 1 and 6.");
 }
 
-if (selectedRof > weaponMaxRof) {
-  return ui.notifications.error(
-    `${weapon.name} en fazla RoF ${weaponMaxRof} kullanabilir.`
-  );
+if (hasInlineSetup && selectedRof === 1) {
+  return ui.notifications.warn("RoF 1 uses the native single-fire attack. Reopen the weapon panel.");
 }
 
 const ammoCost = ROF_AMMO_COST[selectedRof];
 if (!Number.isFinite(ammoCost)) {
   return ui.notifications.error(
-    `RoF ${selectedRof} icin standart mermi maliyeti bulunamadi.`
+    `No standard ammunition cost was found for RoF ${selectedRof}.`
   );
 }
+const initialAoeSettings = isInlineAoe ? JSON.stringify(rofServices.getAoeItemSettings(weapon)) : null;
+const aoeResourceOptions = isInlineAoe ? {
+  consume:setup.consumeAmmo,mode:JSON.parse(initialAoeSettings).consumeMode,
+  legacyGrenade:rofServices.isLegacyGrenadeItem?.(weapon) ?? false,
+  cost:ammoCost,ammoManagement:getOptionalSetting("swade", "ammoManagement", false),
+} : null;
 
 const configuredShootingSkill = String(
   getOptionalSetting("swade-tools", "shootingSkill", "Shooting")
@@ -449,9 +518,43 @@ const attackSkill =
 
 if (!attackSkill) {
   return ui.notifications.error(
-    `${actingActor.name} uzerinde ${attackSkillReference} skilli bulunamadi.`
+    `${actingActor.name} does not have the ${attackSkillReference} skill.`
   );
 }
+
+const rapidFireEdge = hasInlineSetup && (
+  normalizeRuleName(attackSkill.name) === normalizeRuleName(configuredShootingSkill) ||
+  normalizeSwid(attackSkill.system?.swid) === "shooting"
+) ? findActorRuleItem("rapid-fire", "Rapid Fire", "RapidFireSetting") : null;
+const weaponMaxRof = hasInlineSetup
+  ? Math.min(6, baseWeaponMaxRof + (rapidFireEdge ? 1 : 0))
+  : baseWeaponMaxRof;
+if (selectedRof > weaponMaxRof) {
+  return ui.notifications.error(
+    `${weapon.name} supports at most RoF ${weaponMaxRof}${rapidFireEdge ? " (Rapid Fire)" : ""}.`
+  );
+}
+const shotgunSettings = hasInlineSetup && typeof rofServices.getShotgunSettings === "function"
+  ? rofServices.getShotgunSettings(weapon) : {enabled:false};
+const isInlineShotgun = shotgunSettings.enabled === true;
+let shotgunProfile = null;
+if (isInlineShotgun) {
+  if (isInlineAoe) return ui.notifications.warn("Shotgun rules and AoE cannot be combined on the same weapon profile.");
+  shotgunProfile = rofServices.validateShotgunAttack?.(weapon, {
+    mode:setup.shotgunMode ?? "shot",rangeBand:"short",rof:selectedRof,
+    bothBarrels:setup.bothBarrels,targetCount:possibleTargets.length,
+  });
+  if (!shotgunProfile?.ok) return ui.notifications.warn(shotgunProfile?.reason ?? "The shotgun profile is unavailable.");
+  const bands = getWeaponRangeBands();
+  if (!bands || ![bands.short,bands.medium,bands.long].every((value) => Number.isFinite(value) && value > 0) ||
+    bands.medium < bands.short || bands.long < bands.medium) {
+    return ui.notifications.warn("Set valid Short/Medium/Long weapon ranges before using shotgun rules.");
+  }
+  if (shotgunProfile.mode === "shot" && !possibleTargets.some((targetToken) => measureTargetDistance(targetToken) <= bands.long)) {
+    return ui.notifications.warn("Shot cannot reach any selected target. Use Slug or choose a target within Long range.");
+  }
+}
+const shotgunAttackBonus = Number(shotgunProfile?.attackBonus ?? 0);
 
 const weaponMinimumStrengthSides = parseMinimumStrength(
   weapon.system?.minStr
@@ -666,8 +769,9 @@ const inspectAmmo = () => {
 };
 
 const validateAmmo = () => {
+  if (isInlineAoe) return rofServices.aoeResource.validate(weapon,weaponOwner,aoeResourceOptions);
   const inspected = inspectAmmo();
-  if (!setup.consumeAmmo) {
+  if (!setup.consumeAmmo || (hasInlineSetup && getOptionalSetting("swade", "ammoManagement", true) === false)) {
     return { ok: true, managed: false, ...inspected };
   }
 
@@ -690,6 +794,9 @@ const validateAmmo = () => {
 
   if (systemApiAccepted === true) {
     return { ok: true, managed: true, ...inspected };
+  }
+  if (hasInlineSetup && systemApiAccepted === false) {
+    return {ok:false,managed:false,apiRejected:true,...inspected};
   }
 
   return {
@@ -743,7 +850,7 @@ const consumeFallbackAmmo = async (validation) => {
   throw new Error("No writable ammunition source was found.");
 };
 
-const ammoValidation = validateAmmo();
+let ammoValidation = validateAmmo();
 if (!ammoValidation.ok) {
   const visibleAmmo = Number.isFinite(ammoValidation.available)
     ? ammoValidation.available
@@ -755,7 +862,7 @@ if (!ammoValidation.ok) {
   const inventoryAmmo =
     ammoValidation.ammoItemResource?.value ?? "n/a";
   return ui.notifications.error(
-    `${weapon.name}: ${ammoCost} mermi gerekli; gorunen ${visibleAmmo} ` +
+    `${weapon.name}: ${ammoCost} ${isInlineAoe && aoeResourceOptions.mode === "item" ? "items" : "rounds"} required; ${visibleAmmo} available ` +
     `(magazine ${magazineAmmo}, inventory ${inventoryAmmo}).`
   );
 }
@@ -771,7 +878,61 @@ const recoilPenalty =
   selectedRof > 1 && setup.recoil === true ? -2 : 0;
 const theDropAttackBonus = setup.theDrop === true ? 4 : 0;
 const theDropDamageBonus = setup.theDrop === true ? 4 : 0;
-const otherModifier = Number(setup.otherModifier ?? 0);
+const inlineModifierRolls = [];
+const inlineModifierEntries = [];
+const inlineRollData = hasInlineSetup ? actingActor.getRollData?.() ?? {} : {};
+const validateInlineFormula = (formula) => {
+  const missing = [...formula.matchAll(/@([A-Za-z0-9_.]+)/g)]
+    .find(([, reference]) => foundry.utils.getProperty(inlineRollData, reference) === undefined);
+  if (missing) throw new Error(`Unavailable roll field: @${missing[1]}.`);
+  const resolved = typeof Roll.replaceFormulaData === "function"
+    ? Roll.replaceFormulaData(formula, inlineRollData) : formula;
+  if (typeof Roll.validate === "function" && !Roll.validate(resolved)) {
+    throw new Error("Invalid attack or damage modifier formula.");
+  }
+};
+const evaluateInlineModifier = async (label, formula) => {
+  const expression = String(formula ?? "").trim();
+  if (!expression) return 0;
+  validateInlineFormula(expression);
+  let value = Number(expression);
+  if (!Number.isFinite(value)) {
+    const roll = await new Roll(expression, inlineRollData).evaluate();
+    inlineModifierRolls.push(roll);
+    value = Number(roll.total);
+  }
+  if (!Number.isFinite(value)) throw new Error("A modifier did not produce a finite total.");
+  if (value) inlineModifierEntries.push({label, formula:expression, value});
+  return value;
+};
+let otherModifier = Number(setup.otherModifier ?? 0);
+let inlinePreparedModifier = 0;
+const multiActionPenalty = hasInlineSetup ? setup.multiAction : 0;
+const aoeSituationalPenalty = isInlineAoe ? setup.cover + setup.illumination : 0;
+if (hasInlineSetup) {
+  try {
+    const globalModifiers = actingActor.system?.stats?.globalMods ?? {};
+    const preparedModifiers = [
+      {label:"Item", value:weapon.system?.actions?.traitMod},
+      {label:"Trademark", value:weapon.system?.trademark},
+      ...Array.from(attackSkill.system?.effects ?? []),
+      ...Array.from(globalModifiers.trait ?? []),
+      ...Array.from(globalModifiers[attackSkill.system?.attribute] ?? []),
+      ...Array.from(globalModifiers.attack ?? []),
+    ].filter((modifier) => modifier && !modifier.ignore && String(modifier.value ?? "").trim());
+    // Validate every expression before evaluating any dice or committing ammo.
+    for (const formula of [setup.otherModifierFormula, setup.damageModifier,
+      ...preparedModifiers.map((modifier) => String(modifier.value))].filter(Boolean)) {
+      validateInlineFormula(formula);
+    }
+    otherModifier = await evaluateInlineModifier("Mod.", setup.otherModifierFormula);
+    for (const modifier of preparedModifiers) {
+      inlinePreparedModifier += await evaluateInlineModifier(String(modifier.label ?? "Effect"), modifier.value);
+    }
+  } catch (error) {
+    return ui.notifications.error(`RoF setup: ${error.message} Reopen the weapon panel or update the item's effects.`);
+  }
+}
 const calledShot = Object.hasOwn(
   CALLED_SHOT_ATTACK_PENALTY,
   setup.calledShot
@@ -780,7 +941,11 @@ const calledShot = Object.hasOwn(
   : "None";
 const calledShotPenalty =
   CALLED_SHOT_ATTACK_PENALTY[calledShot];
-const damageModifier = String(setup.damageModifier ?? "").trim();
+// Native SWADE Tools accepts resolved formulas, not raw @data references.
+// Resolve data here without rolling damage dice; each target rolls its own.
+const damageModifier = hasInlineSetup && typeof Roll.replaceFormulaData === "function"
+  ? Roll.replaceFormulaData(String(setup.damageModifier ?? "").trim(),inlineRollData)
+  : String(setup.damageModifier ?? "").trim();
 const commonModifier =
   woundPenalty +
   fatiguePenalty +
@@ -789,6 +954,10 @@ const commonModifier =
   minimumStrengthPenalty +
   theDropAttackBonus +
   otherModifier +
+  multiActionPenalty +
+  inlinePreparedModifier +
+  aoeSituationalPenalty +
+  shotgunAttackBonus +
   calledShotPenalty;
 
 const attackSkillSides = Math.max(
@@ -802,7 +971,7 @@ const wildSides = Math.max(
 const isWildCard = Boolean(actingActor.system.wildcard);
 const bennyTraitModifiers = Array.from(
   actingActor.system?.stats?.globalMods?.bennyTrait ?? []
-).filter((modifier) => Number.isFinite(Number(modifier?.value)));
+).filter((modifier) => (!hasInlineSetup || !modifier?.ignore) && Number.isFinite(Number(modifier?.value)));
 const bennyTraitBonus = bennyTraitModifiers.reduce(
   (total, modifier) => total + Number(modifier.value),
   0
@@ -1143,20 +1312,55 @@ while (true) {
 const candidates = attackPool.candidates;
 const usableResults = attackPool.usableResults;
 
-if (setup.consumeAmmo) {
+let aoePlacements = null;
+if (isInlineAoe) {
+  aoePlacements = await rofServices.prepareAoePoolPoints({actor:actingActor,item:weapon,
+    weaponOwner,token:selectedToken,candidates:usableResults,setup});
+  if (!Array.isArray(aoePlacements) || !aoePlacements.length) return;
+  const seen = new Set();
+  if (aoePlacements.length !== usableResults.length || aoePlacements.some((placement) => {
+    const index = placement?.candidateIndex;
+    const valid = Number.isInteger(index) && index >= 0 && index < usableResults.length && !seen.has(index) &&
+      Number.isFinite(placement.attackPoint?.x) && Number.isFinite(placement.attackPoint?.y);
+    seen.add(index);
+    return !valid;
+  })) return ui.notifications.error("AoE placements were incomplete. No ammunition was consumed.");
+}
+
+if (hasInlineSetup) {
+  if (inlineContextChanged()) return ui.notifications.error("The weapon, owner, or Trait changed during the attack. No ammunition was consumed.");
+  ammoValidation = validateAmmo();
+  if (!ammoValidation.ok) return ui.notifications.warn("Ammunition changed during the attack. Reload or reopen the weapon panel; no shots were consumed.");
+  if (isInlineAoe && (!rofServices.isAoeItem(weapon) ||
+    JSON.stringify(rofServices.getAoeItemSettings(weapon)) !== initialAoeSettings)) {
+    return ui.notifications.warn("AoE settings changed during the attack. No ammunition or items were consumed.");
+  }
+}
+
+let poolAmmoSpent = 0;
+if (setup.consumeAmmo && (isInlineAoe || !hasInlineSetup || getOptionalSetting("swade", "ammoManagement", true) !== false)) {
   try {
-    if (
+    if (isInlineAoe) {
+      const consumedResource = rofServices.aoeResource.describe(weapon,weaponOwner,aoeResourceOptions).resource;
+      const result = await rofServices.withSuppressedAoeAutomation([weapon,consumedResource],
+        () => rofServices.aoeResource.spend(weapon,weaponOwner,aoeResourceOptions),
+        {gameRef:game,hooksRef:Hooks,trackConsumption:true});
+      if (!result.ok) return ui.notifications.warn("The AoE pool resource could not be consumed. No projectiles were resolved.");
+      poolAmmoSpent = Number(result.consumed ?? 0);
+    } else if (
       ammoValidation.managed &&
       typeof weapon.consume === "function"
     ) {
       await weapon.consume(ammoCost);
+      poolAmmoSpent = ammoCost;
     } else {
       await consumeFallbackAmmo(ammoValidation);
+      poolAmmoSpent = ammoCost;
     }
   } catch (error) {
     console.error("SWADE RoF Macro | Ammo consumption failed", error);
     return ui.notifications.error(
-      `${weapon.name}: mermi dusurulemedi; hasar islemi durduruldu.`
+      `${weapon.name}: ammunition could not be consumed; damage resolution was stopped.`
     );
   }
 }
@@ -1175,6 +1379,14 @@ const modifierParts = [
     theDropAttackBonus
   }`,
   `Other ${otherModifier >= 0 ? "+" : ""}${otherModifier}`,
+  ...(hasInlineSetup ? [
+    `Multi-Action ${multiActionPenalty >= 0 ? "+" : ""}${multiActionPenalty}`,
+    ...inlineModifierEntries.filter((modifier) => modifier.label !== "Mod.")
+      .map((modifier) => `${modifier.label} ${modifier.value >= 0 ? "+" : ""}${modifier.value}`),
+    ...(isInlineAoe && setup.cover ? [`Cover ${setup.cover}`] : []),
+    ...(isInlineAoe && setup.illumination ? [`Illumination ${setup.illumination}`] : []),
+    ...(isInlineShotgun ? [`Shotgun ${shotgunProfile.mode} ${shotgunAttackBonus >= 0 ? "+" : ""}${shotgunAttackBonus}`] : []),
+  ] : []),
   `Called Shot ${calledShot} ${
     calledShotPenalty >= 0 ? "+" : ""
   }${calledShotPenalty}`,
@@ -1222,14 +1434,14 @@ const attackPoolMessage = await ChatMessage.create({
     actor: actingActor,
     token: selectedToken.document,
   }),
-  rolls: poolAttempts.flatMap((pool) =>
+  rolls: [...inlineModifierRolls, ...poolAttempts.flatMap((pool) =>
     pool.candidates.map((candidate) => candidate.roll)
-  ),
+  )],
   content: `
     <h2>${escapeHTML(weapon.name)} - RoF ${selectedRof}</h2>
     <p>
-      <strong>Ammo spent:</strong>
-      ${setup.consumeAmmo ? ammoCost : "Disabled"}
+      <strong>${isInlineAoe && aoeResourceOptions.mode === "item" ? "Items spent" : "Ammo spent"}:</strong>
+      ${setup.consumeAmmo ? poolAmmoSpent : "Disabled"}
     </p>
     <p>
       <strong>Attack skill:</strong>
@@ -1301,6 +1513,24 @@ const attackPoolMessage = await ChatMessage.create({
   `,
 });
 
+if (isInlineAoe) {
+  const poolId = attackPoolMessage.id;
+  let completed = 0;
+  for (const placement of aoePlacements) {
+    const candidate = usableResults[placement.candidateIndex];
+    const launched = await rofServices.launchAoeMacro(actingActor, weapon, {
+      operatorActor:actingActor,token:selectedToken,skipConsumption:true,attackPoint:placement.attackPoint,
+      attackSetup:{...setup,damageModifier},poolAttack:{rawRoll:candidate.roll,baseModifier:candidate.modifier,
+        criticalFailure:attackPool.criticalFailure,candidateIndex:placement.candidateIndex,poolId,
+        weaponUuid:weapon.uuid,weaponActorUuid:weaponOwner.uuid,operatorActorUuid:actingActor.uuid,
+        disableBenny:true,source:candidate.source,label:candidate.label},
+    });
+    if (launched !== false) completed += 1;
+  }
+  ui.notifications.info(`${weapon.name}: ${completed}/${aoePlacements.length} AoE projectiles resolved from the RoF pool.`);
+  return;
+}
+
 const targetByUuid = new Map(
   possibleTargets.map((targetToken) => [
     targetToken.document.uuid,
@@ -1361,13 +1591,12 @@ const hasTokenStatus = (targetToken, statusId) => {
   return false;
 };
 
-const getTokenCenter = (tokenOrDocument) =>
-  tokenOrDocument?.getCenterPoint?.() ??
-  tokenOrDocument?.object?.center ??
-  tokenOrDocument?.center ??
-  null;
+function getTokenCenter(tokenOrDocument) {
+  return tokenOrDocument?.getCenterPoint?.() ??
+    tokenOrDocument?.object?.center ?? tokenOrDocument?.center ?? null;
+}
 
-const measureTargetDistance = (targetToken) => {
+function measureTargetDistance(targetToken) {
   const sourceDocument = selectedToken.document ?? selectedToken;
   const targetDocument = targetToken.document ?? targetToken;
   const sourceCenter = getTokenCenter(sourceDocument);
@@ -1395,7 +1624,7 @@ const measureTargetDistance = (targetToken) => {
   return (pixelDistance / gridSize) * gridDistance;
 };
 
-const getWeaponRangeBands = () => {
+function getWeaponRangeBands() {
   const nativeRange = weapon.range;
   if (
     nativeRange &&
@@ -1526,6 +1755,12 @@ const collectTargetAttackProfile = (targetToken) => {
 
   const regionModifiers = collectRegionAttackModifiers(targetToken);
   coverCandidates.push(...regionModifiers.coverCandidates);
+  if (hasInlineSetup && setup.cover) {
+    coverCandidates.push({label:"Manual Cover", value:setup.cover});
+  }
+  if (hasInlineSetup && setup.illumination) {
+    regionModifiers.illuminationCandidates.push({label:"Manual Illumination", value:setup.illumination});
+  }
   const bestIllumination = regionModifiers.illuminationCandidates
     .filter((modifier) => Number(modifier.value) !== 0)
     .sort(
@@ -1714,6 +1949,11 @@ const collectTargetAttackProfile = (targetToken) => {
     ignoredMods,
     isProne,
     isVulnerable,
+    ...(isInlineShotgun ? {shotgunDamage:rofServices.getShotgunDamage(weapon, {
+      mode:shotgunProfile.mode,bothBarrels:false,
+      rangeBand:!weaponRangeBands || distance > weaponRangeBands.long ? "extreme" :
+        distance > weaponRangeBands.medium ? "long" : distance > weaponRangeBands.short ? "medium" : "short",
+    })} : {}),
   };
 };
 
@@ -1874,12 +2114,10 @@ try {
       <div class="standard-form"
            style="${SCROLLABLE_DIALOG_STYLE}">
         <p>
-          Her sonucu istedigin hedefe ver. Ayni hedefi birden fazla kez
-          secebilirsin. Ayni isimli hedefler #1, #2, #3 diye ayrilir.
-          Haritada hangisi oldugunu gormek icin hedefin yanindaki konum
-          dugmesine bas. Otomatik bulunan Range, Prone, Cover, Dodge,
-          Vulnerable ve benzeri modifierlar hedefin altinda gorunur.
-          Hit veya Raise sonucunu yine elle duzeltebilirsin.
+          Assign each result to a target; the same target can receive more than one result.
+          Identically named targets are numbered. Use the location button to find a target
+          on the map. Range, Cover and other detected modifiers appear below each target.
+          You can adjust the final Hit or Raise outcome manually.
         </p>
         <table>
           <thead>
@@ -1892,9 +2130,8 @@ try {
           <tbody>${assignmentRows}</tbody>
         </table>
         <p class="hint">
-          Continue dediginde her Hit icin ayri SWADE Tools Damage karti
-          olusur. Pencereyi kapatsan bile atis yapildigi icin mermi harcanmis
-          kalir.
+          Continue creates a separate SWADE Tools damage card for each Hit.
+          The attack has already been fired; closing this window does not refund ammunition.
         </p>
       </div>
     `,
@@ -1976,7 +2213,7 @@ try {
           const targetToken = targetByUuid.get(targetUuid);
           if (!targetToken) {
             ui.notifications.warn(
-              "Once bu satirda bir hedef sec."
+              "Select a target in this row first."
             );
             return;
           }
@@ -2096,14 +2333,18 @@ if (resolvedAssignments.length) {
   });
 }
 
-const damageAssignments = resolvedAssignments.filter(
-  (assignment) =>
-    ["hit", "raise"].includes(assignment.outcome)
-);
+const damageAssignments = resolvedAssignments.filter((assignment) => {
+  if (!["hit", "raise"].includes(assignment.outcome)) return false;
+  if (isInlineShotgun && !assignment.targetProfile?.shotgunDamage) {
+    ui.notifications.warn(`${assignment.targetToken.name || "Target"}: Shot cannot deal damage beyond Long range.`);
+    return false;
+  }
+  return true;
+});
 
 if (!damageAssignments.length) {
   return ui.notifications.info(
-    `${weapon.name}: hasar icin atanmis bir Hit yok.`
+    `${weapon.name}: no Hits were assigned for damage.`
   );
 }
 
@@ -2227,7 +2468,11 @@ const combineDamageModifiers = (...values) => {
 
 const rollSwadeToolsDamage = async (assignment) => {
   const dialogPromise = waitForSwadeToolsDialog();
-  await game.swadetools.item(weaponOwner, weapon.id);
+  if (hasInlineSetup) {
+    await game.swadetools.item(weaponOwner, weapon.id, actingActor, {damageOnly:true,
+      ...(isInlineShotgun ? {damageOverride:assignment.targetProfile.shotgunDamage} : {}),
+    });
+  } else await game.swadetools.item(weaponOwner, weapon.id);
   const dialogInfo = await dialogPromise;
 
   if (!dialogInfo?.root) {
@@ -2303,7 +2548,7 @@ for (const assignment of damageAssignments) {
       error
     );
     ui.notifications.error(
-      `${weapon.name}: SWADE Tools Damage basarisiz - ${
+      `${weapon.name}: SWADE Tools damage failed for ${
         assignment.targetToken.name ||
         assignment.targetToken.actor?.name ||
         "Unknown"

@@ -13,8 +13,10 @@ import TokenHud from './class/TokenHud.js';
 import CharRoll from './class/CharRoll.js';
 import CharUp from './class/CharUp.js';
 import { registerAoeItemControls } from './services/AoeItemConfig.js';
+import { registerShotgunItemControls } from './services/ShotgunItemConfig.js';
 
 registerAoeItemControls();
+registerShotgunItemControls();
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)

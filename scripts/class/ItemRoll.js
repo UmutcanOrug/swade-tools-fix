@@ -115,7 +115,7 @@ export default class ItemRoll extends CharRoll{
     /// universal mods
     addSkillMod(){
         this.addModifier(this.item.system.trademark,gb.trans('TrademarkWeapon.Label','SWADE'))
-        this.addModifier(this.item.system.actions.traitMod,gb.trans('ModItem'));
+        this.addModifier(this.shotgunTraitModOverride ?? this.item.system.actions.traitMod,gb.trans('ModItem'));
         if (this.actor?.system?.stats?.globalMods?.attack && this.actor?.system?.stats?.globalMods?.attack.length > 0) {
             this.actor?.system?.stats?.globalMods?.attack.forEach(el => {
                 this.addModifier(el.value,`${el.label} (${gb.trans('GlobalMod.Attack','SWADE')})`);
@@ -218,7 +218,7 @@ export default class ItemRoll extends CharRoll{
         return extrainfo;
     }
 
-    async rollBaseDamage(){
+    async rollBaseDamage(override=null){
         this.defineAction('damage');
         this.addDmgMod();
         /* let extrainfo='';
@@ -251,7 +251,7 @@ export default class ItemRoll extends CharRoll{
 
         
         
-        await this.rollDamage(this.item.system.damage,this.getApInfo(),this.raiseDie());
+        await this.rollDamage(override ?? this.item.system.damage,this.getApInfo(),this.raiseDie());
     }
 
     

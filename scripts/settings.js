@@ -5,6 +5,15 @@ import * as gb from './gb.js';
 
 export const registerSettings=async()=>{
 
+    game.settings.register(gb.moduleName, 'unifiedRofExperimental', {
+        name: 'Experimental Unified RoF',
+        hint: 'Use a selectable Rate of Fire in the normal weapon panel. RoF 1 keeps native single fire; RoF 2+ opens the attack pool without a second setup dialog. Disabled by default for controlled testing.',
+        default: false,
+        scope: 'world',
+        type: Boolean,
+        config: true
+    });
+
 
   game.settings.registerMenu(gb.moduleName,'settingName',{
     name: gb.trans('settingName'),

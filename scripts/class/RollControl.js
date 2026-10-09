@@ -2,6 +2,7 @@ import * as gb from './../gb.js';
 import Char from './Char.js';
 import CharRoll from './CharRoll.js';
 import ItemRoll from './ItemRoll.js';
+import { prepareNativeShotgunDamageForTarget, applyNativeShotgunProfile } from '../services/NativeShotgunAttack.js';
 
 export default class RollControl {
     
@@ -1209,9 +1210,26 @@ export default class RollControl {
             ui.notifications.error(gb.trans('PermissionActor'))
             return false;
            }
+
+            let shotgunDamage=null;
+            const shotgunFlags=this.chat.flags['swade-tools'];
+            if (shotgunFlags?.shotgunMode!==undefined){
+                const shotgun=await prepareNativeShotgunDamageForTarget({
+                    item, weaponOwner:this.getItemOwner(), operator:this.getActor(),
+                    token:shotgunFlags.shotgunSourceTokenUuid,
+                    mode:shotgunFlags.shotgunMode,
+                    bothBarrels:shotgunFlags.shotgunBothBarrels===true,
+                    target:canvas.tokens.get(targetid)
+                });
+                if (!shotgun.ok || !shotgun.damage){
+                    ui.notifications.warn(shotgun.reason || 'Shotgun damage could not be determined for this target.');
+                    return false;
+                }
+                shotgunDamage=shotgun;
+            }
       
            
-            let charRoll=new ItemRoll(this.getItemOwner(),item);
+            let charRoll=new ItemRoll(shotgunDamage ? this.getActor() : this.getItemOwner(),item);
 
             if (this.chat.flags["swade-tools"]?.usevehicle){
                 charRoll.usingVehicle(this.getItemOwner());
@@ -1238,6 +1256,7 @@ export default class RollControl {
             }
 
             charRoll.useTarget(targetid);
+            if (shotgunDamage) applyNativeShotgunProfile(charRoll,{...shotgunDamage,action:'damage'});
             if (raiseDmg){
                 charRoll.raiseDmg();
             }
@@ -1254,7 +1273,7 @@ export default class RollControl {
             if (this.chat.flags["swade-tools"].damageaction){
                 await charRoll.rollAction(this.chat.flags["swade-tools"].damageaction)
             } else {
-                await charRoll.rollBaseDamage();
+                await charRoll.rollBaseDamage(shotgunDamage?.damage ?? null);
             }
 
             

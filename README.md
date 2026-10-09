@@ -3,7 +3,61 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Configurable AoE attacks (2.1.11)
+## Last settings and experimental unified RoF (2.1.12)
+
+Normal weapon clicks open a clean panel. **Shift + left-click** on its name,
+image or AoE explosion icon restores the last submitted manual values without
+firing. Session-only memory is separated by user, weapon owner, scene-qualified
+source token, item and operator. Refresh clears it. Raise Damage, targets,
+wounds, fatigue, range results and ammunition counts are never remembered.
+
+The GM can enable **Experimental Unified RoF** in SWADE Tools world settings.
+It is **off by default**; leaving it off preserves the previous panels.
+When enabled, the normal compact weapon panel has a RoF selector, Recoil and
+closed Attack Options. RoF 1 uses native single fire; RoF 2+ keeps the existing
+whole-pool Benny review and target assignment, without a second setup window.
+Rapid Fire extends the selector for Shooting only. Additional action buttons
+retain their native behavior. Turning the setting off restores the old panels.
+
+### Opt-in Shotgun Rules
+
+In weapon Properties, enable **Enable Shotgun Rules** and open its gear.
+The experimental world setting above must also be enabled. Set the native
+Trait, Short/Medium/Long ranges and ammunition fields first.
+
+- Shot adds +2 attack and uses 3d6/2d6/1d6 at Short/Medium/Long, with no Extreme.
+- Slug uses 2d10 without the Shot bonus and supports Extreme range.
+- If Trait Modifier already includes +2 Shot, explicitly enable **Shot +2
+  already included in Trait Modifier** to prevent duplicate bonuses.
+- Enable **Double-barrel weapon** only when appropriate. Supported Both Barrels
+  is one Shot attack, one target, RoF 1, +4 damage and two shells; it is not RoF 2.
+- Single-fire Shotgun requires exactly one target. Pools support multiple
+  recipients and use each target's range for native damage.
+
+Native item Damage and Trait Modifier are never rewritten. Both Barrels with
+Slug, automatic Innocent Bystanders and special shell profiles are not included.
+
+### AoE + RoF
+
+Enable AoE on a ranged weapon such as a grenade launcher and set its native
+Trait, including Gunnery. Its name/image and explosion icon open the same
+unified panel. At RoF 2+, review/Benny the pool, then place a blast per usable
+result. Canceling **any** placement aborts the whole volley before ammunition,
+templates or damage. Already-spent Bennies are not refunded.
+
+RoF 2+ spends the configured Ammo/Item resource once using the standard table:
+RoF 2/3/4/5/6 costs 5/10/20/40/50 uses. Single AoE retains saved Uses per Attack.
+Each projectile reuses its pool die and common modifier, adds its blast point's
+range once, and resolves independent damage and animation. No individual
+projectile Benny buttons appear after pool review. Target rings stay unchanged.
+AoE and Shotgun damage profiles are alternatives and cannot both be enabled
+on the same item.
+
+Back up the world and test on a separate scene between sessions before opting
+in. Verification uses isolated mocked-Foundry gameplay and DOM tests, not the
+user's live installation.
+
+## Configurable AoE attacks
 
 1. Set the weapon's normal `Trait` field to its skill name, such as `Gunnery`.
    AoE uses this field directly; there is no separate skill selector or override.

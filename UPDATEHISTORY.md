@@ -1,6 +1,24 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.12
+
+- Shift + left-click restores raw manual weapon settings, isolated by local
+  user, owner, source token, item and operator. No auto-fire or world writes;
+  Raise/dynamic state is excluded and refresh clears the session memory.
+- Default-off Experimental Unified RoF adds selectable RoF, Recoil and closed
+  options to the compact native panel. RoF 1 stays native; RoF 2+ retains pool
+  Benny review and target assignment without a second initial setup.
+- Explicit Shotgun Rules item checkbox and gear provide Shot/Slug,
+  range-based native damage, optional Both Barrels and a preincluded +2 switch.
+- AoE + RoF collects every point before consuming its configured resource once,
+  reuses pool dice and applies point-specific range once. Canceling any point
+  aborts before ammo/templates/damage. Animation remains per projectile.
+- Wrong or ambiguous source tokens and stale weapon profiles are rejected.
+  Native damage and unchanged player target rings are retained.
+- AoE/Shotgun damage profiles cannot be simultaneous. Both Barrels supports
+  Shot only; automatic Innocent Bystanders is not included.
+
 ## 2.1.11
 
 - Compact AoE chat cards with item icon/name, one combined dice/result bar,

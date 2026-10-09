@@ -1,9 +1,28 @@
 import * as gb from '../gb.js';
+import { resolveWeaponSettingsContext, getLastWeaponSettings, saveLastWeaponSettings } from './LastWeaponSettings.js';
 
 const escapeHTML = value => foundry.utils.escapeHTML(String(value ?? ''));
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const field = (html, id) => html?.querySelector?.(`#${id}`) ??
     html?.[0]?.querySelector?.(`#${id}`) ?? html?.find?.(`#${id}`)?.[0];
+const COVER_NAMES = Object.freeze({ 0: 'None', '-2': 'Light', '-4': 'Medium', '-6': 'Heavy', '-8': 'Total' });
+const ILLUMINATION_NAMES = Object.freeze({ 0: 'None', '-2': 'Dim', '-4': 'Dark', '-6': 'Pitch' });
+const restoreAoeFields = (html, saved, settings) => {
+    if (!saved) return;
+    const modifier = field(html, 'mod');
+    if (modifier && ['string', 'number'].includes(typeof saved.modifier)) modifier.value = String(saved.modifier);
+    const multiAction = field(html, 'multiaction');
+    if (multiAction && ['0', '-2', '-4'].includes(String(saved.multiaction))) multiAction.value = String(saved.multiaction);
+    for (const [id, mapping] of [['cover', COVER_NAMES], ['illumination', ILLUMINATION_NAMES]]) {
+        const input = field(html, id);
+        const match = Object.entries(mapping).find(([value, name]) => saved[id] === name || String(saved[id]) === value);
+        if (input && match) input.value = match[0];
+    }
+    const consume = field(html, 'aoe-consume');
+    if (consume && settings.consumeMode !== 'none' && !consume.disabled && typeof saved.consumeAmmo === 'boolean') {
+        consume.checked = saved.consumeAmmo;
+    }
+};
 
 export const readAoeAttackDialogValues = (html, {consumeMode} = {}) => {
     const rawModifier = String(field(html, 'mod')?.value ?? '0').trim() || '0';
@@ -70,7 +89,11 @@ export const showAoeAttackDialog = (context, {
 } = {}) => new Promise(resolve => {
     let settled = false;
     const finish = result => { if (!settled) { settled = true; resolve(result); } };
-    const content = buildAoeAttackDialogContent(context);
+    const memoryContext = resolveWeaponSettingsContext({ item: context.item,
+        weaponOwner: context.weaponOwner, operator: context.operatorActor, token: context.token });
+    const saved = context.restoreLast === true ? getLastWeaponSettings(memoryContext) : null;
+    const content = buildAoeAttackDialogContent(context) +
+        (saved ? '<div style="font-size:11px;margin-top:3px">Last settings restored.</div>' : '');
     const dialog = new DialogClass({
         title: context.item.name,
         content,
@@ -80,7 +103,21 @@ export const showAoeAttackDialog = (context, {
                 icon: '<i class="fas fa-explosion"></i>',
                 label: `${escapeHTML(context.attackSkill.name)} / AoE`,
                 callback: html => {
-                    try { finish(readAoeAttackDialogValues(html, context.settings)); }
+                    try {
+                        const result = readAoeAttackDialogValues(html, context.settings);
+                        if (memoryContext) saveLastWeaponSettings(memoryContext, {
+                            ...getLastWeaponSettings(memoryContext),
+                            // This legacy panel always fires one projectile.
+                            // Do not recall a former unified volley as its last action.
+                            rof: '1', recoil: false, damageModifier: '',
+                            modifier: String(field(html, 'mod')?.value ?? ''),
+                            multiaction: String(result.modifierParts.multiAction),
+                            cover: COVER_NAMES[result.modifierParts.cover] ?? 'None',
+                            illumination: ILLUMINATION_NAMES[result.modifierParts.illumination] ?? 'None',
+                            consumeAmmo: result.consume
+                        });
+                        finish(result);
+                    }
                     catch (error) { ui.notifications.warn(error.message); finish(null); }
                 }
             },
@@ -97,7 +134,7 @@ export const showAoeAttackDialog = (context, {
             } : {}),
             cancel: {icon: '<i class="fas fa-times"></i>', label: 'Cancel', callback: () => finish(null)}
         },
-        render: html => addModifierButtons(html),
+        render: html => { restoreAoeFields(html, saved, context.settings); addModifierButtons(html); },
         close: () => finish(null)
     }, {classes: ['dialog swadetools-vertical'], width: 500});
     dialog.render(true);

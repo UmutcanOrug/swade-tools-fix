@@ -40,7 +40,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   noOperator = false, globalMods = {}, skillEffects = [], itemModifier = '', rollData = {}, secondaryWeapon = false,
   wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false,
   panelCanceled = false, panelReload = false, panelValues = null, bennySpendResult = true,
-  automatedAnimations = false} = {}) {
+  automatedAnimations = false, poolScope = {}} = {}) {
   const profile = await loadServices();
   const events = [], notices = [], cards = [], nativeCalls = [], nativeCards = [];
   const animations = [], automaticAnimationEvents = [];
@@ -200,7 +200,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
         describe: (item, actualOwner, opts) => profile.aoeResource.describe(item, actualOwner, {...opts, ammoManagement}),
         validate: (item, actualOwner, opts) => profile.aoeResource.validate(item, actualOwner, {...opts, ammoManagement}),
         spend: (item, actualOwner, opts) => profile.aoeResource.spend(item, actualOwner, {...opts, ammoManagement}),
-      }}},
+      }}, ...poolScope},
     game, Roll: MockRoll, Hooks, Sequencer, globalThis: platform, CONFIG: {},
     canvas: {scene, grid: {size: 100}, tokens: {controlled: [token], placeables: victims}},
     ui: {notifications: Object.fromEntries(['warn','error','info'].map(kind => [kind, text => notices.push({kind, text})]))},
@@ -233,6 +233,8 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     }};
 }
 
+module.exports = {runAttack};
+if (require.main === module) {
 test('AoE core parses as a Foundry async macro and never modifies user target rings', () => {
   assert.doesNotThrow(() => new AsyncFunction('scope', source));
   assert.ok(!/setTarget\(|updateTokenTargets\(/.test(source));
@@ -800,3 +802,4 @@ test('last consumable in Consume Item mode can become quantity zero while its pr
   assert.equal(s.quantityUpdates,1);assert.equal(s.nativeCards.length,2);
   assert.ok(!s.events.includes('ammo'));
 });
+}

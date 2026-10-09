@@ -1,62 +1,62 @@
-## SWADE Tools 2.1.11 — Compact AoE Cards & Automated Animations
+## SWADE Tools 2.1.12 — Last Settings & Experimental Unified RoF
 
-- Compact item icon/name, skill status, one combined dice/result bar and target
-  rows replace large headings and verbose default attack text.
-- Only nonzero modifiers are visible. Range, blast, damage/AP and reroll history
-  are in closed `Details`; important GM damage-review warnings stay visible.
-- Benny rerolls post a fresh attack card and fade the previous one. They retain
-  the same attack without another round, item, blast template or animation.
-- Automated Animations support uses its official API, verified against 6.8.5.
-  It receives the AoE item, source token, actual template and explicit target/hit
-  arrays without changing the player's target rings.
-- Scoped workflow guards prevent native resource use and independent damage
-  cards from duplicating the attack animation. Unrelated AA workflows and
-  persistent item animation flags are untouched.
-- AA's disabled/unmatched behavior is respected. Without AA, the existing
-  optional JB2A/Sequencer grenade or explosion effect remains.
-- Optional animation failures never block attack or damage resolution.
+Experimental Unified RoF is a new world setting, **disabled by default**.
+The GM must enable it to test the unified panel and Shotgun Rules. Turning it
+off returns to the existing panels. New interface text is English.
 
-### Animation setup
+Back up the world and test between sessions on a separate scene. Verification
+uses isolated mocked-Foundry gameplay and DOM checks, including a headless
+panel preview. The user's live Foundry session was not accessed.
 
-Configure the AoE item's Automated Animations entry as a Template animation
-or a suitable template preset for an explosion at the placed blast area.
-The item's custom AA settings and Auto Recognition are used; an unconfigured
-or disabled AA item does not receive a hardcoded replacement animation.
+### Shift + left-click
 
-### Existing AoE workflow retained
+Normal click stays clean. Shift + left-click opens the last submitted manual
+weapon settings; it never automatically rolls or fires. Browser-session memory
+is separated by user, owner actor, scene-qualified firing token, item and
+operator. Refresh clears it. Raise Damage and dynamic combat state are excluded.
+Internal damage-only dialogs cannot capture or restore attack settings.
 
-- Generalized the grenade attack into a per-item AoE workflow for grenades,
-  HE rounds, grenade launchers and vehicle-mounted weapons.
-- English `Enable AoE`, `AoE Settings` and explosion controls.
-- Save blast size, damage action and ammunition options on the item.
-- Vehicle attacks use the assigned gunner/operator's skill and Bennies while
-  keeping the weapon, ammunition and firing position on the vehicle.
-- Ammo consumption uses SWADE's resource API. A tank gun's quantity is never
-  used as its shell count. Benny rerolls do not spend additional ammunition.
-- Attacks resolve immediately. The chat card offers an optional Benny reroll;
-  no `Use Result` confirmation is required.
-- Blast targets are listed and passed directly to independent SWADE Tools
-  damage cards, without changing the player's target rings.
-- The damage-only bridge preserves normal SWADE Tools cards without prompting
-  for a missing native Trait, and supports named gear/consumable damage actions.
-- Extra operators confirm natural-1 critical failures with a non-acing d6,
-  matching SWADE; prepared attack effects remain fixed across Benny rerolls.
+### Compact unified weapon panel
 
-### Requirements and limits
+- RoF selector and Recoil remain in the normal classic SWADE Tools dialog.
+- RoF 1 keeps native single fire; RoF 2+ enters the existing pool without a
+  second setup panel. Whole-pool Benny review and target assignment remain.
+- Rapid Fire extends the selector for Shooting only. Custom Traits such as
+  Gunnery are supported. Additional action buttons keep their native behavior.
 
-Foundry VTT 13 / SWADE 5.x. Sequencer is required for AoE placement; missing
-JB2A animation assets do not block attack or damage resolution. Ranged ammo
-consumption follows the SWADE ammunition-management setting. Set the mounted
-weapon's crew member/operator before firing.
+### Explicit Shotgun item settings
 
-When using native consumable ammunition charges, disable Destroy on Empty or
-use a persistent weapon profile for the final charge, so the GM's damage item
-is not deleted before use. Consume Item retains a zero-quantity profile for
-damage resolution rather than deleting it.
+- Properties: Enable Shotgun Rules + Shotgun Settings gear, alongside AoE.
+- Shot: +2 attack; 3d6/2d6/1d6 at Short/Medium/Long; no Extreme Shot damage.
+- Slug: 2d10 without the Shot bonus, including Extreme range.
+- Explicit preincluded +2 option prevents duplicate Trait Modifier bonuses.
+- Optional Both Barrels: one Shot attack, one target, RoF 1, +4 damage and two
+  shells. It is not a multi-die attack. Slug + Both Barrels is unsupported.
+- Native single fire requires one target; pools support multiple recipients.
+  Native damage uses the saved mode and the actual target range.
+- AP, Raise die, item/global damage modifiers and native Benny flags remain.
+  Item Damage and Trait Modifier fields are never rewritten.
+- Automatic Innocent Bystanders and special shell profiles are not included.
 
-Use Benny rerolls before the GM applies damage. If damage was already rolled
-and the attack later gains a Raise or changes outcome, the attack card warns
-the GM to review the existing damage; it is not silently rolled/applied again.
+### AoE + RoF, including grenade launchers
 
-The release is covered by isolated native-DOM and gameplay regression tests.
-It has not been tested inside the user's active Foundry session.
+- Item name/image and explosion icon open the same unified panel.
+- Review/Benny the pool, then place a blast point per usable result. Canceling
+  any point aborts the volley before ammo/templates/damage. Bennies already
+  spent during pool review are not refunded.
+- Configured Ammo/Item/None consumption is respected. RoF 2+ spends once using
+  the standard table: RoF 2/3/4/5/6 costs 5/10/20/40/50 uses. Single AoE retains
+  saved Uses per Attack. Ammo follows SWADE's global ammunition setting.
+- Each projectile uses its frozen pool result, adds point-specific range once,
+  and retains independent native target damage and one animation dispatch.
+  Individual projectile cards do not offer another Benny reroll.
+- AoE and Shotgun damage profiles are alternatives, not simultaneous rules.
+- Ambiguous/wrong firing tokens, ownership changes, invalid formulas and stale
+  settings are checked before spending. Player target rings are never changed.
+
+### Requirements
+
+Foundry VTT 13 / SWADE 5.x. Sequencer is required for AoE placement.
+Automated Animations retains its verified 6.8.5 API integration; optional JB2A
+assets are not required for damage resolution. Use persistent weapon profiles
+and disable Destroy on Empty if native consumption would delete the damage item.

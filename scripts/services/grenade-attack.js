@@ -11,6 +11,7 @@ const PROJECTILE_EFFECT = "jb2a.throwable.throw.grenade.01.green";
 const IMPACT_EFFECT = "jb2a.explosion.01.orange";
 
 const macroScope = typeof scope === "object" && scope ? scope : {};
+const poolAttack = macroScope.poolAttack ?? null;
 const selectedToken =
   macroScope.token?.object ??
   macroScope.token ??
@@ -38,7 +39,7 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAnimationService.js")),
 };
 const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
-  playAoeAnimation, withSuppressedAoeAutomation} = aoeServices;
+  playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -77,7 +78,7 @@ if (contextualItem && !isAoeItem(contextualItem)) return ui.notifications.warn("
 
 const grenades = weaponActor.items
   .filter(isAoeItem)
-  .filter((candidate) => !isLegacyGrenadeItem(candidate) || Number(candidate.system.quantity ?? 1) > 0)
+  .filter((candidate) => poolAttack || !isLegacyGrenadeItem(candidate) || Number(candidate.system.quantity ?? 1) > 0)
   .sort((a, b) => {
     const damageDifference =
       Number(Boolean(getItemDamageFormula(b))) -
@@ -143,6 +144,14 @@ if (weaponActor.type === "vehicle") {
   actingActor = weaponActor;
 }
 if (!actingActor.isOwner && !game.user.isGM) return ui.notifications.error("You do not own this attack's operator.");
+if (poolAttack || macroScope.skipConsumption) {
+  if (!poolAttack || macroScope.skipConsumption !== true ||
+      typeof isTrustedAoePoolAttack !== "function" ||
+      !isTrustedAoePoolAttack(poolAttack, {item: grenade, weaponOwner: weaponActor,
+        operatorActor: actingActor, token: selectedToken, point: macroScope.attackPoint})) {
+    return ui.notifications.error("This AoE pool result is not authorized for this weapon, operator and blast point.");
+  }
+}
 const nativeTrait = String(grenade.system.actions?.trait ?? "").trim();
 if (!nativeTrait) return ui.notifications.warn("Set this item's Trait in its Properties before using AoE.");
 const attackSkill = resolveAoeSkill(actingActor, grenade);
@@ -177,11 +186,11 @@ const validateAttackFormula = (formula) => {
   }
   return true;
 };
-for (const formula of [itemTraitModifier, preparedAttackFormula,
-  bennyTraitModifiers.map((modifier) => `(${String(modifier.value).trim()})`).join("+")].filter(Boolean)) {
+for (const formula of (poolAttack ? [] : [itemTraitModifier, preparedAttackFormula,
+  bennyTraitModifiers.map((modifier) => `(${String(modifier.value).trim()})`).join("+")]).filter(Boolean)) {
   if (!validateAttackFormula(formula)) return;
 }
-const setup = await showAoeAttackDialog({
+const setup = macroScope.attackSetup ? {...macroScope.attackSetup} : await showAoeAttackDialog({
   item: grenade, weaponOwner: weaponActor, operatorActor: actingActor,
   attackSkill, settings: selectedAoeSettings,
   resource: aoeResource.describe(grenade, weaponActor, {
@@ -191,12 +200,17 @@ const setup = await showAoeAttackDialog({
 });
 if (!setup) return;
 const otherModifierFormula = String(setup.otherModifierFormula ?? setup.otherModifier ?? 0).trim() || "0";
-if (!validateAttackFormula(otherModifierFormula)) return;
+if (!poolAttack && !validateAttackFormula(otherModifierFormula)) return;
+const rawDamageModifier = String(setup.damageModifier ?? "").trim();
+if (rawDamageModifier && !validateAttackFormula(rawDamageModifier)) return;
+const extraDamageModifier = rawDamageModifier && typeof Roll.replaceFormulaData === "function"
+  ? Roll.replaceFormulaData(rawDamageModifier,rollData) : rawDamageModifier;
 // Like the native Mod. field, allow dice and @data expressions. Evaluate this
 // attack-only modifier once, before ammunition; it stays fixed on Benny rerolls.
-const otherModifierRoll = Number.isFinite(Number(otherModifierFormula)) ? null :
+const otherModifierRoll = poolAttack || Number.isFinite(Number(otherModifierFormula)) ? null :
   await new Roll(otherModifierFormula, rollData).evaluate();
-setup.otherModifier = Number(otherModifierRoll?.total ?? otherModifierFormula) + Number(setup.situationalModifier ?? 0);
+setup.otherModifier = poolAttack ? 0 :
+  Number(otherModifierRoll?.total ?? otherModifierFormula) + Number(setup.situationalModifier ?? 0);
 const resourceOptions = {
   consume: selectedAoeSettings.consumeMode !== "none" && setup.consume,
   mode: selectedAoeSettings.consumeMode,
@@ -212,7 +226,8 @@ const explainResourceFailure = (result) => ({
   busy: "This resource is already being used by another attack. Please try again.",
   "update-failed": "The item's resource could not be updated.",
 }[result.reason] ?? "The AoE item cannot expend its configured resource.");
-const resourceValidation = await aoeResource.validate(grenade, weaponActor, resourceOptions);
+const resourceValidation = poolAttack ? {ok: true, managed: false, consumed: 0} :
+  await aoeResource.validate(grenade, weaponActor, resourceOptions);
 if (!resourceValidation.ok) return ui.notifications.warn(explainResourceFailure(resourceValidation));
 
 // Some SWADE setups keep the consumable grenade and its reusable throwing
@@ -256,7 +271,7 @@ const sceneDistance = Number(canvas.scene.grid.distance || 1);
 const blastRadius = blastRadiusSquares * sceneDistance;
 
 let cancelled = false;
-const target = await Sequencer.Crosshair.show(
+const target = poolAttack ? macroScope.attackPoint : await Sequencer.Crosshair.show(
   {
     t: "circle",
     distance: blastRadius,
@@ -303,11 +318,13 @@ if (
 
 // Ammunition belongs to the weapon's owner, not the selected gunner. Commit
 // only after placement is accepted, once; chat Benny rerolls never revisit it.
-const consumedResource = aoeResource.describe(grenade, weaponActor, resourceOptions).resource;
-const resourceSpent = await withSuppressedAoeAutomation([grenade, consumedResource],
-  () => aoeResource.spend(grenade, weaponActor, resourceOptions),
-  {...animationRuntime, trackConsumption: true});
-if (!resourceSpent.ok) return ui.notifications.warn(explainResourceFailure(resourceSpent));
+if (!poolAttack) {
+  const consumedResource = aoeResource.describe(grenade, weaponActor, resourceOptions).resource;
+  const resourceSpent = await withSuppressedAoeAutomation([grenade, consumedResource],
+    () => aoeResource.spend(grenade, weaponActor, resourceOptions),
+    {...animationRuntime, trackConsumption: true});
+  if (!resourceSpent.ok) return ui.notifications.warn(explainResourceFailure(resourceSpent));
+}
 
 const sourceCenter = selectedToken.center ?? {
   x: selectedToken.x + selectedToken.w / 2,
@@ -362,17 +379,17 @@ const woundValue = Number(actingActor.system.wounds?.value ?? 0);
 const woundIgnored = Number(actingActor.system.wounds?.ignored ?? 0);
 const fatigueValue = Number(actingActor.system.fatigue?.value ?? 0);
 const fatigueIgnored = Number(actingActor.system.fatigue?.ignored ?? 0);
-const woundPenalty = -Math.max(0, woundValue - woundIgnored);
-const fatiguePenalty = -Math.max(0, fatigueValue - fatigueIgnored);
-const skillModifier = Number(attackSkill.system.die?.modifier ?? 0);
-const itemModifierRoll = itemTraitModifier
+const woundPenalty = poolAttack ? 0 : -Math.max(0, woundValue - woundIgnored);
+const fatiguePenalty = poolAttack ? 0 : -Math.max(0, fatigueValue - fatigueIgnored);
+const skillModifier = poolAttack ? 0 : Number(attackSkill.system.die?.modifier ?? 0);
+const itemModifierRoll = !poolAttack && itemTraitModifier
   ? await new Roll(itemTraitModifier, rollData).evaluate()
   : null;
-const preparedModifierRoll = preparedAttackFormula
+const preparedModifierRoll = !poolAttack && preparedAttackFormula
   ? await new Roll(preparedAttackFormula, rollData).evaluate()
   : null;
-const trademarkModifier = Number(grenade.system.trademark ?? 0);
-const baseThrowModifier =
+const trademarkModifier = poolAttack ? 0 : Number(grenade.system.trademark ?? 0);
+const baseThrowModifier = poolAttack ? Number(poolAttack.baseModifier) + rangePenalty :
   rangePenalty +
   woundPenalty +
   fatiguePenalty +
@@ -460,7 +477,20 @@ const getAthleticsAttemptLabel = (attempt) =>
         ? "Success"
         : "Failure - Resolve Deviation";
 
-let athleticsAttempt = await rollGrenadeAthleticsAttempt();
+const poolNaturalOneFailure = poolAttack && !isWildCard &&
+  poolAttack.rawRoll.dice?.[0]?.results?.[0]?.result === 1;
+let athleticsAttempt = poolAttack ? {
+  traitRoll: poolAttack.source === "wild" ? null : poolAttack.rawRoll,
+  wildRoll: poolAttack.source === "wild" ? poolAttack.rawRoll : null,
+  bennyModifierRoll: null, criticalConfirmationRoll: null,
+  totalModifier: baseThrowModifier,
+  criticalFailure: poolAttack.criticalFailure,
+  naturalOneFailure: Boolean(poolNaturalOneFailure),
+  bestDie: poolAttack.rawTotal,
+  chosenDie: poolAttack.source === "wild" ? "Wild Die" : "Trait Die",
+  total: poolAttack.rawTotal + baseThrowModifier,
+  isBennyReroll: false,
+} : await rollGrenadeAthleticsAttempt();
 const athleticsAttempts = [athleticsAttempt];
 let athleticsReviewNote = "";
 let athleticsDamageReviewNote = "";
@@ -531,6 +561,7 @@ if (!grenadeBennyRuntime.listening) {
 }
 
 const getGrenadeBennyControlsHtml = () => {
+  if (poolAttack) return `<div class="swadetools-aoe-pool-result" style="font-size:11px;margin-top:4px">Pool result ${poolAttack.candidateIndex + 1}: ${foundry.utils.escapeHTML(poolAttack.label)}. Benny rerolls were resolved on the complete pool.</div>`;
   if (criticalFailure && !dumbLuckEnabled) {
     return '<div style="font-size:11px;margin-top:4px" title="Critical Failure rerolls require Dumb Luck.">Benny locked (Critical Failure)</div>';
   }
@@ -750,12 +781,13 @@ const renderGrenadeThrowContent = async () => {
   const signed = (value) => `${value >= 0 ? "+" : ""}${value}`;
   const compactResultLabel = criticalFailure ? "Critical Failure" : raise ? "Raise" : success ? "Success" : "Failure";
   const modifierParts = [
+    ["Pool", poolAttack ? poolAttack.baseModifier : 0],
     ["Range", rangePenalty], ["Wounds", woundPenalty], ["Fatigue", fatiguePenalty],
     ["Skill", skillModifier], ["Item", Number(itemModifierRoll?.total ?? 0)],
     ["Trademark", trademarkModifier], ["Effects", Number(preparedModifierRoll?.total ?? 0)],
     ["Other", Number(setup.otherModifier ?? 0)], ["Benny", Number(bennyModifierRoll?.total ?? 0)],
   ].filter(([, value]) => value !== 0).map(([label, value]) => `${label} ${signed(value)}`).join(", ");
-  const preparedEffectsSummary = preparedAttackModifiers.map((modifier) =>
+  const preparedEffectsSummary = (poolAttack ? [] : preparedAttackModifiers).map((modifier) =>
     `${String(modifier.label ?? "Effect")}: ${String(modifier.value)}`
   ).join(", ");
   const situationalSummary = setup.modifierParts ? [
@@ -842,7 +874,8 @@ const createGrenadeThrowMessage = async (previousMessage = null) => ChatMessage.
     token: selectedToken.document,
   }),
   rolls: getGrenadeThrowRolls(),
-  flags: { world: { grenadeBennySession: grenadeBennyKey,
+  flags: { world: { ...(poolAttack ? {aoePoolId: poolAttack.poolId,
+      aoePoolCandidate: poolAttack.candidateIndex} : {grenadeBennySession: grenadeBennyKey}),
     ...(previousMessage ? {aoePreviousMessage: previousMessage.id} : {}),
   } },
   content: await renderGrenadeThrowContent(),
@@ -892,6 +925,11 @@ if (damage) {
         : `${damageSourceItem.name} ${game.i18n.localize("SWADE.ItemDmgMod")}`,
       value: itemDamageModifier,
     });
+  }
+
+  if (extraDamageModifier) {
+    additionalMods.push({label: game.i18n.localize("SWADE.Additional"),
+      value: extraDamageModifier});
   }
 
   const postDamageMessage = async (damageRoll, targetsForDamage) => {
@@ -1105,6 +1143,13 @@ if (damage) {
     const raiseCheckbox = root.querySelector("#raise");
     if (raiseCheckbox) raiseCheckbox.checked = raise;
 
+    const damageModifierInput = root.querySelector("#mod");
+    if (damageModifierInput && extraDamageModifier) {
+      const existing = String(damageModifierInput.value ?? "").trim();
+      damageModifierInput.value = existing
+        ? `(${existing})+(${extraDamageModifier})` : extraDamageModifier;
+    }
+
     const damageActionKey = String(selectedDamageActionEntry?.[0] ?? "");
     const damageActionSelect = root.querySelector("#actiondmg");
     if (
@@ -1227,7 +1272,7 @@ if (success) {
 
 // Optional chat-card rerolls never re-enter the one-shot throw above.
 const rerollGrenadeAthletics = async (source, messageId) => {
-  if (!grenadeThrowReady || athleticsRerollInProgress || !throwMessage || messageId !== throwMessage.id) return;
+  if (poolAttack || !grenadeThrowReady || athleticsRerollInProgress || !throwMessage || messageId !== throwMessage.id) return;
   const spender = source === "gm" ? game.user : actingActor;
   const rerollLocked = criticalFailure && !dumbLuckEnabled;
   if (
@@ -1341,6 +1386,8 @@ rerollGrenadeAthletics.cleanup = () => {
   grenadeThrowReady = false;
   cleanupDeviationTargeting();
 };
-grenadeBennyRuntime.handlers.set(grenadeBennyKey, rerollGrenadeAthletics);
-grenadeThrowReady = true;
+if (!poolAttack) {
+  grenadeBennyRuntime.handlers.set(grenadeBennyKey, rerollGrenadeAthletics);
+  grenadeThrowReady = true;
+}
 await updateGrenadeThrowMessage();

@@ -349,6 +349,28 @@ test('explosion button executes bundled AoE script with injected services and no
     delete global.__aoeLaunchTest;
 });
 
+test('experimental AoE name, image and explosion clicks use one unified panel with Shift and sheet-token context',async()=>{
+    platform();
+    const {bindAoeInventoryControls}=await load('AoeItemConfig.js');
+    const owner=makeActor('owner'),item=makeItem(owner,{flags:{'swade-tools':{aoeEnabled:true}}});
+    item.system.range='12/24/48';
+    const token={actor:owner,id:'sheet-source',document:{uuid:'Scene.scene.Token.sheet-source'}};
+    const form=new Element('form'),row=makeRow(form,item);
+    const name=new Element('a');name.className='item-name';
+    const image=new Element('img');row.append(name,image);
+    const calls=[];
+    game.settings={get:()=>true};
+    game.swadetools={item:async(...args)=>calls.push(args)};
+    global.fetch=async()=>{throw Error('Unified inventory clicks must not load the old AoE panel');};
+    bindAoeInventoryControls({actor:owner,isEditable:true,token},form);
+    await name.emit('click',{shiftKey:true});
+    await image.emit('click',{shiftKey:false});
+    await row.querySelector('[data-swade-tools-aoe]').emit('click',{shiftKey:true});
+    assert.equal(calls.length,3);
+    for (const call of calls){assert.equal(call[0],owner);assert.equal(call[1],item.id);assert.equal(call[3].token,token);}
+    assert.equal(calls[0][3].restoreLast,true);assert.equal(calls[1][3].restoreLast,false);assert.equal(calls[2][3].restoreLast,true);
+});
+
 test('per-item launch guard blocks duplicate attacks across a rerender and releases after completion', async () => {
     platform();
     const launcherUrl = pathToFileURL(path.join(services, 'AoeMacroLauncher.js')).href;
