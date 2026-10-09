@@ -2,6 +2,7 @@ import { isAoeItem } from './AoeItemFlags.js';
 import { aoeResource } from './AoeResourceService.js';
 import * as profile from './AoeAttackProfile.js';
 import { showAoeAttackDialog } from './AoeAttackDialog.js';
+import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
 
 // Keep the filename used by existing grenade actions and macro references.
 const AOE_SCRIPT_PATH =
@@ -80,7 +81,8 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
         token: options.token?.object ?? options.token ??
             findAoeActorToken(weaponActor),
         aoeResource,
-        aoeServices: { ...profile, aoeResource, showAoeAttackDialog }
+        aoeServices: { ...profile, aoeResource, showAoeAttackDialog,
+            playAoeAnimation, withSuppressedAoeAutomation }
     };
 };
 

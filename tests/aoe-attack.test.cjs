@@ -8,6 +8,14 @@ const services = path.join(root, 'scripts/services');
 const source = fs.readFileSync(path.join(services, 'grenade-attack.js'), 'utf8');
 const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, value => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[value]));
+const assertCardTotal = (content, expected) => assert.match(content,
+  new RegExp(`<div class="dice-total"[^>]*>${expected}<\\/div>`));
+const visibleCardHtml = content => content.replace(/<details\b[\s\S]*?<\/details>/g,'');
+const currentCard = s => s.cards.at(-1);
+const rerollCurrentCard = async (s, source = 'actor') => {
+  const card = currentCard(s);
+  return s.platform.__swadeGrenadeBennyRuntime.handlers.get(card.flags.world.grenadeBennySession)(source,card.id);
+};
 const collection = items => Object.assign(items, {
   get(id) { return this.find(item => item.id === id); },
   getName(name) { return this.find(item => item.name === name); },
@@ -19,6 +27,7 @@ const skill = (id, name, sides = 8, swid = name.toLowerCase()) => ({
 const loadServices = async () => ({
   ...await import(pathToFileURL(path.join(services, 'AoeAttackProfile.js'))),
   ...await import(pathToFileURL(path.join(services, 'AoeResourceService.js'))),
+  ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
 });
 
 // Execute the full bundled attack. Only the Foundry UI/documents and dice are
@@ -30,9 +39,11 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   damage = '3d6', additional = {}, failureOnSpend = false, ammoManagement = true,
   noOperator = false, globalMods = {}, skillEffects = [], itemModifier = '', rollData = {}, secondaryWeapon = false,
   wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false,
-  panelCanceled = false, panelReload = false, panelValues = null} = {}) {
+  panelCanceled = false, panelReload = false, panelValues = null, bennySpendResult = true,
+  automatedAnimations = false} = {}) {
   const profile = await loadServices();
   const events = [], notices = [], cards = [], nativeCalls = [], nativeCards = [];
+  const animations = [], automaticAnimationEvents = [];
   const queue = [...dice], hooks = new Map(), timers = new Map();
   let nextId = 0, crosshairCalls = 0, setupDialogs = 0, quantityUpdates = 0, panelCalls = 0;
   const panelContexts = [];
@@ -41,7 +52,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     system: {wildcard, wounds: {value: 0}, fatigue: {value: 0}, bennies: {value: 3}, stats: {globalMods}},
     items: collection(actorSkills ?? [skill('gunnery', 'Gunnery', 10), skill('shooting', 'Shooting')]),
     getRollData: () => rollData,
-    async spendBenny() { events.push('benny'); this.system.bennies.value--; return true; },
+    async spendBenny() { events.push('benny'); if (!bennySpendResult) return false; this.system.bennies.value--; return true; },
   };
   gunner.items.find(item => item.type === 'skill').system.effects = skillEffects;
   gunner.items.find(item => item.type === 'skill').system.attribute = 'smarts';
@@ -56,13 +67,20 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     },
   } : gunner;
   const weapon = {id: 'weapon', uuid: `${owner.uuid}.Item.weapon`, name, type: itemType,
+    img: 'icons/weapons/artillery/cannon.webp',
     isOwner: true, actor: owner, parent: owner,
     flags: {'swade-tools': {aoeEnabled: true, ...flags}},
     system: {quantity, currentShots, shots: 4, reloadType: 'single', category, charges, destroyOnEmpty,
       actions: {trait, traitMod:itemModifier, additional}, damage, range: '10/20/40', templates: {medium: true}, ap: 1},
     getFlag(_scope, key) { return this.flags['swade-tools'][key]; },
     canExpendResources(cost) { return this.system.currentShots >= cost; },
-    async consume(cost) { events.push('ammo'); if (failureOnSpend) throw Error('mock failure'); this.system.currentShots -= cost; },
+    async consume(cost) {
+      const usage = {itemUpdates: {'system.currentShots': this.system.currentShots - cost}};
+      emit('swadePreConsumeItem', this, cost, usage);
+      events.push('ammo'); if (failureOnSpend) throw Error('mock failure');
+      await Promise.resolve(); this.system.currentShots -= cost;
+      emit('swadeConsumeItem', this, cost, usage);
+    },
     async update(change) { events.push('quantity'); quantityUpdates++; this.system.quantity = change['system.quantity']; },
     async reload() { events.push('reload'); this.system.currentShots = this.system.shots; },
   };
@@ -85,6 +103,14 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   const emit = (name, ...args) => {
     for (const handler of [...hooks.values()]) if (handler.name === name) handler.callback(...args);
   };
+  if (automatedAnimations) {
+    const automaticAnimation = (item, trigger) => {
+      const data = {item}; emit('aa.getRequiredData', data);
+      automaticAnimationEvents.push({item, trigger, stopped: data.stopWorkflow === true});
+    };
+    Hooks.on('swadeConsumeItem', item => automaticAnimation(item, 'consume'));
+    Hooks.on('swadeAction', (_actor, item) => automaticAnimation(item, 'damage'));
+  }
   class MockRoll {
     static validate(formula) { return /^[\d() dx+\-]+$/.test(formula); }
     static replaceFormulaData(formula, data) {
@@ -108,17 +134,38 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     async render({flavor}) { return `<div>${escapeHTML(flavor)}: ${this.total}</div>`; }
     toJSON() { return {formula: this.formula, total: this.total}; }
   }
-  const platform = {document: {addEventListener() {}}};
+  const platform = {document: {addEventListener() {}, createElement() {
+    const holder = {innerHTML:'', querySelector(selector) {
+      if (selector !== '[data-grenade-targets]') return null;
+      const start = holder.innerHTML.indexOf('<div data-grenade-targets');
+      if (start < 0) return null;
+      const contentStart = holder.innerHTML.indexOf('>',start)+1;
+      const tags = /<\/?div\b[^>]*>/g;
+      tags.lastIndex=contentStart;
+      let depth=1, tag;
+      while ((tag=tags.exec(holder.innerHTML))) {
+        depth += tag[0].startsWith('</') ? -1 : 1;
+        if (!depth) break;
+      }
+      assert.ok(tag,'Target wrapper must remain a complete div');
+      return {set innerHTML(content) {
+        holder.innerHTML=holder.innerHTML.slice(0,contentStart)+content+holder.innerHTML.slice(tag.index);
+      }};
+    }};
+    return holder;
+  }}};
   const game = {
     user: {id: 'gm', isGM: true, bennies: 3, async spendBenny() { this.bennies--; return true; }},
     actors: collection([owner, gunner, other]), messages,
-    modules: new Map([['sequencer',{active:true}], ['swade-tools',{active:nativeDamage}]]),
+    modules: new Map([['sequencer',{active:true}], ['swade-tools',{active:nativeDamage}],
+      ['autoanimations',{active:Boolean(automatedAnimations)}]]),
     settings: {get(namespace, key) { return namespace === 'swade' && key === 'ammoManagement' && ammoManagement; }},
     i18n: {localize: key => key.split('.').at(-1)},
     swadetools: {async item(actualOwner, id, operator, options) {
       nativeCalls.push({actualOwner, id, operator, options});
       const raiseCheckbox = {checked: false}, actionSelect = {options: Object.keys(additional).map(value => ({value})), value: ''};
       const main = {dataset: {button: 'mainDamage'}, textContent: 'Damage', click() {
+        emit('swadeAction', operator, actualOwner.items.get(id), 'damage', {total: 1}, 'gm');
         const message = {id: `damage-${++nextId}`, flags: {'swade-tools': {rolltype: 'damage', itemroll: id}},
           updateSource(change) { this.targets = change['flags.swade-tools.usetarget']; }};
         emit('preCreateChatMessage', message, {flags: message.flags}, {}, 'gm');
@@ -131,6 +178,11 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
       emit('renderDialog', {title: name}, dom);
     }},
   };
+  if (automatedAnimations) platform.AutomatedAnimations = {async playAnimation(sourceToken, item, options) {
+    animations.push({sourceToken, item, options}); events.push('animation:aa');
+    if (automatedAnimations === 'error') throw new Error('Simulated optional AA failure');
+    return automatedAnimations === 'no-match' ? false : {systemData: options};
+  }};
   const Sequencer = {Database: {entryExists: () => false}, Crosshair: {
     PLACEMENT_RESTRICTIONS: {ANYWHERE: 'anywhere'}, CALLBACKS: {CANCEL: 'cancel'},
     async show(config) { crosshairCalls++; events.push('crosshair'); return canceled ? null : {x: 100, y: 100, config}; },
@@ -159,7 +211,14 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
       }}}}},
     CONST: {GRID_SNAPPING_MODES: {CENTER: 1, VERTEX: 2}},
     ChatMessage: {getSpeaker: input => ({actor: input.actor.uuid, token: input.token.id}),
-      async create(data) {const message = {...data, id: 'attack-card', async update(change) {Object.assign(this, change);}};
+      async create(data) {const message = {...data, id: `attack-card-${cards.length+1}`, async update(change) {
+        for (const [key,value] of Object.entries(change)) {
+          if (!key.includes('.')) {this[key]=value;continue;}
+          const parts=key.split('.'),property=parts.pop();let target=this;
+          for (const part of parts) target=target[part]??={};
+          target[property]=value;
+        }
+      }};
         cards.push(message); return message;}},
     fromUuid: async reference => [owner,gunner,other].find(actor => actor.uuid === reference),
     setTimeout(callback, ms) { const id = ++nextId; if (ms <= 100) callback(); else timers.set(id,callback); return id; },
@@ -167,13 +226,57 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   };
   await new AsyncFunction(...Object.keys(dependencies), source)(...Object.values(dependencies));
   return {weapon, owner, gunner, other, events, notices, cards, nativeCalls, nativeCards,
-    crosshairCalls, setupDialogs, quantityUpdates, scene, platform, queue, panelCalls, panelContexts};
+    animations, automaticAnimationEvents,
+    crosshairCalls, setupDialogs, quantityUpdates, scene, platform, queue, panelCalls, panelContexts, victims, emit,
+    async emitHook(name,...args) {
+      for (const handler of [...hooks.values()]) if (handler.name === name) await handler.callback(...args);
+    }};
 }
 
 test('AoE core parses as a Foundry async macro and never modifies user target rings', () => {
   assert.doesNotThrow(() => new AsyncFunction('scope', source));
   assert.ok(!/setTarget\(|updateTokenTargets\(/.test(source));
   assert.ok(!/Use Result|DialogV2\.wait/.test(source));
+});
+
+test('AA full attack dispatches once with actual blast and suppresses native consumption/damage, not future actions', async () => {
+  const s = await runAttack({vehicle:true, automatedAnimations:true, dice:[6,4,9,5]});
+  assert.equal(s.animations.length,1);
+  const call = s.animations[0];
+  assert.equal(call.item,s.weapon);
+  assert.equal(call.sourceToken.actor,s.owner);
+  assert.equal(call.options.templateData,s.scene.templates.get('template'));
+  assert.equal(call.options.isTemplate,true);
+  assert.deepEqual(call.options.targets,s.victims);
+  assert.deepEqual(call.options.hitTargets,s.victims);
+  assert.equal(call.options.templateData.flags.swade?.origin,undefined);
+  assert.deepEqual(s.automaticAnimationEvents.map(event=>event.trigger),['consume','damage','damage']);
+  assert.ok(s.automaticAnimationEvents.every(event=>event.stopped));
+  await rerollCurrentCard(s);
+  assert.equal(s.cards.length,2); assert.equal(s.animations.length,1);
+  assert.equal(s.weapon.system.currentShots,3); assert.equal(s.nativeCards.length,2);
+  s.emit('swadeAction',s.gunner,s.weapon,'damage',{total:1},'gm');
+  assert.equal(s.automaticAnimationEvents.at(-1).stopped,false);
+});
+
+test('AA optional API failure or unmatched item cannot stop native target damage or force a fallback explosion', async () => {
+  for (const automatedAnimations of ['error','no-match']) {
+    const s = await runAttack({vehicle:true,automatedAnimations});
+    assert.equal(s.animations.length,1);
+    assert.equal(s.nativeCards.length,2); assert.equal(s.weapon.system.currentShots,3);
+    assert.ok(s.automaticAnimationEvents.every(event=>event.stopped));
+    assert.ok(!s.notices.some(notice=>/JB2A.*not found/.test(notice.text)));
+  }
+});
+
+test('failed AA attack has no hitTargets and Benny success resolves damage without replaying AA or ammunition', async () => {
+  const s = await runAttack({vehicle:true,automatedAnimations:true,dice:[2,3,6,4]});
+  assert.equal(s.animations.length,1); assert.deepEqual(s.animations[0].options.hitTargets,[]);
+  assert.equal(s.nativeCards.length,0);
+  await rerollCurrentCard(s);
+  assert.equal(s.animations.length,1); assert.equal(s.nativeCards.length,2);
+  assert.equal(s.weapon.system.currentShots,3); assert.equal(s.cards.length,2);
+  assert.ok(s.automaticAnimationEvents.every(event=>event.stopped));
 });
 
 test('skill resolver supports arbitrary skill ID, name, SWID and saved override', async () => {
@@ -192,10 +295,82 @@ test('tank uses assigned gunner Gunnery and native damage, consumes one shell no
   assert.equal(s.panelCalls,1);
   assert.ok(s.events.indexOf('attack-panel') < s.events.indexOf('crosshair'));
   assert.equal(s.weapon.system.currentShots, 3); assert.equal(s.weapon.system.quantity, 1);
-  assert.equal(s.quantityUpdates, 0); assert.match(s.cards[0].content, /Gunnery:<\/strong> 6/);
+  assert.equal(s.quantityUpdates, 0); assertCardTotal(s.cards[0].content, 6);
   assert.match(s.cards[0].content, /Assigned Gunner; <strong>Vehicle:<\/strong> Tank/);
   assert.deepEqual(s.nativeCards.map(card => card.targets), ['one','two']);
   assert.ok(s.nativeCalls.every(call => call.actualOwner === s.owner && call.operator === s.gunner));
+});
+
+test('AoE card has a compact item header, exactly one dice box, visible native-style targets and closed Details', async () => {
+  const s = await runAttack({vehicle:true});
+  const content=s.cards[0].content, visible=visibleCardHtml(content);
+  assert.match(visible,/<img src="icons\/weapons\/artillery\/cannon.webp"/);
+  assert.match(visible,/<strong style="font-size:15px;line-height:18px">HE Cannon<\/strong>/);
+  assert.match(visible,/Gunnery:<\/strong> <span[^>]*>Success<\/span>/);
+  assert.equal((content.match(/class="dice-roll"/g)??[]).length,1);
+  assert.equal((content.match(/class="dice-result"/g)??[]).length,1);
+  assert.equal((content.match(/class="dice-total"/g)??[]).length,1);
+  assertCardTotal(visible,6);
+  assert.ok(!/<h2|Trait Die \(d|Wild Die \(d|Total Modifier|Wounds \+0|Range \+0|Fatigue \+0|Skill \+0|Item \+0|Trademark \+0|Other \+0/.test(visible));
+  assert.match(content,/<details class="swadetools-aoe-details"[^>]*>\s*<summary[^>]*>Details<\/summary>/);
+  assert.ok(!/<details\b[^>]*\bopen\b/.test(content));
+  for (const text of ['Range:','Medium Blast Template','3d6; AP 1','Assigned Gunner']) {
+    assert.ok(content.includes(text),text);assert.ok(!visible.includes(text),`${text} belongs in Details`);
+  }
+  for (const name of ['Target one','Target two']) assert.ok(visible.includes(`${name}: <strong>Hit</strong>`));
+  assert.equal((visible.match(/class="swadetools-aoe-target"/g)??[]).length,2);
+  assert.equal((visible.match(/fa-bullseye/g)??[]).length,2);
+  assert.match(visible,/Benny Reroll \(3\)/);assert.match(visible,/GM Reroll \(3\)/);
+  assert.ok(!visible.includes('These controls work')&&!visible.includes('Use before the GM'));
+  assert.equal(s.cards[0].rolls.length,2);
+  assert.equal(s.events.filter(event=>event.startsWith('roll:')).length,2);
+});
+
+test('only nonzero modifiers appear in the compact summary without changing stored rolls', async () => {
+  const s = await runAttack({itemModifier:'+1',globalMods:{attack:[{value:2}]},
+    panelValues:{otherModifierFormula:'3',situationalModifier:0,consume:true}});
+  const visible=visibleCardHtml(s.cards[0].content);
+  assert.match(visible,/Item \+1, Effects \+2, Other \+3/);assertCardTotal(visible,12);
+  assert.ok(!/Wounds|Fatigue|Trademark|Range \+0|Skill \+0|Benny \+0/.test(visible));
+  assert.equal(s.cards[0].rolls.length,4);
+});
+
+test('Benny history is collapsed but GM Raise review remains visible and compact', async () => {
+  const s=await runAttack({dice:[5,3,9,4]});
+  await rerollCurrentCard(s);
+  const content=currentCard(s).content,visible=visibleCardHtml(content);
+  assert.match(visible,/Gunnery:<\/strong> <span[^>]*>Raise<\/span>/);
+  assert.match(visible,/data-aoe-gm-review[^>]*><strong>GM: review existing damage and its \+1d6x Raise bonus/);
+  assert.match(visible,/Benny Reroll \(2\)/);
+  assert.ok(!visible.includes('Roll history:')&&!visible.includes('Benny reroll:'));
+  assert.match(content,/Roll history:<\/strong> 1 Benny spent/);
+  assert.match(content,/Benny 1 \(used\)/);
+  assert.match(content,/Gunnery gained a Raise after damage was rolled/);
+  assert.equal((content.match(/class="dice-roll"/g)??[]).length,1);assertCardTotal(visible,9);
+  assert.equal(currentCard(s).rolls[0].total,9);
+  assert.equal(s.nativeCards.length,2);assert.equal(s.weapon.system.currentShots,3);
+});
+
+test('deviation refresh preserves styled target rows and never labels a failed intended blast as Hit', async () => {
+  const s=await runAttack({dice:[2,3,6,4]});
+  const initial=visibleCardHtml(s.cards[0].content);
+  assert.ok(!initial.includes(': <strong>Hit</strong>'));
+  assert.match(initial,/Target one: <strong>Blast<\/strong>/);
+  assert.match(initial,/Deviation:<\/strong> GM: move the red template to resolve/);
+  s.victims[0].name='Moved Target';
+  const template=s.scene.templates.get('template');template.x=100;template.y=100;
+  await s.emitHook('updateMeasuredTemplate',template,{x:100,y:100});
+  const deviated=visibleCardHtml(s.cards[0].content);
+  assert.match(deviated,/Moved Target: <strong>Blast<\/strong>/);
+  assert.ok(!deviated.includes('Target one')&&!deviated.includes(': <strong>Hit</strong>'));
+  assert.equal((deviated.match(/class="swadetools-aoe-target"/g)??[]).length,2);
+  assert.equal(s.nativeCards.length,2);
+  await rerollCurrentCard(s);
+  const rerolled=visibleCardHtml(currentCard(s).content);
+  assert.match(rerolled,/Moved Target: <strong>Hit<\/strong>/);
+  assert.match(rerolled,/data-aoe-gm-review/);
+  assert.ok(!rerolled.includes('Deviation:'));
+  assert.equal(s.nativeCards.length,2);
 });
 
 test('current vehicle operator and legacy driver both resolve without vehicle Athletics', async () => {
@@ -233,7 +408,7 @@ test('native Trait ignores old AoE skill override; saved blast, consume and dama
   const s = await runAttack({flags:{aoeSkill:'Shooting', aoeBlastSize:'large', aoeConsume:false, aoeDamageAction:'he'},
     additional:{he:{type:'damage',name:'HE Damage',override:'4d6',ap:2}}, dice:[8,3]});
   assert.equal(s.weapon.system.currentShots,4); assert.equal(s.setupDialogs,0);
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 8/); assert.match(s.cards[0].content,/Large Blast Template/);
+  assertCardTotal(s.cards[0].content,8); assert.match(s.cards[0].content,/Large Blast Template/);
   assert.equal(s.panelCalls,1); assert.equal(s.panelContexts[0].attackSkill.name,'Gunnery');
   assert.match(s.cards[0].content,/4d6; AP 2/);
   assert.equal(s.scene.templates.get('template').distance,3);
@@ -262,10 +437,11 @@ test('panel Mod dice and MAP/Cover/Illumination combine once and stay fixed on B
   const s = await runAttack({dice:[5,8,4,9,5],panelValues:{
     otherModifierFormula:'+1d6',situationalModifier:-4,consume:true,
     modifierParts:{modifier:'+1d6',multiAction:-2,cover:-2,illumination:0}}});
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 9/);
-  assert.match(s.cards[0].content,/Other Modifiers: Mod. \+1d6; Multi-Action -2; Cover -2; Illumination 0/);
-  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 10/);
+  assertCardTotal(s.cards[0].content,9);
+  assert.match(s.cards[0].content,/Other Modifiers: Mod. \+1d6; Multi-Action -2; Cover -2/);
+  assert.ok(!/Illumination 0/.test(s.cards[0].content));
+  await rerollCurrentCard(s);
+  assertCardTotal(currentCard(s).content,10);
   assert.equal(s.events.filter(event=>event==='roll:+1d6').length,1);
   assert.equal(s.weapon.system.currentShots,3);
   assert.ok(s.nativeCalls.every(call=>!call.options?.otherModifier && !call.options?.cover && !call.options?.multiAction));
@@ -309,32 +485,134 @@ test('native-style AoE panel keeps English item data, textual Mod, ordinary modi
 
 test('Benny rerolls Gunnery within the same attack, with no extra shot/template or damage', async () => {
   const s = await runAttack({vehicle:true,dice:[5,3,9,4]});
-  const runtime = s.platform.__swadeGrenadeBennyRuntime;
-  await runtime.handlers.get('aoe-session')('actor');
+  await rerollCurrentCard(s);
   assert.equal(s.gunner.system.bennies.value,2); assert.equal(s.weapon.system.currentShots,3);
   assert.equal(s.events.filter(event => event==='ammo').length,1);
   assert.equal(s.events.filter(event => event==='template').length,1);
-  assert.equal(s.nativeCards.length,2); assert.match(s.cards[0].content,/Gunnery:<\/strong> 9/);
-  assert.match(s.cards[0].content,/Gunnery gained a Raise/);
+  assert.equal(s.nativeCards.length,2); assertCardTotal(currentCard(s).content,9);
+  assert.match(currentCard(s).content,/Gunnery gained a Raise/);
+});
+
+test('each paid Benny creates a new current attack card and fades only the previous attack card', async () => {
+  const s=await runAttack({vehicle:true,dice:[5,3,9,4,10,4]});
+  const first=currentCard(s);
+  const nativeSnapshot=s.nativeCards.map(card=>({targets:card.targets,raise:card.raise,flags:JSON.stringify(card.flags)}));
+  await rerollCurrentCard(s);
+  const second=currentCard(s);
+  assert.equal(s.cards.length,2);assert.notEqual(first.id,second.id);
+  assertCardTotal(first.content,5);assertCardTotal(second.content,9);
+  assert.match(first.content,/data-aoe-superseded style="opacity:.5;filter:grayscale\(1\)"/);
+  assert.match(first.content,/Superseded by Benny reroll/);
+  assert.ok(!/data-grenade-benny|data-benny-source/.test(first.content));
+  assert.equal(first.flags.world.grenadeBennySession,null);assert.equal(first.flags.world.aoeSuperseded,true);
+  assert.equal(first.flags.world.aoeSupersededBy,second.id);
+  assert.equal(second.flags.world.aoePreviousMessage,first.id);
+  assert.equal(second.flags.world.grenadeBennySession,'aoe-session');
+  assert.match(second.content,new RegExp(`data-grenade-message="${second.id}"`));
+  assert.match(visibleCardHtml(second.content),/data-aoe-gm-review/);
+  assert.equal(first.rolls[0].total,5);assert.equal(second.rolls[0].total,9);
+  await rerollCurrentCard(s);
+  const third=currentCard(s);
+  assert.equal(s.cards.length,3);assertCardTotal(second.content,9);assertCardTotal(third.content,10);
+  assert.ok(!second.content.includes('data-grenade-benny'));
+  assert.equal(second.flags.world.aoeSupersededBy,third.id);
+  assert.match(third.content,/Benny Reroll \(1\)/);
+  assert.deepEqual(s.nativeCards.map(card=>({targets:card.targets,raise:card.raise,flags:JSON.stringify(card.flags)})),nativeSnapshot);
+  assert.equal(s.weapon.system.currentShots,3);assert.equal(s.crosshairCalls,1);
+  assert.equal(s.events.filter(event=>event==='ammo').length,1);
+  assert.equal(s.events.filter(event=>event==='template').length,1);
+});
+
+test('lower paid rerolls still publish a new card, keep the higher result, and store the actual reroll dice', async () => {
+  const s=await runAttack({dice:[9,5,3,2]});
+  const previous=currentCard(s);
+  await rerollCurrentCard(s);
+  const latest=currentCard(s),visible=visibleCardHtml(latest.content);
+  assert.equal(s.cards.length,2);assertCardTotal(previous.content,9);assertCardTotal(latest.content,9);
+  assert.match(visible,/Previous result kept \(reroll 3\)/);
+  assert.deepEqual(latest.rolls.map(roll=>roll.total),[9,5,3,2]);
+  assert.match(latest.content,/Benny 1<\/td>\s*<td>3<\/td><td>2<\/td>/);
+  assert.ok(!visible.includes('Roll history:')&&!/<details\b[^>]*\bopen\b/.test(latest.content));
+  assert.equal(s.gunner.system.bennies.value,2);assert.equal(s.nativeCards.length,2);
+  assert.ok(!previous.content.includes('data-grenade-benny'));
+  assert.ok(!visible.includes('data-aoe-gm-review'));
+});
+
+test('a paid Extra natural-one failure gets a new passive-history card but cannot replace the earlier hit', async () => {
+  const s=await runAttack({wildcard:false,dice:[6,1,4]});
+  await rerollCurrentCard(s);
+  const latest=currentCard(s);
+  assert.equal(s.cards.length,2);assertCardTotal(latest.content,6);
+  assert.match(visibleCardHtml(latest.content),/Previous result kept \(reroll 1, natural 1\)/);
+  assert.deepEqual(latest.rolls.map(roll=>roll.total),[6,1,4]);
+  assert.match(latest.content,/Natural 1 failure/);
+  assert.equal(s.nativeCards.length,2);assert.equal(s.gunner.system.bennies.value,2);
+});
+
+test('old-card clicks and deletion, including a stale session-flag snapshot, cannot affect the new active card', async () => {
+  const s=await runAttack({dice:[5,3,9,4,10,5]});
+  const first=currentCard(s),key=first.flags.world.grenadeBennySession;
+  const staleDeletedDocument={id:first.id,flags:{world:{grenadeBennySession:key}}};
+  const reroll=s.platform.__swadeGrenadeBennyRuntime.handlers.get(key);
+  await rerollCurrentCard(s);
+  const second=currentCard(s),rollCount=s.events.filter(event=>event.startsWith('roll:')).length;
+  await reroll('actor',first.id);
+  await reroll('actor','');
+  assert.equal(s.gunner.system.bennies.value,2);assert.equal(s.cards.length,2);
+  assert.equal(s.events.filter(event=>event.startsWith('roll:')).length,rollCount);
+  await s.emitHook('deleteChatMessage',first);
+  await s.emitHook('deleteChatMessage',staleDeletedDocument);
+  assert.equal(s.platform.__swadeGrenadeBennyRuntime.handlers.get(key),reroll);
+  assert.equal(reroll.activeMessageId,second.id);
+  await rerollCurrentCard(s);
+  assert.equal(s.cards.length,3);assert.equal(s.gunner.system.bennies.value,1);
+  const latest=currentCard(s);
+  await s.emitHook('deleteChatMessage',latest);
+  assert.equal(s.platform.__swadeGrenadeBennyRuntime.handlers.has(key),false);
+  await reroll('actor',latest.id);
+  assert.equal(s.gunner.system.bennies.value,1);assert.equal(s.cards.length,3);
+});
+
+test('a refused Benny spend produces no new card or attempt and leaves the current card active', async () => {
+  const s=await runAttack({bennySpendResult:false,dice:[6,4]});
+  const previous=currentCard(s);
+  await rerollCurrentCard(s);
+  assert.equal(s.cards.length,1);assert.equal(currentCard(s),previous);
+  assert.equal(previous.flags.world.grenadeBennySession,'aoe-session');
+  assert.ok(!previous.content.includes('data-aoe-superseded'));
+  assert.match(previous.content,/The Benny could not be spent/);
+  assert.match(previous.content,/Benny Reroll \(3\)/);
+  assert.equal(s.gunner.system.bennies.value,3);
+  assert.equal(s.events.filter(event=>event.startsWith('roll:')).length,2);
+  assert.equal(s.nativeCards.length,2);assert.equal(s.weapon.system.currentShots,3);
+});
+
+test('GM pool Benny reroll creates the same new-card presentation without spending actor Bennies', async () => {
+  const s=await runAttack({dice:[6,4,8,3]});
+  await rerollCurrentCard(s,'gm');
+  assert.equal(s.cards.length,2);assert.equal(s.gunner.system.bennies.value,3);
+  assertCardTotal(currentCard(s).content,8);
+  assert.match(currentCard(s).content,/GM Reroll \(2\)/);
+  assert.ok(!s.cards[0].content.includes('data-grenade-benny'));
+  assert.equal(s.weapon.system.currentShots,3);assert.equal(s.nativeCards.length,2);
 });
 
 test('critical Gunnery reroll overrides a prior hit and cannot spend another Benny without Dumb Luck', async () => {
   const s = await runAttack({vehicle:true, dice:[6,4,1,1]});
-  const reroll = s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session');
-  await reroll('actor'); await reroll('actor');
+  await rerollCurrentCard(s); await rerollCurrentCard(s);
   assert.equal(s.gunner.system.bennies.value,2);
-  assert.match(s.cards[0].content,/Critical Failure/);
+  assert.match(currentCard(s).content,/Critical Failure/);
   assert.equal(s.scene.templates.get('template').fillColor,'#d62828');
   assert.equal(s.nativeCards.length,2); assert.equal(s.weapon.system.currentShots,3);
-  assert.match(s.cards[0].content,/Gunnery changed after damage was rolled/);
+  assert.match(currentCard(s).content,/Gunnery changed after damage was rolled/);
 });
 
 test('failed AoE attack can Benny reroll to a hit and roll previously pending damage once', async () => {
   const s = await runAttack({vehicle:true, dice:[2,3,6,4]});
   assert.equal(s.nativeCards.length,0);
-  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  await rerollCurrentCard(s);
   assert.equal(s.nativeCards.length,2); assert.equal(s.weapon.system.currentShots,3);
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 6/);
+  assertCardTotal(currentCard(s).content,6);
   assert.equal(s.events.filter(event=>event==='template').length,1);
 });
 
@@ -357,7 +635,7 @@ test('Consume Item reduces exactly selected item quantity, preserves ammunition,
   assert.equal(s.panelContexts[0].resource.source,'quantity');
   assert.equal(s.weapon.system.quantity,1);assert.equal(s.weapon.system.currentShots,4);
   assert.equal(s.quantityUpdates,1);assert.ok(!s.events.includes('ammo'));
-  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  await rerollCurrentCard(s);
   assert.equal(s.weapon.system.quantity,1);assert.equal(s.weapon.system.currentShots,4);
   assert.equal(s.quantityUpdates,1);assert.equal(s.nativeCards.length,2);
 });
@@ -418,18 +696,17 @@ test('prepared Gunnery effects and global trait/attribute/attack modifiers apply
   const s = await runAttack({vehicle:true,dice:[5,3,6,4,7,5],
     skillEffects:[{label:'Skill bonus',value:2},{value:99,ignore:true}],
     globalMods:{trait:[{value:1}],smarts:[{value:2}],attack:[{value:1}],bennyTrait:[{value:2}]}});
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 11/);
-  const reroll = s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session');
-  await reroll('actor'); assert.match(s.cards[0].content,/Gunnery:<\/strong> 14/);
-  await reroll('actor'); assert.match(s.cards[0].content,/Gunnery:<\/strong> 15/);
-  assert.match(s.cards[0].content,/Total Modifier:<\/strong> \+8/);
+  assertCardTotal(s.cards[0].content,11);
+  await rerollCurrentCard(s); assertCardTotal(currentCard(s).content,14);
+  await rerollCurrentCard(s); assertCardTotal(currentCard(s).content,15);
+  assert.match(currentCard(s).content,/Total Modifier:<\/strong> \+8/);
   assert.equal(s.weapon.system.currentShots,3);
 });
 
 test('prepared @field formulas use the chosen gunner roll data', async () => {
   const s = await runAttack({vehicle:true,rollData:{bonus:2},
     globalMods:{attack:[{label:'Crew fire control',value:'@bonus+1'}]}});
-  assert.match(s.cards[0].content,/Gunnery:<\/strong> 9/);
+  assertCardTotal(s.cards[0].content,9);
   assert.match(s.cards[0].content,/Prepared effects: Crew fire control: @bonus\+1/);
 });
 
@@ -477,21 +754,21 @@ test('Extra natural 1 is an ordinary failure when confirmation d6 is not 1, even
   assert.match(s.cards[0].content, /Critical Failure not confirmed/);
   assert.equal(s.nativeCards.length,0);
   assert.equal(s.cards[0].rolls[1].formula,'1d6');
-  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  await rerollCurrentCard(s);
   assert.equal(s.gunner.system.bennies.value,2);
-  assert.match(s.cards[0].content, /Success with a Raise/);
+  assert.match(currentCard(s).content, /Success with a Raise/);
   assert.equal(s.nativeCards.length,2); assert.equal(s.weapon.system.currentShots,3);
 });
 
 test('Extra confirmed critical failure locks Benny rerolls while an ordinary natural 1 cannot replace a hit', async () => {
   const critical = await runAttack({wildcard:false, dice:[1,1]});
   assert.match(critical.cards[0].content,/Confirmed Critical Failure/);
-  await critical.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  await rerollCurrentCard(critical);
   assert.equal(critical.gunner.system.bennies.value,3);
   const hit = await runAttack({wildcard:false, dice:[6,1,4]});
-  await hit.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
-  assert.match(hit.cards[0].content,/Gunnery:<\/strong> 6/);
-  assert.match(hit.cards[0].content,/Natural 1 failure/);
+  await rerollCurrentCard(hit);
+  assertCardTotal(currentCard(hit).content,6);
+  assert.match(currentCard(hit).content,/Natural 1 failure/);
   assert.equal(hit.nativeCards.length,2);
 });
 

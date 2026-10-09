@@ -3,7 +3,7 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Configurable AoE attacks (2.1.10)
+## Configurable AoE attacks (2.1.11)
 
 1. Set the weapon's normal `Trait` field to its skill name, such as `Gunnery`.
    AoE uses this field directly; there is no separate skill selector or override.
@@ -32,6 +32,23 @@ If an already-rolled attack gains a Raise on a later Benny reroll, the GM is
 warned to review the existing damage bonus rather than receiving duplicate
 damage cards. Reroll buttons are available in the throwing/firing user's
 current browser session.
+
+AoE attack cards use a compact weapon header, one dice/result bar, short
+target rows and Benny buttons. Only nonzero modifiers are shown. Range, blast,
+damage/AP and reroll history remain available in the closed `Details` section.
+A Benny reroll posts a fresh attack card and fades the previous one, while
+retaining the same attack, resource spend, template and damage workflow.
+An important GM damage-review warning stays visible after a changed result.
+
+With Automated Animations enabled (API verified against 6.8.5), the attack
+uses that AoE item's animation configuration/Auto Recognition and passes the
+placed blast template directly. Configure a Template animation or a suitable
+template preset in AA for an explosion at the blast area. AA's disabled or
+unmatched animations are respected; no hardcoded explosion is substituted.
+Native ammunition use and the independent target damage cards do not trigger
+additional AA animations during this attack. Attack Benny rerolls do not
+replay the animation. Without AA, the existing optional JB2A/Sequencer effect
+remains the fallback. Animation errors never block attack or damage resolution.
 
 Update this fork using its stable Foundry manifest:
 https://github.com/UmutcanOrug/swade-tools-fix/releases/latest/download/module.json

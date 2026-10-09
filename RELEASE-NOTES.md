@@ -1,17 +1,27 @@
-## SWADE Tools 2.1.10 — Native-style AoE Attack Panel
+## SWADE Tools 2.1.11 — Compact AoE Cards & Automated Animations
 
-- Clicking an AoE-enabled weapon's name opens its AoE panel in place of the
-  ordinary SWADE Tools weapon dialog. The explosion shortcut opens the same panel.
-- The panel opens every time; Shift-click is no longer needed. It uses the
-  native SWADE Tools layout and situational modifiers.
-- Removed the inventory-row AoE checkbox and settings gear. Enable AoE and
-  its settings remain in item Properties; enabled inventory items show only
-  the explosion shortcut.
-- Skill names come directly from the weapon's normal Trait field. There is
-  no AoE skill picker, and stale saved AoE skill overrides are ignored.
-- Added mutually exclusive Consume Ammunition and Consume Item settings.
-  Leave both off to spend nothing; Uses per Attack sets the quantity. A grenade
-  can now explicitly spend its own inventory quantity instead of loaded ammo.
+- Compact item icon/name, skill status, one combined dice/result bar and target
+  rows replace large headings and verbose default attack text.
+- Only nonzero modifiers are visible. Range, blast, damage/AP and reroll history
+  are in closed `Details`; important GM damage-review warnings stay visible.
+- Benny rerolls post a fresh attack card and fade the previous one. They retain
+  the same attack without another round, item, blast template or animation.
+- Automated Animations support uses its official API, verified against 6.8.5.
+  It receives the AoE item, source token, actual template and explicit target/hit
+  arrays without changing the player's target rings.
+- Scoped workflow guards prevent native resource use and independent damage
+  cards from duplicating the attack animation. Unrelated AA workflows and
+  persistent item animation flags are untouched.
+- AA's disabled/unmatched behavior is respected. Without AA, the existing
+  optional JB2A/Sequencer grenade or explosion effect remains.
+- Optional animation failures never block attack or damage resolution.
+
+### Animation setup
+
+Configure the AoE item's Automated Animations entry as a Template animation
+or a suitable template preset for an explosion at the placed blast area.
+The item's custom AA settings and Auto Recognition are used; an unconfigured
+or disabled AA item does not receive a hardcoded replacement animation.
 
 ### Existing AoE workflow retained
 

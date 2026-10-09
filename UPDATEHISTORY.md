@@ -1,6 +1,22 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.11
+
+- Compact AoE chat cards with item icon/name, one combined dice/result bar,
+  nonzero modifiers, short target rows and Benny controls.
+- Benny rerolls post a new attack card and fade the previous one without
+  consuming another resource, placing a template or replaying animation.
+- Range, blast, damage/AP and reroll history moved into closed Details.
+  Changed-result GM damage-review warnings remain visible.
+- Automated Animations integration verified against its 6.8.5 API. The
+  configured item animation receives the actual placed blast template and
+  explicit target/hit arrays without changing player target rings.
+- Scoped AA workflow guards prevent native consumption and per-target damage
+  cards from replaying the attack's animation. No persistent AA flags change.
+- AA disabled/unmatched configurations are respected. The existing optional
+  JB2A/Sequencer animation remains available when AA is not enabled.
+
 ## 2.1.10
 
 - AoE-enabled item-name clicks now open the AoE attack panel instead of the

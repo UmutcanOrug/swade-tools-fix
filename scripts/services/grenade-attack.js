@@ -35,8 +35,13 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackProfile.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeResourceService.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackDialog.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAnimationService.js")),
 };
-const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog} = aoeServices;
+const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
+  playAoeAnimation, withSuppressedAoeAutomation} = aoeServices;
+const animationRuntime = {gameRef: game, hooksRef: Hooks,
+  automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
+  SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
 
 const getDamageActionFormula = (action) =>
   String(action?.override ?? action?.dmgOverride ?? "").trim();
@@ -298,7 +303,10 @@ if (
 
 // Ammunition belongs to the weapon's owner, not the selected gunner. Commit
 // only after placement is accepted, once; chat Benny rerolls never revisit it.
-const resourceSpent = await aoeResource.spend(grenade, weaponActor, resourceOptions);
+const consumedResource = aoeResource.describe(grenade, weaponActor, resourceOptions).resource;
+const resourceSpent = await withSuppressedAoeAutomation([grenade, consumedResource],
+  () => aoeResource.spend(grenade, weaponActor, resourceOptions),
+  {...animationRuntime, trackConsumption: true});
 if (!resourceSpent.ok) return ui.notifications.warn(explainResourceFailure(resourceSpent));
 
 const sourceCenter = selectedToken.center ?? {
@@ -477,13 +485,13 @@ const syncGrenadeAthleticsResult = () => {
 };
 
 const getAthleticsHistoryHtml = () => athleticsAttempts.length > 1
-  ? `<details><summary>${foundry.utils.escapeHTML(attackSkillName)} attempts — ${athleticsBenniesSpent} ${athleticsBenniesSpent === 1 ? "Benny" : "Bennies"} spent</summary>
-     <table><thead><tr><th>Attempt</th><th>Trait</th><th>Wild</th><th>Modifier</th><th>Total</th>${isWildCard ? "" : "<th>Confirm d6</th>"}</tr></thead>
+  ? `<p style="margin:4px 0"><strong>Roll history:</strong> ${athleticsBenniesSpent} ${athleticsBenniesSpent === 1 ? "Benny" : "Bennies"} spent</p>
+     <table style="font-size:11px;margin:4px 0"><thead><tr><th>Attempt</th><th>Trait</th><th>Wild</th><th>Mod.</th><th>Total</th>${isWildCard ? "" : "<th>Confirm d6</th>"}</tr></thead>
      <tbody>${athleticsAttempts.map((attempt, index) =>
        `<tr><td>${index === 0 ? "Initial" : `Benny ${index}`}${attempt === athleticsAttempt ? " (used)" : ""}</td>
         <td>${attempt.traitRoll.total}</td><td>${attempt.wildRoll?.total ?? "—"}</td>
         <td>${attempt.totalModifier}</td><td>${attempt.total}${attempt.criticalFailure ? " — Critical Failure" : attempt.naturalOneFailure ? " — Natural 1 failure" : ""}</td>${isWildCard ? "" : `<td>${attempt.criticalConfirmationRoll?.total ?? "—"}</td>`}</tr>`
-     ).join("")}</tbody></table></details>`
+     ).join("")}</tbody></table>`
   : "";
 
 
@@ -504,7 +512,7 @@ if (!grenadeBennyRuntime.listening) {
       return;
     }
     try {
-      await reroll(button.dataset.bennySource);
+      await reroll(button.dataset.bennySource, button.dataset.grenadeMessage);
     } catch (error) {
       console.error("SWADE AoE Attack | Skill reroll failed", error);
       ui.notifications.error("The AoE skill reroll could not be completed.");
@@ -512,8 +520,11 @@ if (!grenadeBennyRuntime.listening) {
   });
   Hooks.on("deleteChatMessage", (message) => {
     const key = message.flags?.world?.grenadeBennySession;
-    if (key) {
-      grenadeBennyRuntime.handlers.get(key)?.cleanup?.();
+    const reroll = key ? grenadeBennyRuntime.handlers.get(key) : null;
+    // A superseded card (including a stale pre-update document) must never
+    // delete the shared session belonging to the current attack card.
+    if (reroll && reroll.activeMessageId === message.id) {
+      reroll.cleanup?.();
       grenadeBennyRuntime.handlers.delete(key);
     }
   });
@@ -521,7 +532,7 @@ if (!grenadeBennyRuntime.listening) {
 
 const getGrenadeBennyControlsHtml = () => {
   if (criticalFailure && !dumbLuckEnabled) {
-    return "<p><small>Critical Failure: Benny rerolls require the Dumb Luck setting.</small></p>";
+    return '<div style="font-size:11px;margin-top:4px" title="Critical Failure rerolls require Dumb Luck.">Benny locked (Critical Failure)</div>';
   }
   const disabled = !grenadeThrowReady || athleticsRerollInProgress
     ? "disabled"
@@ -531,19 +542,17 @@ const getGrenadeBennyControlsHtml = () => {
   const buttons = [];
   if (actingActor.isOwner && actorBennies > 0 && typeof actingActor.spendBenny === "function") {
     buttons.push(`<button type="button" data-grenade-benny="${grenadeBennyKey}"
-      data-benny-source="actor" ${disabled}><i class="fa-solid fa-dice"></i>
+      data-grenade-message="${throwMessage?.id ?? ""}" data-benny-source="actor" style="height:24px;line-height:20px;font-size:12px;margin:0" title="Reroll this attack skill only; no additional ammunition or items are consumed." ${disabled}><i class="fa-solid fa-dice"></i>
       Benny Reroll (${actorBennies})</button>`);
   }
   if (game.user.isGM && gmBennies > 0 && typeof game.user.spendBenny === "function") {
     buttons.push(`<button type="button" data-grenade-benny="${grenadeBennyKey}"
-      data-benny-source="gm" ${disabled}><i class="fa-solid fa-dice"></i>
-      GM Benny Reroll (${gmBennies})</button>`);
+      data-grenade-message="${throwMessage?.id ?? ""}" data-benny-source="gm" style="height:24px;line-height:20px;font-size:12px;margin:0" title="Spend a GM Benny to reroll this attack skill only." ${disabled}><i class="fa-solid fa-dice"></i>
+      GM Reroll (${gmBennies})</button>`);
   }
   return buttons.length
-    ? `<div style="display:flex;gap:4px">${buttons.join("")}</div>
-       <p><small>Reroll ${foundry.utils.escapeHTML(attackSkillName)} only. No additional ammunition or items are consumed.
-       Use before the GM applies damage. These controls work in the attacking player's current session.</small></p>`
-    : "<p><small>No Bennies available for an attack reroll.</small></p>";
+    ? `<div class="swadetools-aoe-bennies" style="display:flex;gap:4px;margin-top:4px">${buttons.join("")}</div>`
+    : '<div style="font-size:11px;margin-top:4px">No Bennies.</div>';
 };
 
 
@@ -580,11 +589,15 @@ const getBlastTargetNames = (targets) =>
   targets.map(
     (targetToken) => targetToken.name || targetToken.actor?.name || "Unknown"
   );
-const getBlastTargetNamesHtml = (targets) => {
+const getBlastTargetsHtml = (targets) => {
   const names = getBlastTargetNames(targets);
-  return names.length
-    ? names.map((name) => foundry.utils.escapeHTML(name)).join(", ")
-    : "None";
+  const status = success ? "Hit" : "Blast";
+  const borderColor = success ? "#1b7f3a" : "#8a6d3b";
+  return `<div style="font-size:11px;margin-bottom:2px"><strong>Targets:</strong>${names.length ? "" : " None"}</div>${names.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:3px">${names.map((name) =>
+      `<div class="swadetools-aoe-target" style="flex:1 1 140px;border:1px solid ${borderColor};border-radius:3px;padding:2px 5px;font-size:12px;line-height:17px;overflow-wrap:anywhere"><i class="fa-solid fa-bullseye" aria-hidden="true"></i> ${foundry.utils.escapeHTML(name)}: <strong>${status}</strong></div>`
+    ).join("")}</div>`
+    : ""}`;
 };
 const updateBlastTargetText = async (targets) => {
   if (!throwMessage) return;
@@ -592,9 +605,7 @@ const updateBlastTargetText = async (targets) => {
   wrapper.innerHTML = throwMessage.content;
   const targetLine = wrapper.querySelector("[data-grenade-targets]");
   if (!targetLine) return;
-  targetLine.innerHTML = `<strong>Targets:</strong> ${getBlastTargetNamesHtml(
-    targets
-  )}`;
+  targetLine.innerHTML = getBlastTargetsHtml(targets);
   await throwMessage.update({ content: wrapper.innerHTML });
 };
 
@@ -673,42 +684,14 @@ const armGrenadeDeviation = () => {
 };
 if (!success && templateDocument) armGrenadeDeviation();
 
-const databasePathExists = (path) => {
-  try {
-    if (typeof Sequencer.Database?.entryExists === "function") {
-      return Sequencer.Database.entryExists(path);
-    }
-    if (typeof Sequencer.Database?.getEntry === "function") {
-      return Boolean(Sequencer.Database.getEntry(path));
-    }
-  } catch {
-    return false;
-  }
-  return true;
-};
-
 const useThrownProjectile = isLegacyGrenadeItem(grenade) &&
   /athletics/i.test(attackSkillName);
-const animationPathsExist = databasePathExists(IMPACT_EFFECT) &&
-  (!useThrownProjectile || databasePathExists(PROJECTILE_EFFECT));
-
-if (animationPathsExist && templateDocument) {
-  const templateTarget = templateDocument.object ?? {
-    x: templateDocument.x,
-    y: templateDocument.y,
-  };
-
-  const animation = new Sequence();
-  if (useThrownProjectile) animation.effect()
-    .file(PROJECTILE_EFFECT).atLocation(selectedToken)
-    .stretchTo(templateTarget).waitUntilFinished();
-  await animation.effect()
-    .file(IMPACT_EFFECT)
-    .atLocation(templateTarget)
-    .size(blastRadiusSquares * 2, { gridUnits: true })
-    .waitUntilFinished(250)
-    .play();
-} else {
+// No flags.swade.origin: AA must not also animate createMeasuredTemplate.
+const animationResult = await playAoeAnimation({sourceToken: selectedToken,
+  item: grenade, templateDocument, targets: blastTargets, success,
+  throwProjectile: useThrownProjectile, blastDiameter: blastRadiusSquares * 2,
+  projectileEffect: PROJECTILE_EFFECT, impactEffect: IMPACT_EFFECT}, animationRuntime);
+if (animationResult.reason === "missing-assets") {
   ui.notifications.warn(
     "AoE attack resolved, but the configured JB2A projectile or explosion path was not found."
   );
@@ -763,109 +746,120 @@ const damageSourceLine =
       )}</small>`
     : "";
 const renderGrenadeThrowContent = async () => {
-const damageLine = damage
-  ? `
-    <p><strong>Damage${
-      selectedDamageAction?.name
-        ? ` (${foundry.utils.escapeHTML(selectedDamageAction.name)})`
-        : ""
-    }:</strong> ${foundry.utils.escapeHTML(damage)}; AP ${ap}${
-      raise ? `; Raise bonus ${raiseDamageFormula}` : ""
-    }${damageSourceLine}</p>
-    <p><small>The SWADE damage roll is made automatically from the selected AoE item.</small></p>
-  `
-  : `
-    <p><strong>Damage:</strong> No direct damage is configured on this item.</p>
-    <p><strong>@UUID[${grenade.uuid}]{Open ${foundry.utils.escapeHTML(
-      grenade.name
-    )}}</strong></p>
-  `;
-const failureLine = success
-  ? ""
-  : `<p><strong>Deviation:</strong> The red template marks the intended point. Move it using your table's SWADE deviation result before applying the rolled damage.</p>`;
-const traitRollHtml = await traitRoll.render({
-  flavor: `${attackSkillName} Trait Die (d${traitSides})`,
-});
-const wildRollHtml = wildRoll
-  ? await wildRoll.render({
-      flavor: `${attackSkillName} Wild Die (d${wildSides})`,
-    })
-  : "";
-const extraConfirmationHtml = criticalConfirmationRoll
-  ? `${await criticalConfirmationRoll.render({
-      flavor: "Extra Critical Failure Confirmation (d6)",
-    })}<p><small>${criticalFailure ? "Confirmed Critical Failure." : "Critical Failure not confirmed. The natural 1 remains a failed attack regardless of modifiers."}</small></p>`
-  : "";
-const modifierParts = [
-  `Range ${rangePenalty >= 0 ? "+" : ""}${rangePenalty}`,
-  `Wounds ${woundPenalty >= 0 ? "+" : ""}${woundPenalty}`,
-  `Fatigue ${fatiguePenalty >= 0 ? "+" : ""}${fatiguePenalty}`,
-  `Skill ${skillModifier >= 0 ? "+" : ""}${skillModifier}`,
-  `Item ${Number(itemModifierRoll?.total ?? 0) >= 0 ? "+" : ""}${Number(itemModifierRoll?.total ?? 0)}`,
-  `Trademark ${trademarkModifier >= 0 ? "+" : ""}${trademarkModifier}`,
-  ...(preparedModifierRoll ? [`Effects ${preparedModifierRoll.total >= 0 ? "+" : ""}${preparedModifierRoll.total}`] : []),
-  `Other ${Number(setup.otherModifier ?? 0) >= 0 ? "+" : ""}${Number(
-    setup.otherModifier ?? 0
-  )}`,
-  ...(bennyModifierRoll
-    ? [`Benny ${bennyModifierRoll.total >= 0 ? "+" : ""}${bennyModifierRoll.total}`]
-    : []),
-].join(", ");
-const preparedEffectsSummary = preparedAttackModifiers.map((modifier) =>
-  `${String(modifier.label ?? "Effect")}: ${String(modifier.value)}`
-).join(", ");
-const situationalSummary = setup.modifierParts
-  ? `Mod. ${setup.modifierParts.modifier}; Multi-Action ${setup.modifierParts.multiAction}; Cover ${setup.modifierParts.cover}; Illumination ${setup.modifierParts.illumination}`
-  : "";
-
-return `
-    <h2>${foundry.utils.escapeHTML(grenade.name)}</h2>
-    ${weaponActor.type === "vehicle" ? `<p><strong>Operator:</strong> ${foundry.utils.escapeHTML(actingActor.name)}; <strong>Vehicle:</strong> ${foundry.utils.escapeHTML(weaponActor.name)}</p>` : ""}
-    <p><strong>${foundry.utils.escapeHTML(attackSkillName)}:</strong> ${total}
-      <span style="color:${resultColor};font-weight:bold">(${resultLabel})</span>
-    </p>
-    ${traitRollHtml}
-    ${wildRollHtml}
-    ${extraConfirmationHtml}
-    ${getAthleticsHistoryHtml()}
-    <p><strong>Used:</strong> ${chosenDie} ${bestDie} ${totalModifier >= 0 ? "+" : ""}${totalModifier} = ${total}</p>
-    <p><strong>Range:</strong> ${distance.toFixed(1)} ${foundry.utils.escapeHTML(
-      distanceUnits
-    )}, ${rangeBand} (${rangePenalty})</p>
-    <p><strong>Total Modifier:</strong> ${totalModifier >= 0 ? "+" : ""}${totalModifier}</p>
-    <p><small>${modifierParts}</small></p>
-    ${situationalSummary ? `<p><small>Other Modifiers: ${foundry.utils.escapeHTML(situationalSummary)}</small></p>` : ""}
-    ${preparedEffectsSummary ? `<p><small>Prepared effects: ${foundry.utils.escapeHTML(preparedEffectsSummary)}</small></p>` : ""}
-    <p><strong>Blast:</strong> ${blastSize} Blast Template</p>
-    <p data-grenade-targets><strong>Targets:</strong> ${getBlastTargetNamesHtml(
-      blastTargets
-    )}</p>
-    ${damageLine}
-    ${failureLine}
-    ${athleticsReviewNote ? `<p><small>${foundry.utils.escapeHTML(athleticsReviewNote)}</small></p>` : ""}
-    ${athleticsDamageReviewNote ? `<p style="color:#a61b1b"><strong>${foundry.utils.escapeHTML(athleticsDamageReviewNote)}</strong></p>` : ""}
+  const escape = foundry.utils.escapeHTML;
+  const signed = (value) => `${value >= 0 ? "+" : ""}${value}`;
+  const compactResultLabel = criticalFailure ? "Critical Failure" : raise ? "Raise" : success ? "Success" : "Failure";
+  const modifierParts = [
+    ["Range", rangePenalty], ["Wounds", woundPenalty], ["Fatigue", fatiguePenalty],
+    ["Skill", skillModifier], ["Item", Number(itemModifierRoll?.total ?? 0)],
+    ["Trademark", trademarkModifier], ["Effects", Number(preparedModifierRoll?.total ?? 0)],
+    ["Other", Number(setup.otherModifier ?? 0)], ["Benny", Number(bennyModifierRoll?.total ?? 0)],
+  ].filter(([, value]) => value !== 0).map(([label, value]) => `${label} ${signed(value)}`).join(", ");
+  const preparedEffectsSummary = preparedAttackModifiers.map((modifier) =>
+    `${String(modifier.label ?? "Effect")}: ${String(modifier.value)}`
+  ).join(", ");
+  const situationalSummary = setup.modifierParts ? [
+    ["Mod.", setup.modifierParts.modifier], ["Multi-Action", setup.modifierParts.multiAction],
+    ["Cover", setup.modifierParts.cover], ["Illumination", setup.modifierParts.illumination],
+  ].filter(([, value]) => String(value ?? "").trim() && Number(value) !== 0)
+    .map(([label, value]) => `${label} ${value}`).join("; ") : "";
+  // Keep plain Roll documents on the message, but render their dice together
+  // once. Foundry skips automatic Roll HTML when custom child HTML is present.
+  const dieResultsHtml = (roll, sides, role) => {
+    if (!roll) return "";
+    const used = chosenDie === `${role} Die`;
+    const results = roll.dice.flatMap((die) => die.results)
+      .filter((result) => result.active !== false && !result.discarded);
+    const values = results.length ? results.map((result) => result.result) : [roll.total];
+    const hint = escape(`${role}: ${roll.formula} = ${roll.total}${used ? " (used)" : ""}`);
+    return `<li style="font-size:10px;align-self:center;opacity:${used ? "1" : ".65"}">${role}</li>${values.map((value) =>
+      `<li class="die" title="${hint}" style="background-image:url(icons/svg/d${sides}-grey.svg);background-size:contain;background-repeat:no-repeat;background-position:center;width:28px;height:28px;flex:0 0 28px;list-style:none;opacity:${used ? "1" : ".6"}"><label style="display:block;text-align:center;line-height:28px;font-weight:${used ? "bold" : "normal"};color:${used ? resultColor : "inherit"}">${escape(value)}</label></li>`
+    ).join("")}`;
+  };
+  const damageLine = damage
+    ? `<div><strong>Damage${selectedDamageAction?.name ? ` (${escape(selectedDamageAction.name)})` : ""}:</strong> ${escape(damage)}; AP ${ap}${raise ? `; Raise bonus ${raiseDamageFormula}` : ""}${damageSourceLine}</div>`
+    : `<div><strong>Damage:</strong> No direct damage is configured on this item.</div>`;
+  const confirmationDetails = criticalConfirmationRoll
+    ? `<div><strong>Extra confirmation:</strong> d6 = ${criticalConfirmationRoll.total}. ${criticalFailure ? "Confirmed Critical Failure." : "Critical Failure not confirmed. The natural 1 remains a failed attack regardless of modifiers."}</div>` : "";
+  const gmReview = athleticsDamageReviewNote
+    ? `<div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: ${raise && /gained a Raise/.test(athleticsDamageReviewNote) ? `review existing damage and its ${raiseDamageFormula} Raise bonus.` : "review existing damage and blast result."}</strong></div>` : "";
+  return `<article class="swade chat-card swadetools-pseudocard swadetools-aoe-card">
+    <header class="card-header flexrow" style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+      <img src="${escape(grenade.img || "icons/svg/explosion.svg")}" alt="${escape(grenade.name)}" width="32" height="32" style="flex:0 0 32px;object-fit:contain;border:0">
+      <strong style="font-size:15px;line-height:18px">${escape(grenade.name)}</strong>
+    </header>
+    <div class="swadetools-aoe-skill" style="font-size:12px;line-height:18px"><strong>${escape(attackSkillName)}:</strong> <span style="color:${resultColor};font-weight:bold">${compactResultLabel}</span></div>
+    ${athleticsAttempts.length > 1 && athleticsAttempts.at(-1) !== athleticsAttempt ? `<div style="font-size:11px;line-height:16px">Previous result kept (reroll ${athleticsAttempts.at(-1).total}${athleticsAttempts.at(-1).naturalOneFailure ? ", natural 1" : ""}).</div>` : ""}
+    ${modifierParts ? `<div class="swadetools-aoe-modifiers" style="font-size:11px;line-height:16px">${escape(modifierParts)}</div>` : ""}
+    <div class="dice-roll" style="margin:3px 0"><div class="dice-result">
+      <div class="dice-formula" style="padding:2px"><ol class="formula-list" style="display:flex;align-items:center;justify-content:center;gap:4px;list-style:none;margin:0;padding:0">${dieResultsHtml(traitRoll, traitSides, "Trait")}${dieResultsHtml(wildRoll, wildSides, "Wild")}${totalModifier ? `<li style="font-size:12px" title="Total Modifier">${signed(totalModifier)}</li>` : ""}</ol></div>
+      <div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div>
+    </div></div>
+    <div data-grenade-targets style="margin:4px 0">${getBlastTargetsHtml(blastTargets)}</div>
+    ${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}
+    ${gmReview}
     ${getGrenadeBennyControlsHtml()}
-  `;
+    <details class="swadetools-aoe-details" style="font-size:11px;margin-top:4px">
+      <summary style="cursor:pointer">Details</summary>
+      ${weaponActor.type === "vehicle" ? `<div><strong>Operator:</strong> ${escape(actingActor.name)}; <strong>Vehicle:</strong> ${escape(weaponActor.name)}</div>` : ""}
+      <div><strong>Range:</strong> ${distance.toFixed(1)} ${escape(distanceUnits)}, ${rangeBand} (${rangePenalty})</div>
+      <div><strong>Blast:</strong> ${blastSize} Blast Template</div>
+      ${damageLine}
+      <div><strong>Used:</strong> ${chosenDie} ${bestDie} ${signed(totalModifier)} = ${total}; ${resultLabel}</div>
+      ${totalModifier ? `<div><strong>Total Modifier:</strong> ${signed(totalModifier)}</div>` : ""}
+      ${situationalSummary ? `<div>Other Modifiers: ${escape(situationalSummary)}</div>` : ""}
+      ${preparedEffectsSummary ? `<div>Prepared effects: ${escape(preparedEffectsSummary)}</div>` : ""}
+      ${confirmationDetails}
+      ${getAthleticsHistoryHtml()}
+      ${athleticsReviewNote ? `<div>${escape(athleticsReviewNote)}</div>` : ""}
+      ${athleticsDamageReviewNote ? `<div>${escape(athleticsDamageReviewNote)}</div>` : ""}
+    </details>
+  </article>`;
 };
 
+const getGrenadeThrowRolls = () => {
+  const latestAttempt = athleticsAttempts.at(-1);
+  return [...new Set([
+    traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, otherModifierRoll, bennyModifierRoll,
+    // A lower reroll still happened. Preserve its dice record on the new
+    // card even when the effective result keeps the earlier higher dice.
+    ...(latestAttempt !== athleticsAttempt ? [latestAttempt.traitRoll, latestAttempt.wildRoll,
+      latestAttempt.criticalConfirmationRoll, latestAttempt.bennyModifierRoll] : []),
+  ].filter(Boolean))];
+};
 const updateGrenadeThrowMessage = async () => {
   if (!throwMessage) return;
   await throwMessage.update({
-    rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, otherModifierRoll, bennyModifierRoll].filter(Boolean).map((roll) => roll.toJSON()),
+    rolls: getGrenadeThrowRolls().map((roll) => roll.toJSON()),
     content: await renderGrenadeThrowContent(),
   });
 };
 
-throwMessage = await ChatMessage.create({
+const createGrenadeThrowMessage = async (previousMessage = null) => ChatMessage.create({
   user: game.user.id,
   speaker: ChatMessage.getSpeaker({
     actor: actingActor,
     token: selectedToken.document,
   }),
-  rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, otherModifierRoll, bennyModifierRoll].filter(Boolean),
-  flags: { world: { grenadeBennySession: grenadeBennyKey } },
+  rolls: getGrenadeThrowRolls(),
+  flags: { world: { grenadeBennySession: grenadeBennyKey,
+    ...(previousMessage ? {aoePreviousMessage: previousMessage.id} : {}),
+  } },
   content: await renderGrenadeThrowContent(),
 });
+const supersedeGrenadeThrowMessage = async (previousMessage, previousContent) => {
+  if (!previousMessage) return;
+  const passiveContent = previousContent.replace(
+    /<div class="swadetools-aoe-bennies"[^>]*>[\s\S]*?<\/div>/g, ""
+  );
+  await previousMessage.update({
+    "flags.world.grenadeBennySession": null,
+    "flags.world.aoeSuperseded": true,
+    "flags.world.aoeSupersededBy": throwMessage.id,
+    content: `<div class="swadetools-aoe-superseded" data-aoe-superseded style="opacity:.5;filter:grayscale(1)">${passiveContent}</div><div style="font-size:11px;margin-top:3px">Superseded by Benny reroll.</div>`,
+  });
+};
+throwMessage = await createGrenadeThrowMessage();
 
 // Use SWADE Tools' own item dialog and Damage button. Blast token IDs are
 // written directly into the damage message, so no Foundry target rings are
@@ -1191,7 +1185,8 @@ if (damage) {
         // Open SWADE Tools for one target at a time. Each click creates a
         // separate SWADE Tools damage roll/card and only that target ID is
         // injected into the card.
-        await rollDamageWithSwadeTools([targetToken]);
+        await withSuppressedAoeAutomation([grenade, damageSourceItem],
+          () => rollDamageWithSwadeTools([targetToken]), animationRuntime);
         completed += 1;
 
         // Give the previous SWADE Tools Dialog/chat workflow time to close
@@ -1231,8 +1226,8 @@ if (success) {
 }
 
 // Optional chat-card rerolls never re-enter the one-shot throw above.
-const rerollGrenadeAthletics = async (source) => {
-  if (!grenadeThrowReady || athleticsRerollInProgress) return;
+const rerollGrenadeAthletics = async (source, messageId) => {
+  if (!grenadeThrowReady || athleticsRerollInProgress || !throwMessage || messageId !== throwMessage.id) return;
   const spender = source === "gm" ? game.user : actingActor;
   const rerollLocked = criticalFailure && !dumbLuckEnabled;
   if (
@@ -1251,6 +1246,8 @@ const rerollGrenadeAthletics = async (source) => {
 
   athleticsRerollInProgress = true;
   try {
+    const previousMessage = throwMessage;
+    const previousContent = throwMessage.content;
     await updateGrenadeThrowMessage();
     const spent = await spender.spendBenny();
     if (spent !== true) {
@@ -1282,11 +1279,11 @@ const rerollGrenadeAthletics = async (source) => {
     resultLabel = getAthleticsAttemptLabel(athleticsAttempt);
     resultColor = success ? "#1b7f3a" : "#a61b1b";
 
+    let templateStillExists = canvas.scene.templates?.has(templateDocument.id) !== false;
     if (athleticsAttempt !== previousAttempt) {
       // Updating the existing template is not another throw. In particular,
       // animation and grenade quantity are never touched by this callback.
       cleanupDeviationTargeting();
-      const templateStillExists = canvas.scene.templates?.has(templateDocument.id) !== false;
       if (templateStillExists) {
         const color = success ? "#ff6b35" : "#d62828";
         const changes = {
@@ -1322,12 +1319,16 @@ const rerollGrenadeAthletics = async (source) => {
           ? `${attackSkillName} gained a Raise after damage was rolled. GM: review the existing damage and its ${raiseDamageFormula} Raise bonus before applying it. Damage was not rerolled.`
           : `${attackSkillName} changed after damage was rolled. GM: review the final result and blast location before applying the existing damage. Damage was not rerolled.`;
       }
-      await updateGrenadeThrowMessage();
-      if (success && templateStillExists && typeof runGrenadeDamageForTargets === "function") {
-        // The damage workflow has its own one-shot guard. A failed throw can
-        // now roll its pending damage, but existing damage is never duplicated.
-        await runGrenadeDamageForTargets(blastTargets);
-      }
+    }
+    // Native-style reroll presentation: each paid roll gets a fresh attack
+    // card. Only this card can use the shared, same-attack Benny session.
+    throwMessage = await createGrenadeThrowMessage(previousMessage);
+    rerollGrenadeAthletics.activeMessageId = throwMessage.id;
+    await supersedeGrenadeThrowMessage(previousMessage, previousContent);
+    if (athleticsAttempt !== previousAttempt && success && templateStillExists && typeof runGrenadeDamageForTargets === "function") {
+      // The damage workflow has its own one-shot guard. A failed throw can
+      // now roll its pending damage, but existing damage is never duplicated.
+      await runGrenadeDamageForTargets(blastTargets);
     }
   } finally {
     athleticsRerollInProgress = false;
@@ -1335,7 +1336,11 @@ const rerollGrenadeAthletics = async (source) => {
   }
 };
 
-rerollGrenadeAthletics.cleanup = () => cleanupDeviationTargeting();
+rerollGrenadeAthletics.activeMessageId = throwMessage.id;
+rerollGrenadeAthletics.cleanup = () => {
+  grenadeThrowReady = false;
+  cleanupDeviationTargeting();
+};
 grenadeBennyRuntime.handlers.set(grenadeBennyKey, rerollGrenadeAthletics);
 grenadeThrowReady = true;
 await updateGrenadeThrowMessage();
