@@ -1,62 +1,53 @@
-## SWADE Tools 2.1.12 — Last Settings & Experimental Unified RoF
+## SWADE Tools 2.1.13 — Compact Controls & Configurable Shotgun Damage
 
-Experimental Unified RoF is a new world setting, **disabled by default**.
-The GM must enable it to test the unified panel and Shotgun Rules. Turning it
-off returns to the existing panels. New interface text is English.
+New interface text remains English. **Experimental Unified RoF is still off
+by default**; the GM enables it in SWADE Tools world settings for unified
+RoF/Shotgun features. Back up the world and test between sessions first.
 
-Back up the world and test between sessions on a separate scene. Verification
-uses isolated mocked-Foundry gameplay and DOM checks, including a headless
-panel preview. The user's live Foundry session was not accessed.
+### Compact weapon controls
 
-### Shift + left-click
+- Removed long AoE/Shotgun explanations in item Properties; checkboxes and gears remain.
+- Separate **Damage Mod.** beside **Mod.**, available directly without Attack Options.
+  Attack Mod affects attacks only; Damage Mod affects damage only, including
+  native target damage, explicit damage actions and Benny rerolls.
+- Shared right-hand vertical checkbox stack: Raise Damage, Recoil, The Drop,
+  Ammunition. The Drop is available at every RoF and on AoE: +4 attack/+4 damage,
+  without stacking on Benny or adding a second pool attack bonus.
+- Removed the manual Vulnerable checkbox; automatic target detection remains.
+- **Ammunition** starts checked on normal open. Unchecking does not spend ammo.
+  AoE retains its configured Ammo/Item/None resource mode. Native/global ammo
+  rules remain authoritative; no extra consumption is added.
+- A fresh unified panel selects the weapon's own highest RoF: 3 opens at 3,
+  4 at 4, 1 at 1. Optional Rapid Fire remains selectable, not auto-selected.
+- Shift + left-click still restores the last submitted manual settings,
+  including RoF, Damage Mod. and consumption. Raise/dynamic state is excluded.
+- Internal damage-only automation dialogs retain their existing bridge.
 
-Normal click stays clean. Shift + left-click opens the last submitted manual
-weapon settings; it never automatically rolls or fires. Browser-session memory
-is separated by user, owner actor, scene-qualified firing token, item and
-operator. Refresh clears it. Raise Damage and dynamic combat state are excluded.
-Internal damage-only dialogs cannot capture or restore attack settings.
+### Shotgun damage by range
 
-### Compact unified weapon panel
+In **Properties → Enable Shotgun Rules → Shotgun Settings (gear)**, edit
+separate Short/Medium/Long formulas for Shot and Slug.
 
-- RoF selector and Recoil remain in the normal classic SWADE Tools dialog.
-- RoF 1 keeps native single fire; RoF 2+ enters the existing pool without a
-  second setup panel. Whole-pool Benny review and target assignment remain.
-- Rapid Fire extends the selector for Shooting only. Custom Traits such as
-  Gunnery are supported. Additional action buttons keep their native behavior.
+- Defaults: Shot **3d6 / 2d6 / 1d6**, Slug **2d10 / 2d10 / 2d10**.
+- Slug uses the Long formula at Extreme range; Shot cannot reach Extreme.
+- Formulas and operator data references are validated before ammo; damage dice
+  remain unrolled until damage is requested. Pools freeze the selected profile.
+- Native Damage and Trait fields are never rewritten. Existing items need no migration.
+- Shot +2, explicit preincluded-bonus control, Both Barrels restrictions and
+  per-target range handling remain unchanged. Automatic Innocent Bystanders
+  and simultaneous AoE+Shotgun damage profiles remain unsupported.
 
-### Explicit Shotgun item settings
+### Light RoF windows
 
-- Properties: Enable Shotgun Rules + Shotgun Settings gear, alongside AoE.
-- Shot: +2 attack; 3d6/2d6/1d6 at Short/Medium/Long; no Extreme Shot damage.
-- Slug: 2d10 without the Shot bonus, including Extreme range.
-- Explicit preincluded +2 option prevents duplicate Trait Modifier bonuses.
-- Optional Both Barrels: one Shot attack, one target, RoF 1, +4 damage and two
-  shells. It is not a multi-die attack. Slug + Both Barrels is unsupported.
-- Native single fire requires one target; pools support multiple recipients.
-  Native damage uses the saved mode and the actual target range.
-- AP, Raise die, item/global damage modifiers and native Benny flags remain.
-  Item Damage and Trait Modifier fields are never rewritten.
-- Automatic Innocent Bystanders and special shell profiles are not included.
+Review Attack Pool, whole-pool Benny choice, target assignment and legacy setup
+now use native Foundry light parchment styling. Global theme, attack results,
+Benny rules and cancel-before-ammo behavior are unchanged.
 
-### AoE + RoF, including grenade launchers
+### Verification and requirements
 
-- Item name/image and explosion icon open the same unified panel.
-- Review/Benny the pool, then place a blast point per usable result. Canceling
-  any point aborts the volley before ammo/templates/damage. Bennies already
-  spent during pool review are not refunded.
-- Configured Ammo/Item/None consumption is respected. RoF 2+ spends once using
-  the standard table: RoF 2/3/4/5/6 costs 5/10/20/40/50 uses. Single AoE retains
-  saved Uses per Attack. Ammo follows SWADE's global ammunition setting.
-- Each projectile uses its frozen pool result, adds point-specific range once,
-  and retains independent native target damage and one animation dispatch.
-  Individual projectile cards do not offer another Benny reroll.
-- AoE and Shotgun damage profiles are alternatives, not simultaneous rules.
-- Ambiguous/wrong firing tokens, ownership changes, invalid formulas and stale
-  settings are checked before spending. Player target rings are never changed.
+Foundry VTT 13 / SWADE 5.x. Sequencer is required for AoE placement; Automated
+Animations integration remains verified against its 6.8.5 API.
 
-### Requirements
-
-Foundry VTT 13 / SWADE 5.x. Sequencer is required for AoE placement.
-Automated Animations retains its verified 6.8.5 API integration; optional JB2A
-assets are not required for damage resolution. Use persistent weapon profiles
-and disable Destroy on Empty if native consumption would delete the damage item.
+Verification uses isolated mocked-Foundry gameplay and DOM tests plus headless
+previews with installed Foundry styles. The user's live session was not accessed.
+All 234 automated regression tests pass.

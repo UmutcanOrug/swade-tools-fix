@@ -15,6 +15,7 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   targetDistance=5,mutate=null,flags={},assignedOutcome='miss',aoe=false,noTargets=false,
   placements=null,afterPrepare=null,quantity=20,ammoManagement=true}={}) {
   const shotgunRules=await import(pathToFileURL(path.join(services,'ShotgunRules.js')));
+  const {nativeWeaponDamageFormula}=await import(pathToFileURL(path.join(services,'WeaponDamageModifier.js')));
   const aoeFlags=await import(pathToFileURL(path.join(services,'AoeItemFlags.js')));
   const {aoeResource}=await import(pathToFileURL(path.join(services,'AoeResourceService.js')));
   const {withSuppressedAoeAutomation}=await import(pathToFileURL(path.join(services,'AoeAnimationService.js')));
@@ -85,7 +86,7 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
     Hooks,
     ChatMessage:{getSpeaker:input=>input,async create(data){const message={...data,id:'pool',async update(change){Object.assign(this,change);}};cards.push(message);return message;}},
     fromUuid:async()=>null,setTimeout(callback,ms){if(ms<=100)callback();return 1;},clearTimeout(){}};
-  dependencies.scope.rofServices={...shotgunRules,...aoeFlags,aoeResource,withSuppressedAoeAutomation,
+  dependencies.scope.rofServices={...shotgunRules,...aoeFlags,aoeResource,withSuppressedAoeAutomation,nativeWeaponDamageFormula,
     isAoeItem:item=>item.flags?.['swade-tools']?.aoeEnabled===true,
     async prepareAoePoolPoints(context){events.push('prepare-aoe');preparations.push(context);
       if(afterPrepare)afterPrepare({actor,weapon});
@@ -102,6 +103,31 @@ test('inline RoF skips only the initial setup and preserves review plus target a
   assert.equal(s.reviews.length,1);assert.equal(s.assignments.length,2);assert.equal(s.cards.length,1);
   assert.deepEqual(s.events.filter(event=>event.startsWith('ammo:')),['ammo:5']);
   assert.equal(s.weapon.system.currentShots,45);
+});
+
+test('every RoF workflow window uses the native light parchment theme without changing global settings',async()=>{
+  const s=await runPool({inline:false,reviewActions:['actor-benny','continue'],dice:[9,7,4,10,8,3]});
+  assert.equal(s.prompts.length,2);
+  assert.equal(s.reviews.length,3);
+  assert.ok(s.reviews.some(dialog=>dialog.window.title.includes('Choose Benny')));
+  for(const dialog of [...s.prompts,...s.reviews]){
+    assert.deepEqual(dialog.classes,['swadetools-rof-dialog','themed','theme-light']);
+    assert.ok(!dialog.classes.includes('theme-dark'));
+  }
+  assert.equal(s.events.filter(event=>event==='benny').length,1);
+  assert.deepEqual(s.events.filter(event=>event.startsWith('ammo:')),['ammo:5']);
+  assert.equal(s.reviews[0].modal,false);
+  assert.equal(s.reviews[0].rejectClose,false);
+});
+
+test('closing a light-themed RoF review still cancels before any ammunition is consumed',async()=>{
+  const s=await runPool({reviewActions:[null]});
+  assert.equal(s.reviews.length,1);
+  assert.ok(s.reviews[0].classes.includes('theme-light'));
+  assert.equal(s.prompts.length,0);
+  assert.equal(s.cards.length,0);
+  assert.equal(s.weapon.system.currentShots,50);
+  assert.ok(!s.events.some(event=>event.startsWith('ammo:')||event==='benny'));
 });
 
 test('inline damage data references are resolved before native damage without rolling extra shared dice',async()=>{
@@ -286,6 +312,25 @@ test('opted-in shotgun pool adds one pellet bonus and uses transient damage by e
     assert.ok(s.nativeCalls.every(call=>call.options.damageOverride===expected&&call.options.damageOnly));
     assert.equal(s.weapon.system.damage,'2d6');assert.equal(s.weapon.system.actions.traitMod,'');
     assert.equal(s.events.filter(event=>event==='ammo:5').length,1);
+  }
+});
+
+test('custom Shot and Slug pool damage follows distance and resolves data before ammo without rolling damage',async()=>{
+  const sgDamageProfiles={shot:{short:'4d6+@bonus',medium:'3d6',long:'2d6'},slug:{short:'3d10',medium:'2d10',long:'1d10+@bonus'}};
+  for(const [shotgunMode,targetDistance,expected]of [['shot',5,'4d6+2'],['shot',15,'3d6'],['shot',30,'2d6'],['slug',50,'1d10+2']]){
+    const s=await runPool({flags:{sgEnabled:true,sgDamageProfiles},setup:{shotgunMode},targetDistance,assignedOutcome:'hit',rollData:{bonus:2}});
+    assert.equal(s.nativeCalls.length,2);assert.ok(s.nativeCalls.every(call=>call.options.damageOverride===expected));
+    assert.equal(s.events.filter(e=>e==='ammo:5').length,1);
+    assert.ok(s.events.filter(e=>e.startsWith('roll:')).every(e=>e==='roll:1d8x'||e==='roll:1d6x'));
+    assert.equal(s.weapon.system.damage,'2d6');
+  }
+});
+
+test('invalid or unavailable custom Shotgun range formula stops before pool dice Benny and ammunition',async()=>{
+  for(const formula of ['invalid)', '3d6+@missing', '3d6+@__proto__.bad']){
+    const s=await runPool({flags:{sgEnabled:true,sgDamageProfiles:{shot:{short:'3d6',medium:formula,long:'1d6'}}}});
+    assert.equal(s.events.length,0);assert.equal(s.cards.length,0);assert.equal(s.reviews.length,0);
+    assert.equal(s.weapon.system.currentShots,50);assert.equal(s.notices.length,1);
   }
 });
 

@@ -31,7 +31,7 @@ export const restoreWeaponPanelSettings = (html, saved, {maxRof = 6} = {}) => {
         }
         let value = String(saved[field]);
         if (field === 'rof' && (!Number.isInteger(Number(value)) ||
-            Number(value) < 1 || Number(value) > maxRof)) value = '1';
+            Number(value) < 1 || Number(value) > maxRof)) value = String(element.value);
         if (element.options && !Array.from(element.options).some(option => option.value === value)) continue;
         element.value = value;
     }
@@ -56,7 +56,7 @@ export const toInlineRofSetup = values => ({
     bothBarrels: values.bothBarrels === true,
 });
 
-export const bindUnifiedRofControls = (html, saved) => {
+export const bindUnifiedRofControls = (html, saved, damageProfiles) => {
     const select = elementFor(html, 'rof');
     if (!select) return;
     const recoil = elementFor(html, 'rof-recoil');
@@ -70,9 +70,6 @@ export const bindUnifiedRofControls = (html, saved) => {
             else if (!initial && previous === 1) recoil.checked = true;
             else if (initial && saved?.recoil === undefined) recoil.checked = true;
         }
-        const options = root?.querySelector?.('[data-unified-rof-options]');
-        if (options) options.hidden = !multiple && !root?.querySelector?.('#shotgun-mode') &&
-            !root?.querySelector?.('[data-aoe-consumption]');
         for (const group of root?.querySelectorAll?.('[data-rof-multiple-only]') ?? []) group.hidden = !multiple;
         const barrels = elementFor(html, 'shotgun-both-barrels');
         if (barrels) {
@@ -80,8 +77,14 @@ export const bindUnifiedRofControls = (html, saved) => {
             if (barrels.disabled) barrels.checked = false;
         }
         const damageLabel=root?.querySelector?.('[data-shotgun-damage]');
-        if (damageLabel) damageLabel.textContent=elementFor(html,'shotgun-mode')?.value==='slug'
-            ? '2d10' : `3d6 / 2d6 / 1d6${barrels?.checked ? ' +4' : ''}`;
+        if (damageLabel) {
+            const slug=elementFor(html,'shotgun-mode')?.value==='slug';
+            const profile=damageProfiles?.[slug ? 'slug' : 'shot'] ??
+                (slug ? {short:'2d10',medium:'2d10',long:'2d10'} : {short:'3d6',medium:'2d6',long:'1d6'});
+            const formulas=[profile.short,profile.medium,profile.long];
+            damageLabel.textContent=(formulas.every(value=>value===formulas[0]) ? formulas[0] : formulas.join(' / '))+
+                (barrels?.checked ? ' +4' : '');
+        }
         previous = Number(select.value);
     };
     select.addEventListener('change', () => update(false));

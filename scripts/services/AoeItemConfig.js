@@ -256,10 +256,7 @@ export const bindAoeItemSheetControl = (sheet, html) => {
         input.setAttribute('aria-label', 'Enable AoE Attack');
         input.dataset.swadeToolsAoeEnabled = '';
         label.prepend(input);
-        const hint = document.createElement('p');
-        hint.className = 'hint notes';
-        hint.textContent = "Adds the explosion shortcut to the inventory. Click the item name or explosion button to open the AoE attack panel. Attacks use the weapon's native Trait, including custom skills such as Gunnery.";
-        group.append(label, createSettingsButton(item.actor ?? item.parent, item), hint);
+        group.append(label, createSettingsButton(item.actor ?? item.parent, item));
         const host = root.querySelector('.tab[data-tab="properties"], .tab[data-tab="details"], section[data-tab="properties"]') ??
             root.querySelector('form') ?? root;
         host.prepend(group);

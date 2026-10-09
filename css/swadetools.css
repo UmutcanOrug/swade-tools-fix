@@ -39,6 +39,38 @@ align-items: center;
     margin:10px 0
 }
 
+.swadetools-dialog-item .swadetools-small-check {
+    display:inline-flex;
+    align-items:center;
+    gap:3px;
+    font-size:11px;
+    white-space:nowrap;
+}
+.swadetools-dialog-item .swadetools-small-check input[type="checkbox"] {
+    width:14px;
+    height:14px;
+    margin:0 2px 0 0;
+}
+.swadetools-dialog-item .swadetools-weapon-checks {
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:3px;
+}
+.swadetools-dialog-item .swadetools-weapon-summary {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 95px;
+    gap:10px;
+    align-items:start;
+}
+.swadetools-dialog-item .swadetools-weapon-summary > .swadetools-2grid {
+    grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);
+    align-items:start;
+}
+.swadetools-dialog-item [data-shotgun-damage] {
+    overflow-wrap:anywhere;
+}
+
 .swadetools-raise {
     display: flex;
     align-items: center;

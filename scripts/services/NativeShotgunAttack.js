@@ -3,6 +3,7 @@ import { getShotgunSettings, validateShotgunAttack } from './ShotgunRules.js';
 import { resolveWeaponSettingsContext } from './LastWeaponSettings.js';
 import { aoeResource } from './AoeResourceService.js';
 import { withSuppressedAoeAutomation } from './AoeAnimationService.js';
+import { nativeWeaponDamageFormula } from './WeaponDamageModifier.js';
 
 const asArray = collection => collection?.contents ?? Array.from(collection ?? []);
 const asToken = token => token?.object ?? token;
@@ -18,7 +19,7 @@ const sameActor = (token, owner) => {
     return actor === owner || Boolean(actor?.uuid && actor.uuid === owner?.uuid);
 };
 
-const preflightFormula = (value, data, label, runtime) => {
+const preflightFormula = (value, data, label, runtime, { nativeDamage = false } = {}) => {
     const formula = String(value ?? '').trim();
     if (!formula) return { ok: true, formula: '' };
     const RollClass = runtime.RollClass ?? globalThis.Roll;
@@ -35,8 +36,11 @@ const preflightFormula = (value, data, label, runtime) => {
         }
         const resolved = formula.includes('@')
             ? RollClass.replaceFormulaData(formula, data, { missing: 0, warn: false }) : formula;
-        if (!RollClass?.validate?.(resolved)) return { ok: false, reason: `${label} is not a valid roll formula.` };
-        return { ok: true, formula: resolved };
+        const normalized = nativeDamage ? String(resolved).replace(/D(?=\d)/g, 'd') : resolved;
+        if (!RollClass?.validate?.(normalized) || (nativeDamage && !RollClass.validate(nativeWeaponDamageFormula(normalized)))) {
+            return { ok: false, reason: `${label} is not a valid roll formula.` };
+        }
+        return { ok: true, formula: normalized };
     } catch { return { ok: false, reason: `${label} is not a valid roll formula.` }; }
 };
 
@@ -106,6 +110,11 @@ export const prepareNativeShotgunDamageForTarget = async ({
     if (!targetToken?.actor || !targetId) return { ok: false, reason: 'Select exactly one valid target for this Shotgun attack.' };
     const profile = measureProfile(item, sourceToken, targetToken, mode, Boolean(bothBarrels), runtime);
     if (!profile.ok) return profile;
+    const rollActor = operator ?? weaponOwner;
+    const rollData = typeof rollActor?.getRollData === 'function' ? rollActor.getRollData() : rollActor?.system ?? {};
+    const damage = preflightFormula(profile.damage, rollData, 'Shotgun damage', runtime, { nativeDamage: true });
+    if (!damage.ok) return damage;
+    profile.damage = damage.formula;
     return {
         ...profile, targetId, sourceToken, sourceTokenUuid: uuidFor(sourceToken),
         shotgunProfile: {

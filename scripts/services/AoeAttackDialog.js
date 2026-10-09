@@ -11,6 +11,10 @@ const restoreAoeFields = (html, saved, settings) => {
     if (!saved) return;
     const modifier = field(html, 'mod');
     if (modifier && ['string', 'number'].includes(typeof saved.modifier)) modifier.value = String(saved.modifier);
+    const damageModifier = field(html, 'rof-damage-modifier');
+    if (damageModifier && typeof saved.damageModifier === 'string') damageModifier.value = saved.damageModifier;
+    const drop = field(html, 'rof-drop');
+    if (drop) drop.checked = saved.drop === true;
     const multiAction = field(html, 'multiaction');
     if (multiAction && ['0', '-2', '-4'].includes(String(saved.multiaction))) multiAction.value = String(saved.multiaction);
     for (const [id, mapping] of [['cover', COVER_NAMES], ['illumination', ILLUMINATION_NAMES]]) {
@@ -34,6 +38,8 @@ export const readAoeAttackDialogValues = (html, {consumeMode} = {}) => {
     };
     return {
         otherModifierFormula: rawModifier,
+        damageModifier: String(field(html, 'rof-damage-modifier')?.value ?? '').trim(),
+        theDrop: field(html, 'rof-drop')?.checked === true,
         situationalModifier: modifierParts.multiAction + modifierParts.cover + modifierParts.illumination,
         consume: consumeMode !== 'none' && field(html, 'aoe-consume')?.disabled !== true &&
             field(html, 'aoe-consume')?.checked === true,
@@ -52,32 +58,30 @@ export const buildAoeAttackDialogContent = ({item, weaponOwner, operatorActor, a
     const blast = String(settings.blastSize ?? 'medium');
     const blastLabel = blast[0].toUpperCase() + blast.slice(1);
     const consumeMode = settings.consumeMode ?? (settings.consume ? 'ammo' : 'none');
-    const consumeLabel = consumeMode === 'item' ? 'Consume Item' : 'Consume Ammunition';
+    const consumeLabel = consumeMode === 'item' ? 'Consume Item' : 'Ammunition';
     return `<div class="swadetools-dialog-item">
-      <div class="swadetools-itemfulldata"><div class="swadetools-2grid">
+      <div class="swadetools-itemfulldata"><div class="swadetools-weapon-summary"><div class="swadetools-2grid">
         <div><strong>Damage:</strong> ${escapeHTML(damage || 'Not configured')} (AP: ${escapeHTML(ap)})</div>
         <div><strong>Shots:</strong> ${escapeHTML(item.system?.currentShots ?? '—')}/${escapeHTML(item.system?.shots ?? '—')}</div>
         <div><strong>Range:</strong> ${escapeHTML(item.system?.range || '5/10/20')}</div>
         <div><strong>RoF:</strong> ${escapeHTML(item.system?.rof ?? 1)}</div>
         <div><strong>Blast:</strong> ${escapeHTML(blastLabel)} Blast Template</div>
         <div><strong>Trait:</strong> ${escapeHTML(attackSkill.name)}</div>
-      </div>${weaponOwner.type === 'vehicle' ? `<p><strong>Operator:</strong> ${escapeHTML(operatorActor.name)} (${escapeHTML(weaponOwner.name)})</p>` : ''}</div>
+      </div><div class="swadetools-weapon-checks">
+        <label class="swadetools-small-check" title="The Drop: +4 attack and +4 damage"><input id="rof-drop" type="checkbox">The Drop</label>
+        <label class="swadetools-small-check" title="Consume the configured resource on this attack"><input type="checkbox" id="aoe-consume" ${consumeMode === 'none' ? 'disabled' : 'checked'}>${consumeLabel}</label>
+      </div></div>${weaponOwner.type === 'vehicle' ? `<p><strong>Operator:</strong> ${escapeHTML(operatorActor.name)} (${escapeHTML(weaponOwner.name)})</p>` : ''}</div>
       <div class="swadetools-formpart swadetools-2grid">
         <div class="swadetools-mod-add"><label><strong>Mod.</strong>
           <i class="far fa-question-circle swadetools-hint" title="Situational attack modifier. Range, Wounds, Fatigue and prepared effects are added automatically."></i></label>
           <input type="text" id="mod" size="3" class="swadetools-input-number" value="0"></div>
-        <div class="swadetools-raise"><label><input type="checkbox" id="aoe-consume" ${consumeMode === 'none' ? 'disabled' : settings.consume ? 'checked' : ''}>
-          <strong>${consumeLabel}</strong></label></div>
+        <div class="swadetools-mod-add"><label for="rof-damage-modifier"><strong>Damage Mod.</strong></label>
+          <input type="text" id="rof-damage-modifier" size="3" class="swadetools-input-number" value="" title="Damage only, for example +2 or +1d6x"></div>
       </div>
-      ${consumeMode === 'none' ? '<p class="hint">Resource consumption is disabled. Configure Consume Ammunition or Consume Item in AoE Settings.</p>' : ''}
       <h2>Other Modifiers</h2>
       ${selector('multiaction', 'Multi-Action Penalty', [[0,'None (0)'],[-2,'-2'],[-4,'-4']])}
       ${selector('cover', 'Cover', [[0,'None (0)'],[-2,'Light (-2)'],[-4,'Medium (-4)'],[-6,'Heavy (-6)'],[-8,'Total (-8)']])}
       ${selector('illumination', 'Illumination', [[0,'None (0)'],[-2,'Dim (-2)'],[-4,'Dark (-4)'],[-6,'Pitch Darkness (-6)']])}
-      <p class="hint">Choose the blast point, then this attack rolls automatically. A Raise adds damage automatically.
-        Only this attack spends the configured resource; Benny rerolls do not.</p>
-      <p class="hint">${consumeMode === 'item' ? 'Items' : 'Ammo'} per Attack: ${escapeHTML(settings.ammoCost ?? 1)}.
-        ${escapeHTML(resource?.label ?? '')}${Number.isFinite(resource?.available) ? `: ${escapeHTML(resource.available)} available.` : ''}</p>
     </div>`;
 };
 
@@ -109,7 +113,8 @@ export const showAoeAttackDialog = (context, {
                             ...getLastWeaponSettings(memoryContext),
                             // This legacy panel always fires one projectile.
                             // Do not recall a former unified volley as its last action.
-                            rof: '1', recoil: false, damageModifier: '',
+                            rof: '1', recoil: false, damageModifier: result.damageModifier,
+                            drop: result.theDrop,
                             modifier: String(field(html, 'mod')?.value ?? ''),
                             multiaction: String(result.modifierParts.multiAction),
                             cover: COVER_NAMES[result.modifierParts.cover] ?? 'None',

@@ -1,7 +1,13 @@
+import { nativeWeaponDamageFormula } from './WeaponDamageModifier.js';
+
 // Explicit item opt-in only. Weapon names and native Trait/Damage fields are
 // never rewritten or used to infer that a weapon is a shotgun.
 export const SHOTGUN_FLAG_SCOPE = 'swade-tools';
 export const SHOTGUN_AMMO_COST = Object.freeze({ 1: 1, 2: 5, 3: 10, 4: 20, 5: 40, 6: 50 });
+export const SHOTGUN_DAMAGE_DEFAULTS = Object.freeze({
+    shot: Object.freeze({ short: '3d6', medium: '2d6', long: '1d6' }),
+    slug: Object.freeze({ short: '2d10', medium: '2d10', long: '2d10' })
+});
 
 const readFlag = (item, key) => typeof item?.getFlag === 'function'
     ? item.getFlag(SHOTGUN_FLAG_SCOPE, key)
@@ -14,6 +20,65 @@ export const getShotgunSettings = item => ({
     doubleBarrel: canEnableShotgunRules(item) && readFlag(item, 'sgDoubleBarrel') === true,
     bonusIncluded: canEnableShotgunRules(item) && readFlag(item, 'sgBonusIncluded') === true
 });
+
+// Old items need no migration. Return a fresh profile so callers cannot alter
+// defaults or the document's stored flags by editing an attack setup.
+export const getShotgunDamageProfiles = item => {
+    const stored = canEnableShotgunRules(item) ? readFlag(item, 'sgDamageProfiles') : null;
+    return Object.fromEntries(Object.entries(SHOTGUN_DAMAGE_DEFAULTS).map(([mode, defaults]) => [mode,
+        Object.fromEntries(Object.entries(defaults).map(([band, fallback]) => {
+            const value = stored?.[mode]?.[band];
+            return [band, typeof value === 'string' && value.trim() ? value.trim() : fallback];
+        }))
+    ]));
+};
+
+// Used only without Foundry's Roll parser (for example offline tooling). Never
+// evaluate a formula or use JavaScript eval to decide whether it is valid.
+const basicDiceFormula = formula => {
+    const tokens = formula.match(/(?:\d+)?d\d+(?:[a-z]+(?:[<>!=]=?)?\d*)*|(?:\d+(?:\.\d*)?|\.\d+)|\*\*|[()+\-*/%]/gi);
+    if (!tokens || tokens.join('').toLowerCase() !== formula.replace(/\s/g, '').toLowerCase()) return false;
+    let cursor = 0;
+    const expression = () => {
+        if (!term()) return false;
+        while (['+', '-'].includes(tokens[cursor])) { cursor++; if (!term()) return false; }
+        return true;
+    };
+    const term = () => {
+        if (!factor()) return false;
+        while (['*', '/', '%', '**'].includes(tokens[cursor])) { cursor++; if (!factor()) return false; }
+        return true;
+    };
+    const factor = () => {
+        if (['+', '-'].includes(tokens[cursor])) { cursor++; return factor(); }
+        if (tokens[cursor] === '(') { cursor++; return expression() && tokens[cursor++] === ')'; }
+        const token = tokens[cursor];
+        if (!token || !/^(?:(?:\d+)?d\d+(?:[a-z]+(?:[<>!=]=?)?\d*)*|(?:\d+(?:\.\d*)?|\.\d+))$/i.test(token)) return false;
+        cursor++; return true;
+    };
+    return expression() && cursor === tokens.length;
+};
+
+export const validateShotgunDamageFormula = (value, { RollClass = globalThis.Roll } = {}) => {
+    const formula = typeof value === 'string' ? value.trim().replace(/D(?=\d)/g, 'd') : '';
+    const invalid = { ok: false, reason: 'Enter a valid damage roll formula.' };
+    if (!formula || formula.length > 256 || /[;{}\[\]"'`\\<>]/.test(formula.replace(/(?:[a-z]+)[<>]=?\d+/gi, ''))) return invalid;
+    let syntax = formula;
+    for (const [, path] of formula.matchAll(/@([\w.]+)/g)) {
+        if (path.split('.').some(part => !part || ['__proto__', 'constructor', 'prototype'].includes(part))) return invalid;
+    }
+    // Syntax placeholders, not actor data: references are resolved and checked
+    // against the actual operator immediately before an attack or damage roll.
+    syntax = syntax.replace(/@[\w.]+/g, '1');
+    if (syntax.includes('@')) return invalid;
+    try {
+        const nativeSyntax = nativeWeaponDamageFormula(syntax);
+        const validate = typeof RollClass?.validate === 'function'
+            ? value => RollClass.validate(value) === true : basicDiceFormula;
+        const valid = validate(syntax) && validate(nativeSyntax);
+        return valid === true ? { ok: true, formula } : invalid;
+    } catch { return invalid; }
+};
 
 const normalizeMode = mode => {
     const value = String(mode ?? 'shot').trim().toLowerCase();
@@ -42,8 +107,8 @@ export const getShotgunDamage = (item, { mode = 'shot', rangeBand = 'short', bot
     if (!settings.enabled || !selectedMode || !selectedRange) return null;
     // Both Barrels is one attack, never a second attack die / RoF 2 pool.
     if (bothBarrels && (!settings.doubleBarrel || selectedMode !== 'shot')) return null;
-    const damage = selectedMode === 'slug' ? '2d10'
-        : ({ short: '3d6', medium: '2d6', long: '1d6' })[selectedRange];
+    if (selectedMode === 'shot' && selectedRange === 'extreme') return null;
+    const damage = getShotgunDamageProfiles(item)[selectedMode][selectedRange === 'extreme' ? 'long' : selectedRange];
     return damage ? `${damage}${bothBarrels ? '+4' : ''}` : null;
 };
 
@@ -104,9 +169,23 @@ export const saveShotgunSettings = async (item, settings = {}) => {
         doubleBarrel: settings.doubleBarrel === true,
         bonusIncluded: settings.bonusIncluded === true
     };
-    await item.update({
+    const patch = {
         'flags.swade-tools.sgDoubleBarrel': saved.doubleBarrel,
         'flags.swade-tools.sgBonusIncluded': saved.bonusIncluded
-    });
+    };
+    if (settings.damageProfiles !== undefined) {
+        const profiles = getShotgunDamageProfiles(item);
+        for (const mode of ['shot', 'slug']) {
+            for (const band of ['short', 'medium', 'long']) {
+                const candidate = settings.damageProfiles?.[mode]?.[band] ?? profiles[mode][band];
+                const validation = validateShotgunDamageFormula(candidate);
+                if (!validation.ok) throw new Error(`${mode === 'shot' ? 'Shot' : 'Slug'} ${band} damage: ${validation.reason}`);
+                profiles[mode][band] = validation.formula;
+            }
+        }
+        saved.damageProfiles = profiles;
+        patch['flags.swade-tools.sgDamageProfiles'] = profiles;
+    }
+    await item.update(patch);
     return saved;
 };

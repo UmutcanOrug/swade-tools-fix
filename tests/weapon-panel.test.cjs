@@ -18,8 +18,8 @@ const mockHtml = content => {
         const id = /\bid="([^"]+)"/.exec(attrs)?.[1];
         if (!id) continue;
         const events = new Map();
-        const options = tag === 'select' ? [...body.matchAll(/<option value="([^"]*)"/g)].map(m => ({value:m[1]})) : undefined;
-        nodes.set(id, {id, value: options?.[0]?.value ?? /\bvalue="([^"]*)"/.exec(attrs)?.[1] ?? '',
+        const options = tag === 'select' ? [...body.matchAll(/<option value="([^"]*)"([^>]*)/g)].map(m => ({value:m[1],selected:/\bselected\b/.test(m[2])})) : undefined;
+        nodes.set(id, {id, value: options?.find(option=>option.selected)?.value ?? options?.[0]?.value ?? /\bvalue="([^"]*)"/.exec(attrs)?.[1] ?? '',
             options, checked:/\bchecked\b/.test(attrs), disabled:/\bdisabled\b/.test(attrs),
             addEventListener:(event, callback)=>events.set(event,callback),
             change(){events.get('change')?.();}});
@@ -40,7 +40,7 @@ const mockHtml = content => {
 
 async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel=false,
     restoreLast=false, damageOnly=false, damageOverride, maxRof=3, rapidFire=false, consumeMode='ammo',
-    cache, tokenId='source',translations,missingVehicleOperator=false}={}) {
+    cache, tokenId='source',translations,missingVehicleOperator=false,damageProfiles}={}) {
     const [helpers,memory] = await Promise.all([load('WeaponPanelSettings'),load('LastWeaponSettings')]);
     const events=[], notices=[], dialogs=[];
     const item={id:'weapon',uuid:'Actor.shooter.Item.weapon',name:'Test Weapon',type:'weapon',isOwner:true,
@@ -58,6 +58,9 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         constructor(){events.push(['new-roll']);}
         addModifier(...args){events.push(['modifier',...args]);}
         addFlag(...args){events.push(['flag',...args]);}
+        setWeaponDamageModifier(value){events.push(['damage-modifier',value]);}
+        setConsumeAmmunition(value){events.push(['consume-ammunition',value]);}
+        setWeaponTheDrop(value){events.push(['the-drop',value]);}
         usingVehicle(){} raiseDmg(){events.push(['raise']);} useTarget(){}
         async rollBaseSkill(...args){events.push(['native-skill',...args]);}
         async rollBaseDamage(...args){events.push(['native-damage',...args]);}
@@ -72,6 +75,8 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         Dialog:class {constructor(config,options){dialogs.push({config,options});} render(){return this;}},
         isAoeItem:()=>aoe,getAoeItemSettings:()=>({consumeMode}),getInlineRofMaximum:()=>maxRof,
         getShotgunSettings:()=>({enabled:shotgun,doubleBarrel}),
+        getShotgunDamageProfiles:()=>damageProfiles ?? {shot:{short:'3d6',medium:'2d6',long:'1d6'},slug:{short:'2d10',medium:'2d10',long:'2d10'}},
+        prepareWeaponDamageModifier:value=>value==='invalid' ? {ok:false,reason:'Invalid damage modifier.'} : {ok:true,formula:String(value??'').trim()},
         resolveWeaponSettingsContext:context=>memory.resolveWeaponSettingsContext({...context,userId:'test-user'}),
         getLastWeaponSettings:memory.getLastWeaponSettings,saveLastWeaponSettings:memory.saveLastWeaponSettings,
         ...helpers,ui:{notifications:{warn:message=>notices.push(message)}},
@@ -103,7 +108,9 @@ test('experimental compact panel keeps classic classes and routes RoF 1 to nativ
     assert.deepEqual(Array.from(p.dialogs[0].options.classes),['dialog swadetools-vertical']);
     assert.equal(p.config.buttons.rofAllocator,undefined); assert.equal(p.config.buttons.rapidFire,undefined);
     assert.equal(p.html.nodes.get('rof').options.length,3);
-    assert.equal(p.html.details.hidden,true); assert.equal(p.html.details.open,false);
+    assert.equal(p.html.details,null);assert.doesNotMatch(p.config.content,/Attack Options/);
+    assert.equal(p.html.nodes.get('rof').value,'3');
+    p.html.nodes.get('rof').value='1';p.html.nodes.get('rof').change();
     assert.equal(p.html.nodes.get('rof-recoil').disabled,true);
     await p.config.buttons.mainSkill.callback(p.html);
     assert.equal(p.events.filter(e=>e[0]==='native-skill').length,1);
@@ -126,9 +133,9 @@ test('RoF 2+ forwards raw manual options and explicit source without native fire
     assert.equal(p.events.some(e=>e[0]==='new-roll'),false);
 });
 
-test('invalid RoF cannot fire and lower item cap resets stale Shift settings to one',async()=>{
+test('invalid RoF cannot fire and lower item cap falls back to the weapon default',async()=>{
     const p=await panel({experimental:true,maxRof:2,restoreLast:true,cache:{rof:5,modifier:'-2'}});
-    assert.equal(p.html.nodes.get('rof').value,'1');
+    assert.equal(p.html.nodes.get('rof').value,'2');
     p.html.nodes.get('rof').value='99';await p.config.buttons.mainSkill.callback(p.html);
     assert.equal(p.notices.length,1);assert.equal(p.events.length,0);
 });
@@ -141,12 +148,12 @@ test('Shift restores manual values without firing; normal click stays clean and 
     assert.equal(shifted.html.nodes.get('rof-recoil').checked,false);assert.equal(shifted.html.nodes.get('raise').checked,false);
     assert.equal(shifted.events.length,0);assert.match(shifted.config.content,/Last settings restored/);
     const clean=await panel({experimental:true,cache});
-    assert.equal(clean.html.nodes.get('mod').value,'');assert.equal(clean.html.nodes.get('rof').value,'1');
+    assert.equal(clean.html.nodes.get('mod').value,'');assert.equal(clean.html.nodes.get('rof').value,'3');
     assert.doesNotMatch(clean.config.content,/Last settings restored/);
 });
 
 test('native manual values are saved raw while prepared Shotgun formulas are transiently resolved',async()=>{
-    const p=await panel({experimental:true,shotgun:true});
+    const p=await panel({experimental:true,shotgun:true,maxRof:1});
     p.html.nodes.get('mod').value='@bonus';await p.config.buttons.mainSkill.callback(p.html);
     assert.equal(p.events.find(e=>e[0]==='shotgun-prepare')[1].modifierFormula,'@bonus');
     assert.equal(p.events.find(e=>e[0]==='modifier')[1],'2');
@@ -169,7 +176,7 @@ test('internal damageOnly ignores memory, AoE routing, Shotgun UI and RoF and fo
 test('explicit Shotgun profile appears only with experimental opt-in and invalid barrel combinations clear',async()=>{
     const legacy=await panel({shotgun:true,doubleBarrel:true});assert.doesNotMatch(legacy.config.content,/shotgun-mode/);
     const p=await panel({experimental:true,shotgun:true,doubleBarrel:true});
-    assert.equal(p.html.details.hidden,false);const barrels=p.html.nodes.get('shotgun-both-barrels');
+    assert.equal(p.html.details,null);const barrels=p.html.nodes.get('shotgun-both-barrels');
     barrels.checked=true;p.html.nodes.get('rof').value='2';p.html.nodes.get('rof').change();
     assert.equal(barrels.disabled,true);assert.equal(barrels.checked,false);
     p.html.nodes.get('rof').value='1';p.html.nodes.get('rof').change();assert.equal(barrels.disabled,false);
@@ -179,19 +186,22 @@ test('explicit Shotgun profile appears only with experimental opt-in and invalid
 
 test('AoE single fire forwards panel settings once, while AoE RoF uses the shared pool',async()=>{
     const p=await panel({experimental:true,aoe:true,consumeMode:'item'});
-    assert.equal(p.html.details.hidden,false);assert.match(p.config.content,/Consume Item/);
-    assert.equal(p.html.nodes.has('calledshots'),false);assert.equal(p.html.nodes.has('rof-drop'),false);
-    p.html.nodes.get('mod').value='+2';p.html.nodes.get('multiaction').value='-2';p.html.nodes.get('cover').value='Light';
+    assert.equal(p.html.details,null);assert.match(p.config.content,/Consume Item/);
+    p.html.nodes.get('rof').value='1';p.html.nodes.get('rof').change();
+    assert.equal(p.html.nodes.has('calledshots'),false);assert.equal(p.html.nodes.has('rof-drop'),true);
+    p.html.nodes.get('mod').value='+2';p.html.nodes.get('rof-damage-modifier').value='+1d6x';p.html.nodes.get('multiaction').value='-2';p.html.nodes.get('cover').value='Light';p.html.nodes.get('rof-drop').checked=true;
     await p.config.buttons.mainSkill.callback(p.html);
     const single=p.events.find(e=>e[0]==='aoe');assert.equal(single[3].attackSetup.otherModifierFormula,'+2');
     assert.equal(single[3].attackSetup.situationalModifier,-4);assert.equal(single[3].token,p.token);
+    assert.equal(single[3].attackSetup.damageModifier,'+1d6x');
+    assert.equal(single[3].attackSetup.theDrop,true);
     p.html.nodes.get('rof').value='2';await p.config.buttons.mainSkill.callback(p.html);
     assert.equal(p.events.find(e=>e[0]==='pool')[4].setup.aoe,true);
     assert.equal(p.events.some(e=>e[0]==='native-skill'),false);
 });
 
 test('disabled AoE resource mode cannot be enabled by Shift cache and legacy AoE receives restore context',async()=>{
-    const p=await panel({experimental:true,aoe:true,consumeMode:'none',restoreLast:true,cache:{consumeAmmo:true}});
+    const p=await panel({experimental:true,aoe:true,maxRof:1,consumeMode:'none',restoreLast:true,cache:{consumeAmmo:true}});
     assert.equal(p.html.nodes.get('rof-consume-ammo').disabled,true);
     await p.config.buttons.mainSkill.callback(p.html);
     assert.equal(p.events.find(e=>e[0]==='aoe')[3].attackSetup.consume,false);
@@ -210,9 +220,9 @@ test('control transitions enable default recoil only for multiple fire and stale
     const p=await panel({experimental:true,restoreLast:true,cache:{cover:'Removed',illumination:'Dark',rof:1}});
     assert.equal(p.html.nodes.get('cover').value,'None');assert.equal(p.html.nodes.get('illumination').value,'Dark');
     p.html.nodes.get('rof').value='2';p.html.nodes.get('rof').change();assert.equal(p.html.nodes.get('rof-recoil').checked,true);
-    assert.equal(p.html.details.hidden,false);assert.ok(p.html.multipleGroups.every(e=>e.hidden===false));
+    assert.equal(p.html.details,null);assert.ok(p.html.multipleGroups.every(e=>e.hidden===false));
     p.html.nodes.get('rof').value='1';p.html.nodes.get('rof').change();assert.equal(p.html.nodes.get('rof-recoil').checked,false);
-    assert.equal(p.html.details.hidden,true);assert.ok(p.html.multipleGroups.every(e=>e.hidden===true));
+    assert.equal(p.html.details,null);assert.ok(p.html.multipleGroups.every(e=>e.hidden===true));
 });
 
 test('changing Shotgun ammunition mode does not overwrite a manually unchecked Recoil option',async()=>{
@@ -230,12 +240,75 @@ test('unified vehicle AoE panel with no assigned operator warns without a null-a
 });
 
 test('Shotgun header shows transient range-based damage and updates for Slug and Both Barrels',async()=>{
-    const p=await panel({experimental:true,shotgun:true,doubleBarrel:true});
+    const p=await panel({experimental:true,shotgun:true,doubleBarrel:true,maxRof:1});
     assert.equal(p.html.damageLabel.textContent,'3d6 / 2d6 / 1d6');
     p.html.nodes.get('shotgun-both-barrels').checked=true;p.html.nodes.get('shotgun-both-barrels').change();
     assert.equal(p.html.damageLabel.textContent,'3d6 / 2d6 / 1d6 +4');
     p.html.nodes.get('shotgun-mode').value='slug';p.html.nodes.get('shotgun-mode').change();
     assert.equal(p.html.damageLabel.textContent,'2d10');assert.equal(p.item.system.damage,'3d6');
+});
+
+test('all fresh weapon panels expose independent damage and checked ammunition without Attack Options',async()=>{
+    for(const experimental of [false,true]){
+        const p=await panel({experimental,maxRof:1});
+        assert.ok(p.html.nodes.has('rof-damage-modifier'));assert.equal(p.html.nodes.get('rof-consume-ammo').checked,true);
+        assert.equal(p.html.details,null);assert.doesNotMatch(p.config.content,/Attack Options/);
+        p.html.nodes.get('mod').value='-3';p.html.nodes.get('rof-damage-modifier').value='+1d6x';
+        p.html.nodes.get('rof-consume-ammo').checked=false;
+        await p.config.buttons.mainSkill.callback(p.html);
+        assert.deepEqual(p.events.find(e=>e[0]==='damage-modifier'),['damage-modifier','+1d6x']);
+        assert.deepEqual(p.events.find(e=>e[0]==='consume-ammunition'),['consume-ammunition',false]);
+        assert.equal(p.events.find(e=>e[0]==='modifier')[1],'-3');
+        p.events.length=0;
+        p.html.nodes.get('multiaction').value='-4';p.html.nodes.get('cover').value='Medium';p.html.nodes.get('illumination').value='Dark';
+        await p.config.buttons.mainDamage.callback(p.html);
+        assert.equal(p.events.find(e=>e[0]==='damage-modifier')[1],'+1d6x');
+        assert.deepEqual(p.events.filter(e=>e[0]==='modifier').map(e=>e[1]),['0']);
+        assert.equal(p.events.filter(e=>e[0]==='native-damage').length,1);
+    }
+});
+
+test('invalid Damage Mod stops a native Shotgun attack before resource preparation',async()=>{
+    const p=await panel({experimental:true,shotgun:true,maxRof:1});
+    p.html.nodes.get('rof-damage-modifier').value='invalid';
+    await p.config.buttons.mainSkill.callback(p.html);
+    assert.equal(p.notices.length,1);
+    assert.equal(p.events.some(e=>['shotgun-prepare','native-skill','display','consume-ammunition'].includes(e[0])),false);
+});
+
+test('fresh RoF follows weapon cap and Shift restores Damage Mod and ammunition without replaying Raise',async()=>{
+    for(const maxRof of [1,3,4,6]){
+        const fresh=await panel({experimental:true,maxRof});
+        assert.equal(fresh.html.nodes.get('rof').value,String(maxRof));
+        assert.equal(fresh.html.nodes.get('rof-recoil').checked,maxRof>1);
+    }
+    const p=await panel({experimental:true,restoreLast:true,cache:{rof:1,damageModifier:'@bonus+1d6',consumeAmmo:false,raise:true}});
+    assert.equal(p.html.nodes.get('rof').value,'1');assert.equal(p.html.nodes.get('rof-damage-modifier').value,'@bonus+1d6');
+    assert.equal(p.html.nodes.get('rof-consume-ammo').checked,false);assert.equal(p.html.nodes.get('raise').checked,false);
+});
+
+test('Shotgun header follows custom Shot and Slug range damage without replacing native item damage',async()=>{
+    const p=await panel({experimental:true,shotgun:true,maxRof:1,damageProfiles:{
+        shot:{short:'4d6',medium:'3d6+1',long:'2d6'},slug:{short:'3d10',medium:'2d10',long:'1d10+2'}}});
+    assert.equal(p.html.damageLabel.textContent,'4d6 / 3d6+1 / 2d6');
+    p.html.nodes.get('shotgun-mode').value='slug';p.html.nodes.get('shotgun-mode').change();
+    assert.equal(p.html.damageLabel.textContent,'3d10 / 2d10 / 1d10+2');assert.equal(p.item.system.damage,'3d6');
+});
+
+test('shared checkboxes are always the same ordered vertical stack and Vulnerable is automatic only',async()=>{
+    for(const opts of [{},{shotgun:true,doubleBarrel:true},{aoe:true}]){
+        const p=await panel({experimental:true,maxRof:1,...opts});
+        const stack=/class="swadetools-weapon-checks">([\s\S]*?)<\/div>/.exec(p.config.content)?.[1];
+        assert.ok(stack);assert.deepEqual([...stack.matchAll(/id="([^"]+)"/g)].map(match=>match[1]),
+            ['raise','rof-recoil','rof-drop','rof-consume-ammo']);
+        assert.doesNotMatch(p.config.content,/rof-vulnerable|data-rof-multiple-only/);
+        assert.equal(p.html.nodes.get('rof-drop').disabled,false);
+        p.html.nodes.get('rof-drop').checked=true;
+        await p.config.buttons.mainSkill.callback(p.html);
+        if(!opts.aoe)assert.deepEqual(p.events.find(e=>e[0]==='the-drop'),['the-drop',true]);
+    }
+    const css=fs.readFileSync(path.resolve(__dirname,'../css/swadetools.css'),'utf8');
+    assert.match(css,/\.swadetools-weapon-checks\s*\{[^}]*flex-direction:column/s);
 });
 }
 

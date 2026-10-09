@@ -3,6 +3,7 @@ import Char from './Char.js';
 import CharRoll from './CharRoll.js';
 import ItemRoll from './ItemRoll.js';
 import { prepareNativeShotgunDamageForTarget, applyNativeShotgunProfile } from '../services/NativeShotgunAttack.js';
+import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js';
 
 export default class RollControl {
     
@@ -1230,6 +1231,17 @@ export default class RollControl {
       
            
             let charRoll=new ItemRoll(shotgunDamage ? this.getActor() : this.getItemOwner(),item);
+
+            if (shotgunFlags?.weaponTheDrop===true) charRoll.setWeaponTheDrop(true);
+
+            if (shotgunFlags?.weaponDamageModifier!==undefined){
+                const damageModifier=prepareWeaponDamageModifier(shotgunFlags.weaponDamageModifier,this.getActor());
+                if (!damageModifier.ok){
+                    ui.notifications.warn(damageModifier.reason);
+                    return false;
+                }
+                charRoll.setWeaponDamageModifier(damageModifier.formula);
+            }
 
             if (this.chat.flags["swade-tools"]?.usevehicle){
                 charRoll.usingVehicle(this.getItemOwner());

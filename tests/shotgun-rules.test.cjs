@@ -132,3 +132,96 @@ test('flag update fallback works without setFlag and ineligible item types canno
     await assert.rejects(saveShotgunSettings(item, { doubleBarrel: true }), /eligible/);
     assert.equal(changes.length, 1);
 });
+
+test('custom Shot and Slug profiles use independent range damage and Slug Extreme reuses Long', async () => {
+    const { getShotgunDamage, getShotgunDamageProfiles } = await rules;
+    const item = enabled({ sgDoubleBarrel: true, sgDamageProfiles: {
+        shot: { short: '4d8+1', medium: '3d8', long: '2d8' },
+        slug: { short: '3d10', medium: '2d10+2', long: '1d12+4' }
+    } });
+    assert.deepEqual(['short', 'medium', 'long', 'extreme'].map(rangeBand =>
+        getShotgunDamage(item, { mode: 'shot', rangeBand })), ['4d8+1', '3d8', '2d8', null]);
+    assert.deepEqual(['short', 'medium', 'long', 'extreme'].map(rangeBand =>
+        getShotgunDamage(item, { mode: 'slug', rangeBand })), ['3d10', '2d10+2', '1d12+4', '1d12+4']);
+    assert.equal(getShotgunDamage(item, { bothBarrels: true }), '4d8+1+4');
+    const profile = getShotgunDamageProfiles(item); profile.shot.short = '99d99';
+    assert.equal(getShotgunDamage(item), '4d8+1');
+    assert.equal(item.system.damage, '4d8+1');
+});
+
+test('old and partial damage flags fall back per range without mutating shared defaults', async () => {
+    const { getShotgunDamageProfiles, SHOTGUN_DAMAGE_DEFAULTS } = await rules;
+    assert.deepEqual(getShotgunDamageProfiles(weapon()), SHOTGUN_DAMAGE_DEFAULTS);
+    const first = getShotgunDamageProfiles(enabled({ sgDamageProfiles: {
+        shot: { short: ' 4d6 ', medium: '', long: 4 }, slug: { long: '3d12' }
+    } }));
+    assert.deepEqual(first, {
+        shot: { short: '4d6', medium: '2d6', long: '1d6' },
+        slug: { short: '2d10', medium: '2d10', long: '3d12' }
+    });
+    first.slug.short = '1';
+    assert.equal(getShotgunDamageProfiles(weapon()).slug.short, '2d10');
+    assert.equal(Object.isFrozen(SHOTGUN_DAMAGE_DEFAULTS.shot), true);
+});
+
+test('damage profile save validates all six fields before the single item flag write', async () => {
+    const { saveShotgunSettings, getShotgunDamageProfiles } = await rules;
+    const item = enabled(), changes = [], originalSystem = structuredClone(item.system);
+    item.update = async patch => changes.push(patch);
+    const profiles = {
+        shot: { short: ' 4d6+2 ', medium: '(3d6+1)*2', long: '1d8' },
+        slug: { short: '2d12', medium: '2d10+@damage.bonus', long: '2d8x' }
+    };
+    const result = await saveShotgunSettings(item, { doubleBarrel: true, damageProfiles: profiles });
+    assert.equal(changes.length, 1); assert.equal(result.damageProfiles.shot.short, '4d6+2');
+    assert.equal(result.damageProfiles.slug.medium, '2d10+@damage.bonus');
+    assert.deepEqual(changes[0]['flags.swade-tools.sgDamageProfiles'], result.damageProfiles);
+    assert.equal(changes[0]['flags.swade-tools.sgEnabled'], undefined);
+    assert.deepEqual(item.system, originalSystem);
+    for (const [mode, band] of [['shot','short'], ['shot','medium'], ['shot','long'], ['slug','short'], ['slug','medium'], ['slug','long']]) {
+        const invalid = structuredClone(profiles); invalid[mode][band] = 'not a roll';
+        await assert.rejects(saveShotgunSettings(item, { damageProfiles: invalid }), new RegExp(`${mode === 'shot' ? 'Shot' : 'Slug'} ${band} damage`));
+        assert.equal(changes.length, 1);
+    }
+    assert.equal(getShotgunDamageProfiles(item).shot.short, '3d6');
+});
+
+test('profile formula validation uses no actor data or dice evaluation and safely rejects malformed input', async () => {
+    const { validateShotgunDamageFormula } = await rules;
+    const seen = [];
+    const RollClass = { validate: value => { seen.push(value); return true; },
+        evaluate: () => { throw new Error('Must not roll'); },
+        replaceFormulaData: () => { throw new Error('Must not look up actor references'); } };
+    assert.deepEqual(validateShotgunDamageFormula(' 3d6 + @system.bonus ', { RollClass }), {
+        ok: true, formula: '3d6 + @system.bonus'
+    });
+    assert.deepEqual(seen, ['3d6 + 1', '3d6x + 1']);
+    for (const value of ['', '3d6;', '<script>', '3d6+@constructor.name', '3d6+@foo..bar', '3d6+@', null, 8, 'd6'.repeat(129)]) {
+        assert.equal(validateShotgunDamageFormula(value, { RollClass }).ok, false, String(value));
+    }
+    for (const value of ['3d6', '(3d6+1)*2', '2d10+@bonus', '1d6x+4', '2d8kh1']) {
+        assert.equal(validateShotgunDamageFormula(value, { RollClass: null }).ok, true, value);
+    }
+    for (const value of ['bogus', '3d6+', '(3d6', '3d6 2', '3d6+()', '3d6**']) {
+        assert.equal(validateShotgunDamageFormula(value, { RollClass: null }).ok, false, value);
+    }
+    assert.equal(validateShotgunDamageFormula('3d6', { RollClass: { validate: () => { throw new Error('parse'); } } }).ok, false);
+});
+
+test('damage validation normalizes uppercase dice and rejects formulas broken by native explosion conversion', async () => {
+    const { validateShotgunDamageFormula, saveShotgunSettings } = await rules;
+    const seen = [];
+    const RollClass = { validate: formula => {
+        seen.push(formula);
+        return ['2d6+1', '2d6x+1', 'max(1,2)'].includes(formula);
+    } };
+    assert.deepEqual(validateShotgunDamageFormula(' 2D6+1 ', { RollClass }), { ok: true, formula: '2d6+1' });
+    assert.equal(validateShotgunDamageFormula('max(1,2)', { RollClass }).ok, false);
+    assert.deepEqual(seen, ['2d6+1', '2d6x+1', 'max(1,2)', 'ma(1,2)']);
+    const item = enabled(), changes = []; item.update = async patch => changes.push(patch);
+    const previousRoll = global.Roll; global.Roll = RollClass;
+    try {
+        await assert.rejects(saveShotgunSettings(item, { damageProfiles: { shot: { short: 'max(1,2)' } } }), /Shot short damage/);
+        assert.equal(changes.length, 0);
+    } finally { global.Roll = previousRoll; }
+});

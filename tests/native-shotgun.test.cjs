@@ -157,6 +157,53 @@ test('typed modifier and native Trait Modifier formulas are validated before amm
     assert.equal(f.item.system.actions.traitMod, '@bonus-1');
 });
 
+test('custom damage profiles apply measured range and resolve operator refs before consuming ammunition', async () => {
+    const { prepareNativeShotgunAttack, prepareNativeShotgunDamageForTarget } = await native;
+    const f = fixture(20), operator = actor('operator'); operator.getRollData = () => ({ damage: { bonus: 3 } });
+    f.owner.getRollData = () => ({ damage: { bonus: 99 } });
+    f.item.flags['swade-tools'].sgDamageProfiles = {
+        shot: { short: '4d8', medium: '3d8+@damage.bonus', long: '2d8' },
+        slug: { short: '3d12', medium: '2d12', long: '1d12+@damage.bonus' }
+    };
+    const snapshot = structuredClone(f.item.flags);
+    const prepared = await prepareNativeShotgunAttack({ ...f.input, operator });
+    assert.equal(prepared.ok, true); assert.equal(prepared.damage, '3d8+3');
+    assert.equal(prepared.shotgunProfile.damage, '3d8+3'); assert.deepEqual(f.item.calls, [1]);
+    f.target.testRange = 120;
+    const slug = await prepareNativeShotgunDamageForTarget({ ...f.input, operator, mode: 'slug', target: f.target });
+    assert.equal(slug.ok, true); assert.equal(slug.rangeBand, 'extreme'); assert.equal(slug.damage, '1d12+3');
+    assert.equal(f.item.calls.length, 1); assert.deepEqual(f.item.flags, snapshot); assert.equal(f.item.system.damage, '9d4');
+});
+
+test('invalid selected damage and missing or unsafe actor refs fail before any resource side effects', async () => {
+    const { prepareNativeShotgunAttack, prepareNativeShotgunDamageForTarget } = await native;
+    for (const damage of ['not a roll', '3d6+@missing', '3d6+@constructor.name', '3d6+@damage.object']) {
+        const f = fixture(); f.owner.getRollData = () => ({ damage: { object: {} } });
+        f.item.flags['swade-tools'].sgDamageProfiles = { shot: { short: damage } };
+        let validated = 0, guarded = 0;
+        const runtime = { resource: { validate: () => { validated++; return { ok: true }; } },
+            automationGuard: () => { guarded++; throw new Error('must not reach resource guard'); } };
+        const result = await prepareNativeShotgunAttack(f.input, runtime);
+        assert.equal(result.ok, false, damage); assert.match(result.reason, /Shotgun damage/);
+        assert.equal(validated, 0); assert.equal(guarded, 0); assert.equal(f.item.calls.length, 0);
+        assert.equal((await prepareNativeShotgunDamageForTarget({ ...f.input, target: f.target })).ok, false);
+    }
+});
+
+test('native Shotgun damage validates converted dice syntax before ammo and normalizes uppercase dice', async () => {
+    const { prepareNativeShotgunAttack } = await native;
+    const f = fixture(), seen = [];
+    f.item.flags['swade-tools'].sgDamageProfiles = { shot: { short: 'max(1,2)' } };
+    const RollClass = { validate: formula => { seen.push(formula); return formula === '+1' || formula === 'max(1,2)'; } };
+    const failed = await prepareNativeShotgunAttack(f.input, { RollClass });
+    assert.equal(failed.ok, false); assert.match(failed.reason, /Shotgun damage/);
+    assert.deepEqual(f.item.calls, []); assert.deepEqual(seen, ['+1', 'max(1,2)', 'ma(1,2)']);
+    f.item.flags['swade-tools'].sgDamageProfiles.shot.short = '4D8+2';
+    const prepared = await prepareNativeShotgunAttack(f.input);
+    assert.equal(prepared.ok, true); assert.equal(prepared.damage, '4d8+2');
+    assert.equal(prepared.shotgunProfile.damage, '4d8+2'); assert.deepEqual(f.item.calls, [1]);
+});
+
 test('profile application preserves mode/source/target flags but adds attack bonus only to attacks', async () => {
     const { prepareNativeShotgunAttack, applyNativeShotgunProfile } = await native, f = fixture();
     const prepared = await prepareNativeShotgunAttack(f.input), roll = rollStub();

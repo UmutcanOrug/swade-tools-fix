@@ -37,9 +37,11 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeResourceService.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackDialog.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAnimationService.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/WeaponDamageModifier.js")),
 };
 const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
-  playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack} = aoeServices;
+  playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
+  prepareWeaponDamageModifier} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -199,12 +201,21 @@ const setup = macroScope.attackSetup ? {...macroScope.attackSetup} : await showA
   }),
 });
 if (!setup) return;
+if (setup.theDrop !== undefined && typeof setup.theDrop !== "boolean") {
+  return ui.notifications.warn("The Drop must be a checkbox value. Reopen the AoE attack panel.");
+}
+// A signed RoF candidate already includes its common +4 attack modifier. Its
+// projectile still needs the separate +4 damage bonus, but never +4 attack again.
+const theDropAttackBonus = !poolAttack && setup.theDrop === true ? 4 : 0;
+const theDropDamageBonus = setup.theDrop === true ? 4 : 0;
 const otherModifierFormula = String(setup.otherModifierFormula ?? setup.otherModifier ?? 0).trim() || "0";
 if (!poolAttack && !validateAttackFormula(otherModifierFormula)) return;
 const rawDamageModifier = String(setup.damageModifier ?? "").trim();
-if (rawDamageModifier && !validateAttackFormula(rawDamageModifier)) return;
-const extraDamageModifier = rawDamageModifier && typeof Roll.replaceFormulaData === "function"
-  ? Roll.replaceFormulaData(rawDamageModifier,rollData) : rawDamageModifier;
+const preparedDamageModifier = prepareWeaponDamageModifier(rawDamageModifier, actingActor, {RollClass: Roll});
+if (!preparedDamageModifier.ok) return ui.notifications.warn(preparedDamageModifier.reason);
+const extraDamageModifier = [preparedDamageModifier.formula,
+  theDropDamageBonus ? String(theDropDamageBonus) : ""].filter(Boolean)
+  .map((formula, _index, values) => values.length > 1 ? `(${formula})` : formula).join("+");
 // Like the native Mod. field, allow dice and @data expressions. Evaluate this
 // attack-only modifier once, before ammunition; it stays fixed on Benny rerolls.
 const otherModifierRoll = poolAttack || Number.isFinite(Number(otherModifierFormula)) ? null :
@@ -397,6 +408,7 @@ const baseThrowModifier = poolAttack ? Number(poolAttack.baseModifier) + rangePe
   Number(itemModifierRoll?.total ?? 0) +
   Number(preparedModifierRoll?.total ?? 0) +
   trademarkModifier +
+  theDropAttackBonus +
   Number(setup.otherModifier ?? 0);
 
 const traitSides = Number(attackSkill.system.die?.sides ?? 4);
@@ -785,6 +797,7 @@ const renderGrenadeThrowContent = async () => {
     ["Range", rangePenalty], ["Wounds", woundPenalty], ["Fatigue", fatiguePenalty],
     ["Skill", skillModifier], ["Item", Number(itemModifierRoll?.total ?? 0)],
     ["Trademark", trademarkModifier], ["Effects", Number(preparedModifierRoll?.total ?? 0)],
+    ["The Drop", theDropAttackBonus],
     ["Other", Number(setup.otherModifier ?? 0)], ["Benny", Number(bennyModifierRoll?.total ?? 0)],
   ].filter(([, value]) => value !== 0).map(([label, value]) => `${label} ${signed(value)}`).join(", ");
   const preparedEffectsSummary = (poolAttack ? [] : preparedAttackModifiers).map((modifier) =>

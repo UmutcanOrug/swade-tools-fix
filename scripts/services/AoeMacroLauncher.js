@@ -3,6 +3,7 @@ import { aoeResource } from './AoeResourceService.js';
 import * as profile from './AoeAttackProfile.js';
 import { showAoeAttackDialog } from './AoeAttackDialog.js';
 import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
+import { nativeWeaponDamageFormula, prepareWeaponDamageModifier } from './WeaponDamageModifier.js';
 
 // Keep the filename used by existing grenade actions and macro references.
 const AOE_SCRIPT_PATH =
@@ -146,6 +147,7 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
             findAoeActorToken(weaponActor),
         aoeResource,
         aoeServices: { ...profile, aoeResource,
+            nativeWeaponDamageFormula, prepareWeaponDamageModifier,
             showAoeAttackDialog: context => showAoeAttackDialog({ ...context,
                 token: scope.token, restoreLast: scope.restoreLast }),
             playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack }

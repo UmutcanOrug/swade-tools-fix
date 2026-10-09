@@ -1,6 +1,10 @@
 import {
-    canEnableShotgunRules, getShotgunSettings, setShotgunEnabled, saveShotgunSettings
+    canEnableShotgunRules, getShotgunSettings, getShotgunDamageProfiles, setShotgunEnabled, saveShotgunSettings
 } from './ShotgunRules.js';
+
+const escapeAttribute = value => String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+})[character]);
 
 const asElement = html => {
     // Native V13 <form> elements also expose indexed controls at html[0].
@@ -12,28 +16,43 @@ const canEdit = (sheet, item) => Boolean(item?.isOwner && sheet?.isEditable !== 
 export const showShotgunItemSettings = async item => {
     if (!canEnableShotgunRules(item) || !item.isOwner) return;
     const settings = getShotgunSettings(item);
+    const damageProfiles = getShotgunDamageProfiles(item);
     try {
         const result = await foundry.applications.api.DialogV2.prompt({
             window: { title: `${item.name} - Shotgun Settings` },
-            position: { width: 480 },
+            position: { width: 500 },
             content: `<div class="standard-form">
-                <p class="hint">Uses the weapon's native Trait and leaves its Trait Modifier and Damage unchanged. Shot / Slug is selected in the attack panel.</p>
+                <fieldset>
+                    <legend>Damage by Range</legend>
+                    <table style="margin:0">
+                        <thead><tr><th>Ammunition</th><th>Short</th><th>Medium</th><th>Long</th></tr></thead>
+                        <tbody>${['shot', 'slug'].map(mode => `<tr><th>${mode === 'shot' ? 'Shot' : 'Slug'}</th>${['short', 'medium', 'long'].map(band =>
+                            `<td><input type="text" name="sg${mode === 'shot' ? 'Shot' : 'Slug'}${band[0].toUpperCase()}${band.slice(1)}" value="${escapeAttribute(damageProfiles[mode][band])}" aria-label="${mode === 'shot' ? 'Shot' : 'Slug'} ${band} damage" required></td>`
+                        ).join('')}</tr>`).join('')}</tbody>
+                    </table>
+                    <p class="hint">Slug uses Long damage at Extreme range. Shot cannot reach Extreme.</p>
+                </fieldset>
                 <div class="form-group">
                     <label>Double-barrel weapon</label>
                     <div class="form-fields"><input name="sgDoubleBarrel" type="checkbox" ${settings.doubleBarrel ? 'checked' : ''}></div>
-                    <p class="hint">Allows Both Barrels: one Shot attack against one target, +4 damage and two shells. Requires Rate of Fire 1.</p>
+                    <p class="hint">Both Barrels: +4 damage, two shells, one target, Rate of Fire 1.</p>
                 </div>
                 <div class="form-group">
                     <label>Shot +2 already included in Trait Modifier</label>
                     <div class="form-fields"><input name="sgBonusIncluded" type="checkbox" ${settings.bonusIncluded ? 'checked' : ''}></div>
-                    <p class="hint">Enable only if this weapon's native Trait Modifier already includes the +2 Shot bonus. Shot adds no extra +2, and Slug removes that preincluded +2. Other modifiers are preserved.</p>
+                    <p class="hint">Avoids adding Shot +2 twice. Slug removes this preincluded bonus.</p>
                 </div>
             </div>`,
             ok: {
                 label: 'Save Settings',
                 callback: (_event, button) => ({
                     doubleBarrel: button.form.elements.sgDoubleBarrel.checked,
-                    bonusIncluded: button.form.elements.sgBonusIncluded.checked
+                    bonusIncluded: button.form.elements.sgBonusIncluded.checked,
+                    damageProfiles: Object.fromEntries(['shot', 'slug'].map(mode => [mode,
+                        Object.fromEntries(['short', 'medium', 'long'].map(band => [band,
+                            button.form.elements[`sg${mode === 'shot' ? 'Shot' : 'Slug'}${band[0].toUpperCase()}${band.slice(1)}`]?.value ?? damageProfiles[mode][band]
+                        ]))
+                    ]))
                 })
             },
             rejectClose: false,
@@ -44,7 +63,8 @@ export const showShotgunItemSettings = async item => {
         ui.notifications.info('Shotgun settings saved.');
     } catch (error) {
         console.error('SWADE Tools | Shotgun settings could not be saved', error);
-        ui.notifications.error('The Shotgun settings could not be saved. Check item ownership and try again.');
+        ui.notifications.error(/^(Shot|Slug) (short|medium|long) damage:/.test(error?.message ?? '')
+            ? error.message : 'The Shotgun settings could not be saved. Check item ownership and try again.');
     }
 };
 
@@ -86,10 +106,7 @@ export const bindShotgunItemSheetControl = (sheet, html) => {
         checkbox.dataset.swadeToolsShotgunEnabled = '';
         checkbox.setAttribute('aria-label', 'Enable Shotgun Rules');
         label.prepend(checkbox);
-        const hint = document.createElement('p');
-        hint.className = 'hint notes';
-        hint.textContent = 'Requires the world setting Experimental Unified RoF. Adds Shot / Slug options to the weapon attack panel. Shot uses +2 and range-based damage; Slug uses 2d10 without the Shot bonus. No rules are inferred from the weapon name.';
-        group.append(label, createSettingsButton(sheet, item), hint);
+        group.append(label, createSettingsButton(sheet, item));
         const host = root.querySelector('.tab[data-tab="properties"], .tab[data-tab="details"], section[data-tab="properties"]') ??
             root.querySelector('form') ?? root;
         host.prepend(group);

@@ -3,7 +3,35 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Last settings and experimental unified RoF (2.1.12)
+## Compact weapon controls and custom Shotgun damage (2.1.13)
+
+Weapon panels have separate **Mod.** (attack) and **Damage Mod.** fields.
+Damage Mod. is retained for native target damage and Benny rerolls and does not
+affect the attack. Shared checkboxes form one right-hand vertical stack:
+Raise Damage, Recoil, **The Drop**, **Ammunition**. The Drop works for single
+fire, RoF and AoE, adding +4 attack/+4 damage once, including Benny rerolls.
+There is no manual Vulnerable checkbox; automatic target detection remains.
+**Ammunition**
+starts checked on a fresh panel; uncheck it to fire without spending ammunition.
+AoE uses its configured Ammo/Item/None resource mode. Shift restores the last
+manual damage and consumption settings, not Raise Damage or resource counts.
+Internal damage-only dialogs keep their existing automation bridge.
+
+With Experimental Unified RoF enabled, normal clicks select the weapon's own
+highest RoF (3 starts at 3, 1 at 1). Shift restores the previous selected RoF.
+Rapid Fire still offers its optional higher value but does not select it by
+default. There is no Attack Options foldout. Review, whole-pool Benny choice
+and target assignment use Foundry's native light parchment theme, regardless
+of the global app theme.
+
+Properties keep the Shotgun/AoE checkboxes and gears without long paragraphs.
+**Shotgun Settings → Damage by Range** has separate Short/Medium/Long fields
+for both Shot and Slug. Defaults remain 3d6/2d6/1d6 and 2d10/2d10/2d10.
+Slug uses the Long formula at Extreme range; Shot still cannot reach Extreme.
+Custom formulas are checked before resource consumption and never overwrite
+the weapon's native Damage field.
+
+## Last settings and experimental unified RoF (2.1.12+)
 
 Normal weapon clicks open a clean panel. **Shift + left-click** on its name,
 image or AoE explosion icon restores the last submitted manual values without
@@ -12,12 +40,13 @@ source token, item and operator. Refresh clears it. Raise Damage, targets,
 wounds, fatigue, range results and ammunition counts are never remembered.
 
 The GM can enable **Experimental Unified RoF** in SWADE Tools world settings.
-It is **off by default**; leaving it off preserves the previous panels.
+It is **off by default**; leaving it off preserves the separate RoF workflow.
 When enabled, the normal compact weapon panel has a RoF selector, Recoil and
-closed Attack Options. RoF 1 uses native single fire; RoF 2+ keeps the existing
+inline damage/ammunition controls. RoF 1 uses native single fire; RoF 2+ keeps the existing
 whole-pool Benny review and target assignment, without a second setup window.
 Rapid Fire extends the selector for Shooting only. Additional action buttons
-retain their native behavior. Turning the setting off restores the old panels.
+retain their native behavior. Turning the setting off restores separate RoF
+setup, while the common Damage Mod./The Drop/Ammunition controls remain.
 
 ### Opt-in Shotgun Rules
 
@@ -25,8 +54,10 @@ In weapon Properties, enable **Enable Shotgun Rules** and open its gear.
 The experimental world setting above must also be enabled. Set the native
 Trait, Short/Medium/Long ranges and ammunition fields first.
 
-- Shot adds +2 attack and uses 3d6/2d6/1d6 at Short/Medium/Long, with no Extreme.
-- Slug uses 2d10 without the Shot bonus and supports Extreme range.
+- Shot adds +2 attack and defaults to 3d6/2d6/1d6 at Short/Medium/Long, with no Extreme.
+- Slug defaults to 2d10 without the Shot bonus and supports Extreme range.
+- Configure Shot and Slug damage for each range in Shotgun Settings. Slug
+  uses Long damage at Extreme range.
 - If Trait Modifier already includes +2 Shot, explicitly enable **Shot +2
   already included in Trait Modifier** to prevent duplicate bonuses.
 - Enable **Double-barrel weapon** only when appropriate. Supported Both Barrels

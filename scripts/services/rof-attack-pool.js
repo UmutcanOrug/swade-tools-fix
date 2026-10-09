@@ -24,6 +24,10 @@ const ROF_AMMO_COST = Object.freeze({
   6: 50,
 });
 
+// Match the classic SWADE Tools weapon panel without changing the user's
+// global Foundry theme or the DialogV2 workflow and button callbacks.
+const ROF_DIALOG_CLASSES = ["swadetools-rof-dialog", "themed", "theme-light"];
+
 const CALLED_SHOT_ATTACK_PENALTY = Object.freeze({
   None: 0,
   Torso: 0,
@@ -279,6 +283,7 @@ if (hasInlineSetup) {
 } else {
 try {
   setup = await foundry.applications.api.DialogV2.prompt({
+    classes: ROF_DIALOG_CLASSES,
     window: { title: "SWADE RoF Attack Pool" },
     position: { width: 520 },
     content: `
@@ -327,17 +332,6 @@ try {
           </div>
           <p class="hint">
             Adds +4 to every attack die and +4 to every assigned damage roll.
-          </p>
-        </div>
-
-        <div class="form-group">
-          <label>Treat Targets as Vulnerable</label>
-          <div class="form-fields">
-            <input name="forceVulnerable" type="checkbox">
-          </div>
-          <p class="hint">
-            Adds +2 against every target. Existing Vulnerable statuses are
-            detected automatically even when this is not checked.
           </p>
         </div>
 
@@ -406,8 +400,7 @@ try {
         rof: button.form.elements.rof.valueAsNumber,
         recoil: button.form.elements.recoil.checked,
         theDrop: button.form.elements.theDrop.checked,
-        forceVulnerable:
-          button.form.elements.forceVulnerable.checked,
+        forceVulnerable: false,
         otherModifier:
           button.form.elements.otherModifier.valueAsNumber || 0,
         calledShot: button.form.elements.calledShot.value,
@@ -881,10 +874,16 @@ const theDropDamageBonus = setup.theDrop === true ? 4 : 0;
 const inlineModifierRolls = [];
 const inlineModifierEntries = [];
 const inlineRollData = hasInlineSetup ? actingActor.getRollData?.() ?? {} : {};
+const shotgunDamageByRange = new Map();
+let preparedInlineDamageModifier = '';
 const validateInlineFormula = (formula) => {
-  const missing = [...formula.matchAll(/@([A-Za-z0-9_.]+)/g)]
-    .find(([, reference]) => foundry.utils.getProperty(inlineRollData, reference) === undefined);
-  if (missing) throw new Error(`Unavailable roll field: @${missing[1]}.`);
+  for (const [, reference] of formula.matchAll(/@([A-Za-z0-9_.]+)/g)) {
+    const value = foundry.utils.getProperty(inlineRollData, reference);
+    if (reference.split('.').some(part => !part || ['__proto__','constructor','prototype'].includes(part)) ||
+      value === undefined || value === null || typeof value === 'object') {
+      throw new Error(`Unavailable roll field: @${reference}.`);
+    }
+  }
   const resolved = typeof Roll.replaceFormulaData === "function"
     ? Roll.replaceFormulaData(formula, inlineRollData) : formula;
   if (typeof Roll.validate === "function" && !Roll.validate(resolved)) {
@@ -904,6 +903,15 @@ const evaluateInlineModifier = async (label, formula) => {
   if (!Number.isFinite(value)) throw new Error("A modifier did not produce a finite total.");
   if (value) inlineModifierEntries.push({label, formula:expression, value});
   return value;
+};
+const prepareInlineDamageFormula = formula => {
+  validateInlineFormula(formula);
+  const resolved=String(typeof Roll.replaceFormulaData==='function'
+    ? Roll.replaceFormulaData(formula,inlineRollData) : formula).replace(/D(?=\d)/g,'d');
+  if (!Roll.validate(rofServices.nativeWeaponDamageFormula(resolved))) {
+    throw new Error('This damage formula is not supported by native SWADE Tools.');
+  }
+  return resolved;
 };
 let otherModifier = Number(setup.otherModifier ?? 0);
 let inlinePreparedModifier = 0;
@@ -925,6 +933,18 @@ if (hasInlineSetup) {
       ...preparedModifiers.map((modifier) => String(modifier.value))].filter(Boolean)) {
       validateInlineFormula(formula);
     }
+    if (setup.damageModifier) preparedInlineDamageModifier=prepareInlineDamageFormula(setup.damageModifier);
+    if (isInlineShotgun) {
+      // Validate and freeze the selected ammunition profile before any attack
+      // dice, Benny or ammo. Damage dice remain unrolled until each hit.
+      for (const rangeBand of ['short','medium','long','extreme']) {
+        const formula=rofServices.getShotgunDamage(weapon, {
+          mode:shotgunProfile.mode,bothBarrels:false,rangeBand,
+        });
+        if (!formula) continue;
+        shotgunDamageByRange.set(rangeBand,prepareInlineDamageFormula(formula));
+      }
+    }
     otherModifier = await evaluateInlineModifier("Mod.", setup.otherModifierFormula);
     for (const modifier of preparedModifiers) {
       inlinePreparedModifier += await evaluateInlineModifier(String(modifier.label ?? "Effect"), modifier.value);
@@ -943,9 +963,7 @@ const calledShotPenalty =
   CALLED_SHOT_ATTACK_PENALTY[calledShot];
 // Native SWADE Tools accepts resolved formulas, not raw @data references.
 // Resolve data here without rolling damage dice; each target rolls its own.
-const damageModifier = hasInlineSetup && typeof Roll.replaceFormulaData === "function"
-  ? Roll.replaceFormulaData(String(setup.damageModifier ?? "").trim(),inlineRollData)
-  : String(setup.damageModifier ?? "").trim();
+const damageModifier = hasInlineSetup ? preparedInlineDamageModifier : String(setup.damageModifier ?? "").trim();
 const commonModifier =
   woundPenalty +
   fatiguePenalty +
@@ -1151,6 +1169,7 @@ const reviewAttackPool = async (pool, statusText) => {
       : "No available Benny source. Continue with this pool.";
 
   return foundry.applications.api.DialogV2.wait({
+    classes: ROF_DIALOG_CLASSES,
     window: {
       title: `${weapon.name} - Review RoF Attack Pool`,
     },
@@ -1190,6 +1209,7 @@ const reviewAttackPool = async (pool, statusText) => {
 
 const chooseBennyPool = async (previousPool, rerolledPool) =>
   foundry.applications.api.DialogV2.wait({
+    classes: ROF_DIALOG_CLASSES,
     window: {
       title: `${weapon.name} - Choose Benny Result`,
     },
@@ -1949,11 +1969,10 @@ const collectTargetAttackProfile = (targetToken) => {
     ignoredMods,
     isProne,
     isVulnerable,
-    ...(isInlineShotgun ? {shotgunDamage:rofServices.getShotgunDamage(weapon, {
-      mode:shotgunProfile.mode,bothBarrels:false,
-      rangeBand:!weaponRangeBands || distance > weaponRangeBands.long ? "extreme" :
+    ...(isInlineShotgun ? {shotgunDamage:shotgunDamageByRange.get(
+      !weaponRangeBands || distance > weaponRangeBands.long ? "extreme" :
         distance > weaponRangeBands.medium ? "long" : distance > weaponRangeBands.short ? "medium" : "short",
-    })} : {}),
+    )} : {}),
   };
 };
 
@@ -2108,6 +2127,7 @@ const assignmentRows = usableResults.map((result, index) => {
 let assignments;
 try {
   assignments = await foundry.applications.api.DialogV2.prompt({
+    classes: ROF_DIALOG_CLASSES,
     window: { title: `${weapon.name} - Assign RoF Results` },
     position: { width: 940 },
     content: `

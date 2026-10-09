@@ -28,6 +28,7 @@ const loadServices = async () => ({
   ...await import(pathToFileURL(path.join(services, 'AoeAttackProfile.js'))),
   ...await import(pathToFileURL(path.join(services, 'AoeResourceService.js'))),
   ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
+  ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
 });
 
 // Execute the full bundled attack. Only the Foundry UI/documents and dice are
@@ -112,7 +113,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     Hooks.on('swadeAction', (_actor, item) => automaticAnimation(item, 'damage'));
   }
   class MockRoll {
-    static validate(formula) { return /^[\d() dx+\-]+$/.test(formula); }
+    static validate(formula) { return /^[\d() dx+\-]+$/.test(formula) || /^max\(\d+,\d+\)$/.test(formula); }
     static replaceFormulaData(formula, data) {
       return formula.replace(/@([A-Za-z0-9_.]+)/g, (_match, reference) =>
         String(reference.split('.').reduce((value,key)=>value?.[key],data) ?? 0));
@@ -163,18 +164,20 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     i18n: {localize: key => key.split('.').at(-1)},
     swadetools: {async item(actualOwner, id, operator, options) {
       nativeCalls.push({actualOwner, id, operator, options});
-      const raiseCheckbox = {checked: false}, actionSelect = {options: Object.keys(additional).map(value => ({value})), value: ''};
+      const raiseCheckbox = {checked: false}, modifierInput = {value: ''},
+        actionSelect = {options: Object.keys(additional).map(value => ({value})), value: ''};
       const main = {dataset: {button: 'mainDamage'}, textContent: 'Damage', click() {
         emit('swadeAction', operator, actualOwner.items.get(id), 'damage', {total: 1}, 'gm');
         const message = {id: `damage-${++nextId}`, flags: {'swade-tools': {rolltype: 'damage', itemroll: id}},
           updateSource(change) { this.targets = change['flags.swade-tools.usetarget']; }};
         emit('preCreateChatMessage', message, {flags: message.flags}, {}, 'gm');
-        message.raise = raiseCheckbox.checked; message.action = actionSelect.value;
+        message.raise = raiseCheckbox.checked; message.action = actionSelect.value; message.modifier = modifierInput.value;
         messages.set(message.id, message); nativeCards.push(message);
       }};
       const buttons = [...(damage ? [main] : []), ...Object.keys(additional).map(key => ({...main, textContent: additional[key].name, dataset: {button: key}}))];
       const dom = {querySelectorAll: () => buttons,
-        querySelector: selector => selector === '#raise' ? raiseCheckbox : selector === '#actiondmg' ? actionSelect : null};
+        querySelector: selector => selector === '#raise' ? raiseCheckbox : selector === '#actiondmg' ? actionSelect :
+          selector === '#mod' ? modifierInput : null};
       emit('renderDialog', {title: name}, dom);
     }},
   };
@@ -469,14 +472,14 @@ test('native-style AoE panel keeps English item data, textual Mod, ordinary modi
   try {
     const answer = showAoeAttackDialog(context,{DialogClass:FakeDialog,addModifierButtons:()=>modifierButtons++});
     assert.deepEqual(options.classes,['dialog swadetools-vertical']);
-    for (const text of ['swadetools-dialog-item','Damage:','AP:','Range:','Shots:','RoF:','Medium Blast Template','Other Modifiers','Multi-Action Penalty','Cover:','Illumination:','Consume Ammunition']) assert.ok(config.content.includes(text),text);
+    for (const text of ['swadetools-dialog-item','Damage:','AP:','Range:','Shots:','RoF:','Medium Blast Template','Other Modifiers','Multi-Action Penalty','Cover:','Illumination:','Ammunition','Damage Mod.']) assert.ok(config.content.includes(text),text);
     assert.match(config.content,/type="text" id="mod"/);
     assert.ok(!/name="attackSkill"|name="operator"|name="grenadeId"|Called Shot|Raise Damage|Use Result/.test(config.content));
     assert.equal(config.buttons.attack.label,'Gunnery / AoE');
     assert.equal(config.buttons.cancel.label,'Cancel'); assert.equal(config.buttons.reload.label,'Reload');
     assert.equal(modifierButtons,1);
     config.buttons.attack.callback(form);config.close();
-    assert.deepEqual(await answer,{otherModifierFormula:'+1d6',situationalModifier:-8,consume:true,
+    assert.deepEqual(await answer,{otherModifierFormula:'+1d6',damageModifier:'',theDrop:false,situationalModifier:-8,consume:true,
       modifierParts:{modifier:'+1d6',multiAction:-2,cover:-4,illumination:-2}});
     const reload = showAoeAttackDialog(context,{DialogClass:FakeDialog,addModifierButtons:()=>{}});
     await config.buttons.reload.callback();config.close();
@@ -678,12 +681,12 @@ test('attack panel has one context-dependent consume checkbox and none mode cann
   try {
     const itemContent=buildAoeAttackDialogContent(context);
     assert.equal((itemContent.match(/id="aoe-consume"/g)??[]).length,1);
-    assert.match(itemContent,/<strong>Consume Item<\/strong>/);assert.match(itemContent,/Items per Attack: 1/);
+    assert.match(itemContent,/id="aoe-consume" checked>Consume Item<\/label>/);assert.doesNotMatch(itemContent,/per Attack:|class="hint"/);
     assert.ok(!itemContent.includes('<strong>Consume Ammunition</strong>'));
     const noneContext={...context,settings:{...context.settings,consumeMode:'none',consume:false}};
     const noneContent=buildAoeAttackDialogContent(noneContext);
     assert.match(noneContent,/id="aoe-consume" disabled/);
-    assert.match(noneContent,/Configure Consume Ammunition or Consume Item in AoE Settings/);
+    assert.doesNotMatch(noneContent,/Configure Consume Ammunition or Consume Item in AoE Settings/);
     const form={querySelector:id=>id==='#aoe-consume'?{checked:true}: {value:'0'}};
     assert.equal(readAoeAttackDialogValues(form,{consumeMode:'none'}).consume,false);
     let config;
@@ -801,5 +804,51 @@ test('last consumable in Consume Item mode can become quantity zero while its pr
   assert.equal(s.owner.items.get(s.weapon.id),s.weapon);
   assert.equal(s.quantityUpdates,1);assert.equal(s.nativeCards.length,2);
   assert.ok(!s.events.includes('ammo'));
+});
+
+test('The Drop adds exactly +4 attack and +4 native damage to ordinary AoE and never stacks on Benny rerolls', async () => {
+  const s=await runAttack({dice:[6,4,9,5],panelValues:{otherModifierFormula:'0',
+    damageModifier:'',theDrop:true,situationalModifier:0,consume:true}});
+  assertCardTotal(s.cards[0].content,10);
+  assert.match(s.cards[0].content,/The Drop \+4/);
+  assert.equal(s.nativeCards.length,2);
+  assert.deepEqual(s.nativeCards.map(card=>card.modifier),['4','4']);
+  await rerollCurrentCard(s);
+  assertCardTotal(currentCard(s).content,13);
+  assert.equal(s.nativeCards.length,2,'Skill Benny does not create duplicate damage cards for an existing hit');
+  assert.equal(s.events.filter(event=>event==='ammo').length,1);
+  assert.equal(s.events.filter(event=>event==='template').length,1);
+  assert.equal(s.queue.length,0);
+});
+
+test('AoE damage data is frozen on submission and damage dice remain unrolled through skill Bennies', async () => {
+  const rollData={damageBonus:2};
+  const s=await runAttack({wildcard:false,dice:[1,4,8],rollData,panelValues:{
+    otherModifierFormula:'0',damageModifier:'@damageBonus+1D4',theDrop:true,
+    situationalModifier:0,consume:true}});
+  assert.equal(s.nativeCards.length,0);
+  assert.deepEqual(s.events.filter(event=>event.startsWith('roll:')),['roll:1d10x','roll:1d6']);
+  rollData.damageBonus=99;
+  await rerollCurrentCard(s);
+  assertCardTotal(currentCard(s).content,12);
+  assert.deepEqual(s.nativeCards.map(card=>card.modifier),['(2+1d4)+(4)','(2+1d4)+(4)']);
+  assert.deepEqual(s.events.filter(event=>event.startsWith('roll:')),['roll:1d10x','roll:1d6','roll:1d10x']);
+  assert.equal(s.events.filter(event=>event==='ammo').length,1);
+  assert.equal(s.queue.length,0);
+});
+
+test('AoE rejects invalid Damage Mod and native-incompatible formulas before resources, placement or dice', async () => {
+  for(const damageModifier of ['broken formula','@missing.damage','@constructor','max(1,2)']){
+    const s=await runAttack({panelValues:{otherModifierFormula:'0',damageModifier,
+      theDrop:true,situationalModifier:0,consume:true}});
+    assert.equal(s.cards.length,0);assert.equal(s.crosshairCalls,0);
+    assert.equal(s.weapon.system.currentShots,4);
+    assert.equal(s.nativeCards.length,0);
+    assert.ok(!s.events.some(event=>event==='ammo'||event.startsWith('roll:')));
+    assert.ok(s.notices.some(notice=>/Damage Mod/.test(notice.text)));
+  }
+  const invalidDrop=await runAttack({panelValues:{otherModifierFormula:'0',theDrop:'true',consume:true}});
+  assert.equal(invalidDrop.crosshairCalls,0);assert.equal(invalidDrop.cards.length,0);
+  assert.ok(!invalidDrop.events.some(event=>event==='ammo'||event.startsWith('roll:')));
 });
 }

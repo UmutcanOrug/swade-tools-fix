@@ -15,7 +15,7 @@ const fixture = () => {
     const context = { item, weaponOwner: owner, operatorActor: owner, token,
         attackSkill: { name: 'Gunnery' }, settings: { blastSize: 'medium', consume: true,
             consumeMode: 'ammo', ammoCost: 1, damageAction: '' }, resource: { label: 'Loaded ammunition', available: 2 } };
-    const fields = { mod: { value: '0' }, multiaction: { value: '0' }, cover: { value: '0' },
+    const fields = { mod: { value: '0' }, 'rof-damage-modifier': {value:''}, 'rof-drop':{checked:false}, multiaction: { value: '0' }, cover: { value: '0' },
         illumination: { value: '0' }, 'aoe-consume': { checked: true, disabled: false } };
     const form = { nodeType: 1, querySelector: selector => fields[selector.slice(1)], find: () => ({ each() {} }) };
     form[0] = fields.mod; // V13 native forms are indexed by their controls.
@@ -51,17 +51,17 @@ test('Shift AoE panel restores canonical native manual values only, requiring an
     const memory = await load('LastWeaponSettings.js'), { showAoeAttackDialog } = await load('AoeAttackDialog.js');
     memory.clearLastWeaponSettings(); const f = fixture(), key = memoryContext(memory, f.context);
     memory.saveLastWeaponSettings(key, { modifier: '1d6+@bonus', multiaction: '-4', cover: 'Medium',
-        illumination: 'Dark', consumeAmmo: false, rof: '3', damageModifier: '+2', raise: true });
+        illumination: 'Dark', consumeAmmo: false, rof: '3', damageModifier: '+2', drop:true, raise: true });
     const pending = showAoeAttackDialog({ ...f.context, restoreLast: true }, { DialogClass: f.FakeDialog, addModifierButtons() {} });
     assert.equal(f.fields.mod.value, '1d6+@bonus'); assert.equal(f.fields.multiaction.value, '-4');
     assert.equal(f.fields.cover.value, '-4'); assert.equal(f.fields.illumination.value, '-4');
     assert.equal(f.fields['aoe-consume'].checked, false); assert.match(f.config.content, /Last settings restored/);
     f.config.buttons.attack.callback(f.form);
-    assert.deepEqual(await pending, { otherModifierFormula: '1d6+@bonus', situationalModifier: -12, consume: false,
+    assert.deepEqual(await pending, { otherModifierFormula: '1d6+@bonus', damageModifier: '+2', theDrop: true, situationalModifier: -12, consume: false,
         modifierParts: { modifier: '1d6+@bonus', multiAction: -4, cover: -4, illumination: -4 } });
     const saved = memory.getLastWeaponSettings(key);
     assert.equal(saved.cover, 'Medium'); assert.equal(saved.illumination, 'Dark');
-    assert.equal(saved.rof, '1'); assert.equal(saved.recoil, false); assert.equal(saved.damageModifier, ''); assert.equal(saved.raise, undefined);
+    assert.equal(saved.rof, '1'); assert.equal(saved.recoil, false); assert.equal(saved.damageModifier, '+2'); assert.equal(saved.raise, undefined);
 });
 
 test('AoE attack stores raw manual values with canonical enums and no item/server writes', async () => {
@@ -74,7 +74,7 @@ test('AoE attack stores raw manual values with canonical enums and no item/serve
     f.config.buttons.attack.callback(f.form); await pending;
     assert.deepEqual(memory.getLastWeaponSettings(key), {
         modifier: '  +1d6  ', multiaction: '-2', cover: 'Heavy', illumination: 'Dim', consumeAmmo: false,
-        rof: '1', recoil: false, damageModifier: ''
+        rof: '1', recoil: false, damageModifier: '', drop: false
     });
     assert.deepEqual(f.item.flags, originalFlags); assert.deepEqual(f.item.system, originalSystem);
 });

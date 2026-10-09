@@ -43,7 +43,7 @@ export default class ItemRoll extends CharRoll{
 
                   
           
-           if (gb.realInt(action.resourcesUsed)>0){
+           if (this.consumeWeaponAmmunition!==false && gb.realInt(action.resourcesUsed)>0){
             this.useShots(action.resourcesUsed);
             } 
             
@@ -113,7 +113,28 @@ export default class ItemRoll extends CharRoll{
     }
 
     /// universal mods
+    setWeaponDamageModifier(formula){
+        this.weaponDamageModifier=String(formula ?? '').trim();
+        this.addFlag('weaponDamageModifier',this.weaponDamageModifier);
+    }
+
+    setConsumeAmmunition(consume){
+        // A weapon checkbox must not alter Power Point/arcane-device handling.
+        if (this.item?.type!=='weapon') return;
+        this.consumeWeaponAmmunition=consume!==false;
+        if (!this.consumeWeaponAmmunition) this.manageshots=false;
+    }
+
+    setWeaponTheDrop(enabled){
+        this.weaponTheDrop=enabled===true;
+        this.addFlag('weaponTheDrop',this.weaponTheDrop);
+    }
+
     addSkillMod(){
+        if (this.weaponTheDrop && !this.weaponTheDropAttackApplied){
+            this.addModifier(4,'The Drop');
+            this.weaponTheDropAttackApplied=true;
+        }
         this.addModifier(this.item.system.trademark,gb.trans('TrademarkWeapon.Label','SWADE'))
         this.addModifier(this.shotgunTraitModOverride ?? this.item.system.actions.traitMod,gb.trans('ModItem'));
         if (this.actor?.system?.stats?.globalMods?.attack && this.actor?.system?.stats?.globalMods?.attack.length > 0) {
@@ -124,6 +145,17 @@ export default class ItemRoll extends CharRoll{
     }
 
     addDmgMod(){
+        if (this.weaponTheDrop && !this.weaponTheDropDamageApplied){
+            this.addModifier(4,'The Drop');
+            this.weaponTheDropDamageApplied=true;
+        }
+        if (this.weaponDamageModifier && !this.weaponDamageModifierApplied){
+            // Use the native formula pipeline even for numeric modifiers; do
+            // not evaluate a formula as JavaScript or roll its dice early.
+            const modifier=this.addDiceModifier(`(${this.weaponDamageModifier})`);
+            this.reasons.push(`Damage Mod: ${modifier}`);
+            this.weaponDamageModifierApplied=true;
+        }
         this.addModifier(this.data.dmgMod,gb.trans('ModItem'));        
        
         if (this.actor?.system?.stats?.globalMods?.damage && this.actor?.system?.stats?.globalMods?.damage.length > 0) {

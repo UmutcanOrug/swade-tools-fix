@@ -1,6 +1,24 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.13
+
+- Removed long AoE/Shotgun Properties explanations and the Attack Options foldout.
+- Added separate inline Damage Mod. to weapon and AoE panels, with native
+  target damage/Benny preservation and no effect on attack totals.
+- Moved Raise Damage above Recoil; added checked-by-default Ammunition controls.
+  Unchecking skips consumption, including native single fire and extra actions.
+- Shared controls stack vertically on the right. The Drop works at every RoF
+  and on AoE, with +4 attack/+4 damage once; manual Vulnerable is removed.
+- Fresh unified panels select the weapon's own highest RoF. Shift remembers
+  the last selected RoF, manual damage modifier and consumption preference.
+- Shotgun Settings now save six independent Short/Medium/Long damage formulas
+  for Shot and Slug. Old items retain standard defaults; Slug Extreme uses Long.
+  Native single fire and pools validate damage formulas before ammo consumption.
+- RoF review, Benny whole-pool choice, assignment and legacy setup use native
+  light parchment styling without changing global theme or roll mechanics.
+- Default-off Experimental Unified RoF and existing AoE/Shotgun restrictions remain.
+
 ## 2.1.12
 
 - Shift + left-click restores raw manual weapon settings, isolated by local

@@ -96,6 +96,7 @@ test('V13 native indexed form gets one English Shotgun opt-in and gear in Proper
     const gear = properties.querySelector('[data-swade-tools-shotgun-settings]');
     assert.equal(gear.type, 'button'); assert.equal(gear.title, 'Shotgun Settings');
     assert.equal(gear.querySelector('i').className, 'fa-solid fa-gear');
+    assert.equal(properties.querySelector('[data-swade-tools-shotgun-item-option]').querySelector('p'), null);
     assert.equal(item.updates.length, 0);
 });
 
@@ -162,7 +163,11 @@ test('Shotgun Settings saves both capability flags without enabling rules or cha
     assert.match(options.content, /Shot \+2 already included in Trait Modifier/);
     assert.match(options.content, /Rate of Fire 1/);
     assert.equal(options.ok.label, 'Save Settings');
-    assert.deepEqual(item.updates, [{ 'flags.swade-tools.sgDoubleBarrel': true, 'flags.swade-tools.sgBonusIncluded': true }]);
+    assert.deepEqual(item.updates, [{ 'flags.swade-tools.sgDoubleBarrel': true, 'flags.swade-tools.sgBonusIncluded': true,
+        'flags.swade-tools.sgDamageProfiles': {
+            shot: { short: '3d6', medium: '2d6', long: '1d6' }, slug: { short: '2d10', medium: '2d10', long: '2d10' }
+        }
+    }]);
     assert.equal(item.getFlag('swade-tools', 'sgEnabled'), undefined);
     assert.deepEqual(item.system, originalSystem);
     assert.deepEqual(messages, [['info', 'Shotgun settings saved.']]);
@@ -176,6 +181,58 @@ test('canceled Settings has no writes and reopening reflects saved flags', async
     await showShotgunItemSettings(item);
     assert.match(options.content, /name="sgDoubleBarrel" type="checkbox" checked/);
     assert.match(options.content, /name="sgBonusIncluded" type="checkbox" checked/);
+    assert.equal(item.updates.length, 0);
+});
+
+test('settings show six configurable damage fields and save each independent range profile', async () => {
+    const { messages } = platform();
+    const { showShotgunItemSettings } = await load('ShotgunItemConfig.js');
+    const item = makeItem({ flags: { 'swade-tools': { sgDamageProfiles: {
+        shot: { short: '5d6', medium: '4d6', long: '3d6' },
+        slug: { short: '3d12', medium: '2d12', long: '1d12' }
+    } } } });
+    foundry.applications.api.DialogV2.prompt = async options => {
+        for (const [name, value] of [['sgShotShort','5d6'], ['sgShotMedium','4d6'], ['sgShotLong','3d6'],
+            ['sgSlugShort','3d12'], ['sgSlugMedium','2d12'], ['sgSlugLong','1d12']]) {
+            assert.match(options.content, new RegExp(`name="${name}" value="${value}"`));
+        }
+        assert.match(options.content, /Slug uses Long damage at Extreme range/);
+        return options.ok.callback(null, { form: { elements: {
+            sgDoubleBarrel: { checked: false }, sgBonusIncluded: { checked: false },
+            sgShotShort: { value: '4d8' }, sgShotMedium: { value: '3d8' }, sgShotLong: { value: '2d8' },
+            sgSlugShort: { value: '3d10' }, sgSlugMedium: { value: '2d10' }, sgSlugLong: { value: '1d10+4' }
+        } } });
+    };
+    await showShotgunItemSettings(item);
+    assert.deepEqual(item.updates[0]['flags.swade-tools.sgDamageProfiles'], {
+        shot: { short: '4d8', medium: '3d8', long: '2d8' },
+        slug: { short: '3d10', medium: '2d10', long: '1d10+4' }
+    });
+    assert.deepEqual(messages, [['info', 'Shotgun settings saved.']]);
+});
+
+test('invalid configured damage saves no flags and identifies the failing field in English', async () => {
+    const { messages } = platform();
+    const { showShotgunItemSettings } = await load('ShotgunItemConfig.js');
+    const item = makeItem();
+    foundry.applications.api.DialogV2.prompt = async options => options.ok.callback(null, { form: { elements: {
+        sgDoubleBarrel: { checked: true }, sgBonusIncluded: { checked: true }, sgSlugLong: { value: 'invalid damage' }
+    } } });
+    const originalError = console.error; console.error = () => {};
+    try { await showShotgunItemSettings(item); } finally { console.error = originalError; }
+    assert.equal(item.updates.length, 0);
+    assert.equal(messages.length, 1); assert.equal(messages[0][0], 'error');
+    assert.match(messages[0][1], /Slug long damage: Enter a valid damage roll formula/);
+});
+
+test('profile text is escaped in settings inputs even if malformed flags were imported', async () => {
+    platform();
+    const { showShotgunItemSettings } = await load('ShotgunItemConfig.js');
+    const item = makeItem({ flags: { 'swade-tools': { sgDamageProfiles: { shot: { short: '"><script>&bad</script>' } } } } });
+    let options; foundry.applications.api.DialogV2.prompt = async config => { options = config; return null; };
+    await showShotgunItemSettings(item);
+    assert.equal(options.content.includes('<script>'), false);
+    assert.match(options.content, /&quot;&gt;&lt;script&gt;&amp;bad&lt;\/script&gt;/);
     assert.equal(item.updates.length, 0);
 });
 

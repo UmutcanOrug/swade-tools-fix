@@ -86,6 +86,7 @@ async function signedPoolScope({vehicle = false, total = 7, modifier = 1,
         ...await import(pathToFileURL(path.join(services, 'AoeAttackProfile.js'))),
         ...await import(pathToFileURL(path.join(services, 'AoeResourceService.js'))),
         ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
+        ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
         isTrustedAoePoolAttack: module.isTrustedAoePoolAttack,
         showAoeAttackDialog() { throw new Error('A resolved pool must not open a second setup dialog'); },
     };
@@ -367,4 +368,16 @@ test('prefilled RoF1 AoE setup bypasses the second panel but retains its normal 
     assert.match(s.cards[0].content, /<div class="dice-total"[^>]*>6<\/div>/);
     assert.equal(s.nativeCards.length, 2);
     assert.ok(s.cards[0].content.includes('data-grenade-benny'));
+});
+
+test('signed AoE pool keeps its existing Drop attack bonus and adds the separate damage bonus once per target', async () => {
+    const poolScope=await signedPoolScope({total:6,modifier:4,
+        setup:{aoe:true,otherModifierFormula:'0',damageModifier:'+2',theDrop:true,consume:true}});
+    const s=await runAttack({poolScope,dice:[],currentShots:0});
+    assert.match(s.cards[0].content,/<div class="dice-total"[^>]*>10<\/div>/);
+    assert.equal(s.nativeCards.length,2);
+    assert.deepEqual(s.nativeCards.map(card=>card.modifier),['(+2)+(4)','(+2)+(4)']);
+    assert.equal(s.panelCalls,0);assert.equal(s.crosshairCalls,0);
+    assert.ok(!s.events.some(event=>event==='ammo'||event.startsWith('roll:')));
+    assert.equal(s.platform.__swadeGrenadeBennyRuntime.handlers.size,0);
 });
