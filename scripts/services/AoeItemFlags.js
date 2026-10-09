@@ -54,12 +54,29 @@ const readAmmoCost = item => {
     return Number.isSafeInteger(value) && value >= 1 ? value : 1;
 };
 
+export const getAoeConsumptionMode = item => {
+    const mode = readFlag(item, 'aoeConsumeMode');
+    if (['ammo','item','none'].includes(mode)) return mode;
+    if (readFlag(item, 'aoeConsume') === false) return 'none';
+    const owner = item?.actor ?? item?.parent;
+    if (owner?.type === 'vehicle') return 'ammo';
+    if (['gear','consumable'].includes(item?.type)) return 'item';
+    const trait = String(item?.system?.actions?.trait ?? '').trim().toLowerCase();
+    const handThrown = isLegacyGrenadeItem(item) && (
+        /throwable|thrown/i.test(String(item?.system?.category ?? '')) || trait === 'athletics'
+    );
+    return handThrown || item?.system?.reloadType === 'self' ? 'item' : 'ammo';
+};
+
 export const getAoeItemSettings = item => ({
-    skill: String(readFlag(item, 'aoeSkill') ?? item?.system?.actions?.trait ?? '').trim(),
+    // Use the same native Trait as normal SWADE Tools attacks. Old aoeSkill
+    // flags must not silently override a later change to the weapon's Trait.
+    skill: String(item?.system?.actions?.trait ?? '').trim(),
     blastSize: ['small', 'medium', 'large'].includes(readFlag(item, 'aoeBlastSize'))
         ? readFlag(item, 'aoeBlastSize')
         : ['small', 'medium', 'large'].find(size => item?.system?.templates?.[size]) ?? 'medium',
-    consume: readFlag(item, 'aoeConsume') !== false,
+    consumeMode: getAoeConsumptionMode(item),
+    consume: getAoeConsumptionMode(item) !== 'none',
     damageAction: String(readFlag(item, 'aoeDamageAction') ?? ''),
     ammoCost: readAmmoCost(item)
 });
@@ -73,23 +90,28 @@ export const saveAoeItemSettings = async (item, settings) => {
     }
     const ammoCost = Number(settings?.ammoCost ?? 1);
     if (!Number.isSafeInteger(ammoCost) || ammoCost < 1) {
-        throw new Error('Ammo per Attack must be a positive whole number.');
+        throw new Error('Uses per Attack must be a positive whole number.');
     }
     const damageAction = String(settings.damageAction ?? '');
     if (damageAction && item.system?.actions?.additional?.[damageAction]?.type !== 'damage') {
         throw new Error('The selected damage action is no longer available.');
     }
+    const consumeMode = settings.consumeMode ?? (settings.consume === false ? 'none' : getAoeConsumptionMode(item));
+    if (!['ammo','item','none'].includes(consumeMode)) {
+        throw new Error('Choose a valid resource consumption mode.');
+    }
     const saved = {
-        skill: String(settings.skill ?? '').trim(),
+        skill: String(item?.system?.actions?.trait ?? '').trim(),
         blastSize: settings.blastSize,
-        consume: Boolean(settings.consume),
+        consumeMode,
+        consume: consumeMode !== 'none',
         damageAction,
         ammoCost
     };
     await item.update({
-        'flags.swade-tools.aoeSkill': saved.skill,
         'flags.swade-tools.aoeBlastSize': saved.blastSize,
         'flags.swade-tools.aoeConsume': saved.consume,
+        'flags.swade-tools.aoeConsumeMode': saved.consumeMode,
         'flags.swade-tools.aoeDamageAction': saved.damageAction,
         'flags.swade-tools.aoeAmmoCost': saved.ammoCost
     });

@@ -3,10 +3,13 @@ import * as gb from './../gb.js';
 import ItemRoll from './ItemRoll.js';
 import Char from './Char.js';
 import launchRofMacro from '../services/RofMacroLauncher.js';
+import launchAoeMacro from '../services/AoeMacroLauncher.js';
+import { isAoeItem } from '../services/AoeItemFlags.js';
 
 export default class ItemDialog {
     constructor(actor,itemId,operator=null,options={}){
         this.item=actor.items.get(itemId);
+        this.weaponActor=actor;
         this.damageOnly=options.damageOnly===true;
      //   this.vehicle=false;
        
@@ -17,7 +20,7 @@ export default class ItemDialog {
             actor=operator ??
                 actor.system?.getCrewMemberForWeapon?.(this.item) ??
                 actor.system?.operator ??
-                gb.getDriver(actor);
+                (isAoeItem(this.item) && !this.damageOnly ? null : gb.getDriver(actor));
          //   console.log(actor);
         }
 
@@ -122,6 +125,14 @@ export default class ItemDialog {
     }
 
     showDialog(){
+        // All normal item entry points share this dialog. Opted-in weapons use
+        // the AoE attack panel; internal native damage calls bypass the route.
+        if (!this.damageOnly && isAoeItem(this.item)){
+            return launchAoeMacro(this.weaponActor,this.item,{
+                operatorActor:this.actor?.type!=='vehicle' ? this.actor : null,
+                promptAoeSetup:true
+            });
+        }
         
       //  let actor=this.sheet.actor;
         let item=this.item;

@@ -51,6 +51,36 @@ test('legacy hand grenade consumes one quantity but not extra ammunition', async
     assert.equal(grenade.system.quantity, 2); assert.equal(grenade.system.currentShots, 0);
     assert.equal(grenade.calls.length, 1); assert.equal(grenade.calls[0][0], 'update');
 });
+test('explicit Consume Item reduces only item quantity, including custom-named grenades, once', async () => {
+    const {aoeResource}=await service;
+    const actor=owner('character'), grenade=makeWeapon(actor,{quantity:3,currentShots:8,actions:{trait:'Athletics'}});
+    grenade.name='Custom explosive';
+    const result=await aoeResource.spend(grenade,actor,{mode:'item',ammoManagement:true});
+    assert.equal(result.source,'quantity'); assert.equal(grenade.system.quantity,2);
+    assert.equal(grenade.system.currentShots,8); assert.deepEqual(grenade.calls,[['update',{'system.quantity':2}]]);
+});
+test('explicit Consume Ammunition never uses grenade quantity fallback and None never spends either', async () => {
+    const {aoeResource}=await service;
+    const actor=owner('character'), grenade=makeWeapon(actor,{quantity:3,currentShots:8,actions:{trait:'Athletics'}});
+    grenade.name='Throw Grenade';
+    await aoeResource.spend(grenade,actor,{mode:'ammo',legacyGrenade:true,ammoManagement:true});
+    assert.equal(grenade.system.quantity,3); assert.equal(grenade.system.currentShots,7);
+    assert.deepEqual(grenade.calls,[['consume',1]]);
+    await aoeResource.spend(grenade,actor,{mode:'none',consume:true,ammoManagement:true});
+    assert.equal(grenade.calls.length,1);
+    await aoeResource.spend(grenade,actor,{mode:'item',consume:false});
+    assert.equal(grenade.calls.length,1);
+});
+test('saved consumption mode is atomic and unsupported ammo profiles cannot spend item quantity', async () => {
+    const {aoeResource}=await service;
+    const actor=owner('vehicle'), gun=makeWeapon(actor,{reloadType:'self'});
+    assert.equal(aoeResource.validate(gun,actor,{mode:'ammo',ammoManagement:true}).reason,'unsupported');
+    assert.equal(gun.calls.length,0);
+    const item=makeWeapon(actor); item.type='gear';
+    assert.equal(aoeResource.validate(item,actor,{mode:'ammo'}).reason,'unsupported');
+    item.flags['swade-tools']={aoeConsumeMode:'item'};
+    assert.equal(aoeResource.describe(item,actor).source,'quantity');
+});
 test('mounted or Gunnery grenade launcher is not consumed as a grenade', async () => {
     const {aoeResource} = await service;
     for (const type of ['vehicle', 'character']) {
@@ -119,6 +149,7 @@ test('vehicle ItemDialog preserves mounted item and accepts explicit gunner', ()
     actor.system = {getCrewMemberForWeapon: () => Default};
     const ItemDialog = vm.runInNewContext(`${text}\nItemDialog;`, {
         CharRoll: class {constructor(actor) {this.actor = actor;}},
+        isAoeItem:()=>false,
         gb: {getDriver: () => {throw new Error('Legacy driver should not be used');}},
     });
     const explicit = new ItemDialog(actor, gun.id, Gunner);

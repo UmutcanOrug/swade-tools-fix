@@ -3,16 +3,20 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Configurable AoE attacks (2.1.9)
+## Configurable AoE attacks (2.1.10)
 
-1. Open an owned weapon, consumable or gear item and enable `Enable AoE`.
-   You can also toggle `AoE` directly on its inventory row.
-2. Open `AoE Settings` (the gear icon). Choose its attack skill, Small/Medium/
-   Large blast, damage action and ammunition options. Gunnery and other custom
-   skill names are supported. The normal weapon trait remains unchanged.
-3. Click the explosion icon in the inventory and place the blast area. The
-   attack resolves automatically; there is no second confirmation window.
-   Shift-click the icon to override the operator, skill or modifier for one attack.
+1. Set the weapon's normal `Trait` field to its skill name, such as `Gunnery`.
+   AoE uses this field directly; there is no separate skill selector or override.
+2. In item Properties, enable `Enable AoE` and open `AoE Settings` (the gear
+   icon) to save its Small/Medium/Large blast, damage action and ammunition options.
+   There is no duplicate checkbox or settings gear in the inventory row.
+   Choose `Consume Ammunition` for loaded/linked rounds or `Consume Item` for
+   grenade inventory quantity. These options are mutually exclusive; leave both
+   off for no automatic consumption. `Uses per Attack` controls the amount spent.
+3. Click the weapon's name or its explosion icon. The AoE attack panel always
+   opens, using the normal SWADE Tools layout, item information and situational
+   modifiers. Click its skill/AoE button, then place the blast area. No Shift-click
+   or second `Use Result` confirmation is required.
 4. If needed, click `Benny Reroll` on its attack chat card before the GM applies
    damage. It rerolls the same attack without consuming another round.
 

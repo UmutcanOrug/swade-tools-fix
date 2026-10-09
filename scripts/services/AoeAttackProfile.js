@@ -17,8 +17,8 @@ export const getAoeSkills = actor => values(actor?.items)
 
 export const resolveAoeSkill = (actor, item, override = null) => {
     const skills = getAoeSkills(actor);
-    const reference = String(override ?? item?.system?.actions?.trait ?? '').trim() ||
-        (isLegacyGrenadeItem(item) ? 'Athletics' : 'Shooting');
+    const reference = String(override ?? item?.system?.actions?.trait ?? '').trim();
+    if (!reference) return null;
     return skills.find(skill =>
         skill.id === reference || skill.uuid === reference ||
         normalized(skill.name) === normalized(reference) ||

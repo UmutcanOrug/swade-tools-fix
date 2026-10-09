@@ -4,6 +4,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('all normal ItemDialog entry points route enabled AoE weapons to its panel without modifying the item', async () => {
+    const source = fs.readFileSync(path.join(__dirname,'../scripts/class/ItemDialog.js'),'utf8')
+        .replace(/^import .*;\r?\n/gm,'').replace('export default class ItemDialog','class ItemDialog');
+    const launches=[];
+    const ItemDialog=vm.runInNewContext(`${source}\nItemDialog;`,{
+        isAoeItem:item=>item.flags?.['swade-tools']?.aoeEnabled===true,
+        launchAoeMacro:async(owner,item,options)=>{launches.push({owner,item,options});return 'AoE panel';},
+        CharRoll:class {}, Char:class {constructor(){throw Error('Normal dialog must not open for AoE');}},
+        gb:{getDriver(){throw Error('Missing AoE crew is resolved by the launcher, not legacy lookup');}}
+    });
+    const gunner={type:'character',id:'gunner'};
+    const item={id:'gun',type:'weapon',flags:{'swade-tools':{aoeEnabled:true}}};
+    const tank={type:'vehicle',items:{get:()=>item},system:{operator:gunner}};
+    const dialog=new ItemDialog(tank,item.id);
+    assert.equal(await dialog.showDialog(),'AoE panel');
+    assert.equal(launches[0].owner,tank);
+    assert.equal(launches[0].options.operatorActor,gunner);
+    assert.equal(launches[0].options.promptAoeSetup,true);
+    tank.system={};
+    assert.equal(await new ItemDialog(tank,item.id).showDialog(),'AoE panel');
+    assert.equal(launches[1].owner,tank);
+    assert.equal(launches[1].options.operatorActor,null);
+});
+
 test('actual native ItemDialog damage-only mode ignores missing native Trait and retains named damage actions', () => {
     const source = fs.readFileSync(path.join(__dirname,'../scripts/class/ItemDialog.js'),'utf8')
         .replace(/^import .*;\r?\n/gm,'').replace('export default class ItemDialog','class ItemDialog');
@@ -13,7 +37,8 @@ test('actual native ItemDialog damage-only mode ignores missing native Trait and
         getTemplatesHTML:()=>'', stringMod:()=>'',
     }, {get:(object,key)=>object[key] ?? (()=>'')});
     const ItemDialog = vm.runInNewContext(`${source}\nItemDialog;`, {
-        gb, CharRoll:class {}, Char:class {hasAbilitySetting(){return false;} hasEdgeSetting(){return false;}},
+        gb, isAoeItem:()=>true, launchAoeMacro:()=>{throw Error('Native damage must not launch another AoE attack');},
+        CharRoll:class {}, Char:class {hasAbilitySetting(){return false;} hasEdgeSetting(){return false;}},
         Dialog:class {constructor(config){dialogs.push(config);} render(){return this;}}
     });
     for (const type of ['weapon','gear','consumable']) {

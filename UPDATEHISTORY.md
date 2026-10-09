@@ -1,6 +1,20 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.1.10
+
+- AoE-enabled item-name clicks now open the AoE attack panel instead of the
+  ordinary weapon dialog; the explosion shortcut opens the same panel.
+- The AoE panel always opens and follows the native SWADE Tools layout.
+- Removed duplicate inventory-row AoE checkboxes and settings gears; item
+  Properties retain Enable AoE and the settings button.
+- Attack skills come only from the weapon's normal Trait field, including
+  custom Gunnery skills. Old AoE skill overrides are ignored.
+- Internal native damage calls remain separate and cannot start another AoE.
+- Consume Ammunition and Consume Item are mutually exclusive item settings;
+  both off disables automatic spending. Each attack spends only its chosen
+  resource once, and Benny rerolls spend no additional resources.
+
 ## 2.1.9
 
 - Replaced the grenade-only shortcut with opt-in, configurable AoE attacks.

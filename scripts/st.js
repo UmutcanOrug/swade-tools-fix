@@ -1,5 +1,6 @@
 import SystemRoll from './class/SystemRoll.js';
 import ItemDialog from './class/ItemDialog.js';
+import { isAoeItem } from './services/AoeItemFlags.js';
 
 export const attribute=async(actor,attribute)=>{
     let sys=new SystemRoll(actor);
@@ -24,7 +25,7 @@ export const item=async(actor,itemId,operator=null,options={})=>{
         ui.notifications.warn('The selected item could not be found.');
         return false;
     }
-    if (item.type=='weapon' || item.type=='power' ||
+    if (item.type=='weapon' || item.type=='power' || isAoeItem(item) ||
         (options.damageOnly===true && ['gear','consumable'].includes(item.type))){
         let itemshow=new ItemDialog(actor,itemId,operator,options);
         return itemshow.showDialog();

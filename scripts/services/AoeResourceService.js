@@ -35,10 +35,26 @@ const isHandThrown = (item, owner, options) => {
 
 export const describeAoeResource = (item, owner = item?.actor ?? item?.parent, options = {}) => {
     const requested = options.consume ?? getFlag(item, 'aoeConsume') ?? true;
+    const mode = options.mode ?? getFlag(item, 'aoeConsumeMode') ?? 'auto';
     const cost = Math.max(1, Math.floor(number(options.cost ?? getFlag(item, 'aoeAmmoCost'), 1)));
     const base = { source: 'unmanaged', cost: 0, available: Infinity, managed: false,
-        label: 'No ammunition is consumed', native: false, resource: item };
-    if (!requested || !item) return base;
+        label: 'No resource is consumed', native: false, resource: item };
+    if (!requested || mode === 'none' || !item) return base;
+    if (mode === 'item') {
+        return { ...base, source: 'quantity', cost, managed: true,
+            available: number(item.system?.quantity), label: 'Item quantity' };
+    }
+    if (mode !== 'auto' && mode !== 'ammo') {
+        return { ...base, source: 'unsupported', cost, managed: true,
+            label: 'Invalid resource consumption mode' };
+    }
+    if (mode === 'ammo' && item.type !== 'weapon') {
+        const charges = item.system?.charges?.default ?? item.system?.charges;
+        if (item.type !== 'consumable' || number(charges?.max) <= 0) {
+            return { ...base, source: 'unsupported', cost, managed: true,
+                label: 'This item has no ammunition resource' };
+        }
+    }
 
     if (item.type === 'consumable') {
         const charges = item.system?.charges?.default ?? item.system?.charges;
@@ -54,11 +70,15 @@ export const describeAoeResource = (item, owner = item?.actor ?? item?.parent, o
     if (item.type !== 'weapon') return base;
 
     const reload = String(item.system?.reloadType ?? '').toLowerCase();
+    if (mode === 'ammo' && reload === 'self') {
+        return { ...base, source: 'unsupported', cost, managed: true,
+            label: 'Self-consuming weapons require Consume Item' };
+    }
     const ammoManagement = options.ammoManagement ?? optionalSetting('ammoManagement');
     // Older worlds often model a thrown grenade with a zero-shot weapon
     // profile. Retain its quantity-based use, but never apply that fallback to
     // a mounted grenade launcher or tank cannon.
-    if (isHandThrown(item, owner, options) && (reload !== 'self' || !ammoManagement)) {
+    if (mode !== 'ammo' && isHandThrown(item, owner, options) && (reload !== 'self' || !ammoManagement)) {
         return { ...base, source: 'quantity', cost, managed: true,
             available: number(item.system?.quantity), label: 'Thrown item quantity' };
     }

@@ -1,11 +1,24 @@
-## SWADE Tools 2.1.9 — Configurable AoE Attacks
+## SWADE Tools 2.1.10 — Native-style AoE Attack Panel
+
+- Clicking an AoE-enabled weapon's name opens its AoE panel in place of the
+  ordinary SWADE Tools weapon dialog. The explosion shortcut opens the same panel.
+- The panel opens every time; Shift-click is no longer needed. It uses the
+  native SWADE Tools layout and situational modifiers.
+- Removed the inventory-row AoE checkbox and settings gear. Enable AoE and
+  its settings remain in item Properties; enabled inventory items show only
+  the explosion shortcut.
+- Skill names come directly from the weapon's normal Trait field. There is
+  no AoE skill picker, and stale saved AoE skill overrides are ignored.
+- Added mutually exclusive Consume Ammunition and Consume Item settings.
+  Leave both off to spend nothing; Uses per Attack sets the quantity. A grenade
+  can now explicitly spend its own inventory quantity instead of loaded ammo.
+
+### Existing AoE workflow retained
 
 - Generalized the grenade attack into a per-item AoE workflow for grenades,
   HE rounds, grenade launchers and vehicle-mounted weapons.
-- Added English `Enable AoE` / `AoE` checkboxes, an `AoE Settings` button and
-  an explosion shortcut in the inventory and item sheets.
-- Save the attack skill (including custom Gunnery skills), blast size,
-  damage action and ammunition options on the item.
+- English `Enable AoE`, `AoE Settings` and explosion controls.
+- Save blast size, damage action and ammunition options on the item.
 - Vehicle attacks use the assigned gunner/operator's skill and Bennies while
   keeping the weapon, ammunition and firing position on the vehicle.
 - Ammo consumption uses SWADE's resource API. A tank gun's quantity is never
@@ -26,8 +39,10 @@ JB2A animation assets do not block attack or damage resolution. Ranged ammo
 consumption follows the SWADE ammunition-management setting. Set the mounted
 weapon's crew member/operator before firing.
 
-For an AoE consumable's final charge, disable Destroy on Empty or use a
-persistent weapon profile so the GM's damage item is not deleted before use.
+When using native consumable ammunition charges, disable Destroy on Empty or
+use a persistent weapon profile for the final charge, so the GM's damage item
+is not deleted before use. Consume Item retains a zero-quantity profile for
+damage resolution rather than deleting it.
 
 Use Benny rerolls before the GM applies damage. If damage was already rolled
 and the attack later gains a Raise or changes outcome, the attack card warns

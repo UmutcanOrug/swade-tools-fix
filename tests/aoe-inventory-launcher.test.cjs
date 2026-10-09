@@ -23,15 +23,47 @@ class Element {
         for (const child of children) child.parentElement = this;
         this.children.unshift(...children);
     }
+    remove() {
+        if (!this.parentElement) return;
+        this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+        this.parentElement = null;
+    }
     setAttribute(key, value) { this.attributes[key] = String(value); }
-    addEventListener(type, fn) {
+    addEventListener(type, fn, options = false) {
         const listeners = this.listeners.get(type) ?? [];
-        listeners.push(fn); this.listeners.set(type, listeners);
+        listeners.push({ fn, capture: options === true || options?.capture === true });
+        this.listeners.set(type, listeners);
     }
     async emit(type, properties = {}) {
-        await Promise.all((this.listeners.get(type) ?? []).map(fn => fn({
-            currentTarget: this, preventDefault() {}, stopPropagation() {}, ...properties
-        })));
+        const event = {
+            target: this, currentTarget: this, defaultPrevented: false,
+            propagationStopped: false, immediatePropagationStopped: false,
+            preventDefault() { this.defaultPrevented = true; },
+            stopPropagation() { this.propagationStopped = true; },
+            stopImmediatePropagation() {
+                this.immediatePropagationStopped = true; this.propagationStopped = true;
+            },
+            ...properties
+        };
+        const path = [];
+        for (let element = this; element; element = element.parentElement) path.push(element);
+        const invoke = async (element, capture) => {
+            event.currentTarget = element;
+            for (const handler of element.listeners?.get(type) ?? []) {
+                if (handler.capture !== capture) continue;
+                await handler.fn(event);
+                if (event.immediatePropagationStopped) break;
+            }
+        };
+        for (const element of [...path].reverse()) {
+            await invoke(element, true);
+            if (event.propagationStopped) return event;
+        }
+        for (const element of path) {
+            await invoke(element, false);
+            if (event.propagationStopped) break;
+        }
+        return event;
     }
     matches(selector) {
         return selector.split(',').some(part => {
@@ -148,15 +180,20 @@ test('saved AoE settings default from item and update flags without changing its
     const { getAoeItemSettings, saveAoeItemSettings } = await load('AoeItemFlags.js');
     const item = makeItem(makeActor('owner'));
     assert.deepEqual(getAoeItemSettings(item), {
-        skill: 'Gunnery', blastSize: 'large', consume: true, damageAction: '', ammoCost: 1
+        skill: 'Gunnery', blastSize: 'large', consume: true, consumeMode: 'ammo', damageAction: '', ammoCost: 1
     });
     await saveAoeItemSettings(item, {
         skill: ' Siege Weapons ', blastSize: 'small', consume: false, damageAction: 'he', ammoCost: 2
     });
     assert.equal(item.system.actions.trait, 'Gunnery');
     assert.deepEqual(getAoeItemSettings(item), {
-        skill: 'Siege Weapons', blastSize: 'small', consume: false, damageAction: 'he', ammoCost: 2
+        skill: 'Gunnery', blastSize: 'small', consume: false, consumeMode: 'none', damageAction: 'he', ammoCost: 2
     });
+    assert.ok(!item.updates.some(change => Object.hasOwn(change,'flags.swade-tools.aoeSkill')));
+    item.flags['swade-tools'].aoeSkill='Old Shooting Override';
+    assert.equal(getAoeItemSettings(item).skill,'Gunnery');
+    item.system.actions.trait=' Siege Weapons ';
+    assert.equal(getAoeItemSettings(item).skill,'Siege Weapons');
     const savedUpdates = item.updates.length;
     await assert.rejects(saveAoeItemSettings(item, { blastSize: 'cone' }), /blast/);
     await assert.rejects(saveAoeItemSettings(item, { blastSize: 'medium', damageAction: 'smoke' }), /damage action/);
@@ -193,26 +230,26 @@ test('launcher uses vehicle token and inventory owner but assigned gunner for tr
     assert.equal(findAoeActorToken(tank), token);
 });
 
-test('normal inventory checkbox persists and reveals one explosion action without duplicate handlers', async () => {
+test('inventory shows only one explosion shortcut for enabled items and no row options', async () => {
     platform();
     const { bindAoeInventoryControls } = await load('AoeItemConfig.js');
     const owner = makeActor('owner'), item = makeItem(owner);
     const root = new Element('form'), row = makeRow(root, item), sheet = { actor: owner, isEditable: true };
     bindAoeInventoryControls(sheet, { jquery: 'test', 0: root });
     bindAoeInventoryControls(sheet, root);
+    assert.equal(row.querySelector('[data-swade-tools-aoe-controls]'), null);
+    await item.setFlag('swade-tools', 'aoeEnabled', true);
+    bindAoeInventoryControls(sheet, root); bindAoeInventoryControls(sheet, root);
     assert.equal(row.querySelectorAll('[data-swade-tools-aoe-controls]').length, 1);
-    const input = row.querySelector('[data-swade-tools-aoe-enabled]');
+    assert.equal(row.querySelector('[data-swade-tools-aoe-enabled]'), null);
+    assert.equal(row.querySelector('[data-swade-tools-aoe-settings]'), null);
     const attack = row.querySelector('[data-swade-tools-aoe]');
-    assert.equal(input.checked, false); assert.equal(attack.hidden, true);
     assert.equal(attack.querySelector('i').className, 'fa-solid fa-explosion');
-    assert.equal(row.querySelector('[data-swade-tools-aoe-settings]').title, 'AoE Settings');
-    input.checked = true; await input.emit('change');
-    assert.equal(item.getFlag('swade-tools', 'aoeEnabled'), true);
-    assert.equal(attack.hidden, false); assert.equal(item.updates.length, 1);
-    input.checked = false; await input.emit('change');
-    assert.equal(attack.hidden, true); assert.equal(item.updates.length, 2);
     item.isOwner = false; bindAoeInventoryControls(sheet, root);
-    assert.equal(input.disabled, true); assert.equal(attack.disabled, true);
+    assert.equal(attack.disabled, true);
+    item.isOwner = true; await item.setFlag('swade-tools', 'aoeEnabled', false);
+    bindAoeInventoryControls(sheet, root);
+    assert.equal(row.querySelector('[data-swade-tools-aoe-controls]'), null);
 });
 
 test('V13 item sheet gets English opt-in plus settings control and saves all config fields', async () => {
@@ -227,26 +264,62 @@ test('V13 item sheet gets English opt-in plus settings control and saves all con
     assert.equal(tab.querySelectorAll('[data-swade-tools-aoe-item-option]').length, 1);
     assert.equal(tab.querySelector('label').textContent, 'Enable AoE');
     assert.ok(tab.querySelector('[data-swade-tools-aoe-settings]'));
-    let captured;
+    let captured, callbackResult;
     foundry.applications.api.DialogV2.prompt = async options => {
         captured = options;
-        return options.ok.callback(null, { form: { elements: {
-            aoeSkill: { value: 'Custom Gunnery' }, aoeBlastSize: { value: 'large' },
-            aoeDamageAction: { value: 'he' }, aoeConsume: { checked: false }, aoeAmmoCost: { valueAsNumber: 1 }
+        callbackResult = options.ok.callback(null, { form: { elements: {
+            aoeBlastSize: { value: 'large' },
+            aoeDamageAction: { value: 'he' }, aoeConsumeAmmo: { checked: false },
+            aoeConsumeItem: { checked: false }, aoeAmmoCost: { valueAsNumber: 1 }
         } } });
+        return callbackResult;
     };
     await showAoeItemSettings(owner, item);
     assert.match(captured.window.title, /AoE Settings/);
-    assert.match(captured.content, /<option value="Gunnery">/);
+    assert.match(captured.content, /native Trait: Gunnery/);
+    assert.doesNotMatch(captured.content, /name="aoeSkill"|<datalist|Attack Skill/);
+    assert.equal(Object.hasOwn(callbackResult, 'skill'), false);
+    assert.equal(callbackResult.consumeMode, 'none');
+    assert.match(captured.content, /Uses per Attack/);
+    assert.match(captured.content, /name="aoeConsumeAmmo"/);
+    assert.match(captured.content, /name="aoeConsumeItem"/);
+    assert.doesNotMatch(captured.content, /name="aoeConsume"/);
     assert.match(captured.content, /HE Round/);
     assert.doesNotMatch(captured.content, /<option value="smoke"/);
     assert.equal(captured.ok.label, 'Save Settings');
-    assert.equal(item.getFlag('swade-tools', 'aoeSkill'), 'Custom Gunnery');
     assert.equal(item.getFlag('swade-tools', 'aoeConsume'), false);
     assert.equal(item.system.actions.trait, 'Gunnery');
     assert.equal(item.updates.length, 1); assert.deepEqual(messages, [['info', 'AoE settings saved.']]);
     foundry.applications.api.DialogV2.prompt = async () => null;
     await showAoeItemSettings(owner, item); assert.equal(item.updates.length, 1);
+});
+
+test('AoE Settings consumption checkboxes are mutually exclusive and both off saves None', async () => {
+    platform();
+    const { showAoeItemSettings } = await load('AoeItemConfig.js');
+    const owner = makeActor('owner'), weapon = makeItem(owner);
+    let dialogOptions;
+    foundry.applications.api.DialogV2.prompt = async options => { dialogOptions = options; return null; };
+    await showAoeItemSettings(owner, weapon);
+    const form = new Element('form');
+    const ammo = new Element('input'), item = new Element('input');
+    ammo.setAttribute('name', 'aoeConsumeAmmo'); item.setAttribute('name', 'aoeConsumeItem');
+    form.append(ammo, item); form[0] = ammo;
+    dialogOptions.render(null, { element: form }); dialogOptions.render(null, { element: form });
+    assert.equal(ammo.listeners.get('change').length, 1);
+    assert.equal(item.listeners.get('change').length, 1);
+    const settingsFor = () => dialogOptions.ok.callback(null, { form: { elements: {
+        aoeBlastSize: { value: 'large' }, aoeDamageAction: { value: '' },
+        aoeConsumeAmmo: ammo, aoeConsumeItem: item, aoeAmmoCost: { valueAsNumber: 2 }
+    } } });
+    item.checked = true; ammo.checked = true; await ammo.emit('change');
+    assert.equal(item.checked, false); assert.equal(settingsFor().consumeMode, 'ammo');
+    item.checked = true; await item.emit('change');
+    assert.equal(ammo.checked, false); assert.equal(settingsFor().consumeMode, 'item');
+    item.checked = false; await item.emit('change');
+    assert.equal(settingsFor().consumeMode, 'none');
+    assert.equal(settingsFor().ammoCost, 2);
+    assert.equal(weapon.updates.length, 0);
 });
 
 test('explosion button executes bundled AoE script with injected services and no native item click', async () => {
@@ -267,10 +340,12 @@ test('explosion button executes bundled AoE script with injected services and no
     assert.equal(global.__aoeLaunchTest.actor, owner);
     assert.equal(global.__aoeLaunchTest.token.id, 'owner-token');
     assert.equal(global.__aoeLaunchTest.weaponActor, owner);
-    assert.equal(global.__aoeLaunchTest.promptAoeSetup, false);
-    await row.querySelector('[data-swade-tools-aoe]').emit('click', { shiftKey: true });
     assert.equal(global.__aoeLaunchTest.promptAoeSetup, true);
-    assert.match(row.querySelector('[data-swade-tools-aoe]').title, /Shift-click/);
+    await row.querySelector('[data-swade-tools-aoe]').emit('click');
+    assert.equal(global.__aoeLaunchTest.promptAoeSetup, true);
+    assert.equal(row.querySelector('[data-swade-tools-aoe]').title, 'Open AoE Attack');
+    assert.equal(row.querySelector('[data-swade-tools-aoe-enabled]'), null);
+    assert.equal(row.querySelector('[data-swade-tools-aoe-settings]'), null);
     delete global.__aoeLaunchTest;
 });
 
@@ -306,7 +381,7 @@ test('AoE hooks register once for legacy sheets and ApplicationV2', async () => 
     for (const name of ['renderActorSheet', 'renderItemSheet', 'renderApplicationV2']) {
         assert.equal(hooks.get(name)?.length, 1);
     }
-    const owner = makeActor('owner'), item = makeItem(owner);
+    const owner = makeActor('owner'), item = makeItem(owner, { flags: { 'swade-tools': { aoeEnabled: true } } });
     const root = new Element('form'), row = makeRow(root, item);
     hooks.get('renderApplicationV2')[0]({ document: owner }, root);
     assert.ok(row.querySelector('[data-swade-tools-aoe-controls]'));
@@ -315,7 +390,7 @@ test('AoE hooks register once for legacy sheets and ApplicationV2', async () => 
 test('indexed native V13 form remains actor sheet root, not its first input', async () => {
     platform();
     const { bindAoeInventoryControls } = await load('AoeItemConfig.js');
-    const owner = makeActor('owner'), item = makeItem(owner);
+    const owner = makeActor('owner'), item = makeItem(owner, { flags: { 'swade-tools': { aoeEnabled: true } } });
     const form = new Element('form'), firstInput = new Element('input');
     // Native HTMLFormElement[0] resolves its first named form control.
     form[0] = firstInput; form.append(firstInput);
@@ -323,6 +398,30 @@ test('indexed native V13 form remains actor sheet root, not its first input', as
     bindAoeInventoryControls({ document: owner, isEditable: true }, form);
     assert.ok(row.querySelector('[data-swade-tools-aoe-controls]'));
     assert.equal(firstInput.querySelector('[data-swade-tools-aoe-controls]'), null);
+});
+
+test('Properties Enable AoE checkbox still persists and controls the inventory shortcut', async () => {
+    platform();
+    const { bindAoeItemSheetControl, bindAoeInventoryControls } = await load('AoeItemConfig.js');
+    const owner = makeActor('owner'), item = makeItem(owner);
+    const properties = new Element('form'), inventory = new Element('form');
+    const row = makeRow(inventory, item), actorSheet = { actor: owner, isEditable: true };
+    const itemSheet = { document: item, isEditable: true };
+    bindAoeItemSheetControl(itemSheet, properties);
+    const checkbox = properties.querySelector('[data-swade-tools-aoe-enabled]');
+    assert.equal(checkbox.checked, false);
+    assert.ok(properties.querySelector('[data-swade-tools-aoe-settings]'));
+    checkbox.checked = true; await checkbox.emit('change');
+    assert.equal(item.getFlag('swade-tools', 'aoeEnabled'), true);
+    bindAoeInventoryControls(actorSheet, inventory);
+    assert.ok(row.querySelector('[data-swade-tools-aoe]'));
+    checkbox.checked = false; await checkbox.emit('change');
+    assert.equal(item.getFlag('swade-tools', 'aoeEnabled'), false);
+    bindAoeInventoryControls(actorSheet, inventory);
+    assert.equal(row.querySelector('[data-swade-tools-aoe-controls]'), null);
+    item.isOwner = false; bindAoeItemSheetControl(itemSheet, properties);
+    assert.equal(checkbox.disabled, true);
+    assert.equal(properties.querySelector('[data-swade-tools-aoe-settings]').disabled, true);
 });
 
 test('indexed native V13 item form places AoE settings in properties tab', async () => {
@@ -337,4 +436,50 @@ test('indexed native V13 item form places AoE settings in properties tab', async
     assert.ok(tab.querySelector('[data-swade-tools-aoe-item-option]'));
     assert.ok(tab.querySelector('[data-swade-tools-aoe-settings]'));
     assert.equal(firstInput.querySelector('[data-swade-tools-aoe-item-option]'), null);
+});
+
+test('native V2 weapon name/image capture opens one AoE panel, preserves edits and falls through when disabled', async () => {
+    platform();
+    const { bindAoeInventoryControls } = await load('AoeItemConfig.js');
+    const tank = makeActor('tank', 'vehicle'), gunner = makeActor('gunner');
+    const item = makeItem(tank, { flags: { 'swade-tools': { aoeEnabled: true } } });
+    tank.activeTokens = [{ actor: tank, id: 'tank-token' }];
+    let operatorLookups = 0, nativeNameClicks = 0, editClicks = 0;
+    tank.system.getCrewMemberForWeapon = () => { operatorLookups++; return gunner; };
+    const form = new Element('form'), row = new Element('li');
+    row.className = 'flexrow'; row.dataset.itemId = item.id;
+    const image = new Element('img');
+    const name = new Element('a'); name.className = 'name'; name.dataset.action = 'showItem';
+    const controls = new Element('span'); controls.className = 'controls';
+    const edit = new Element('a'); edit.className = 'item-edit'; edit.dataset.action = 'editItem';
+    controls.append(edit); row.append(image, name, controls); form.append(row);
+    // Model native V2 showItem handling on the form and a legacy item-name
+    // bubble callback. The capture handler must suppress both for enabled AoE.
+    form.addEventListener('click', event => {
+        if (event.target.closest('[data-action="showItem"]')) nativeNameClicks++;
+    });
+    name.addEventListener('click', () => nativeNameClicks++);
+    edit.addEventListener('click', () => editClicks++);
+    const sheet = { document: tank, isEditable: true };
+    bindAoeInventoryControls(sheet, form); bindAoeInventoryControls(sheet, form);
+    assert.equal(name.listeners.get('click').filter(handler => handler.capture).length, 1);
+    assert.ok(controls.querySelector('[data-swade-tools-aoe]'));
+    const clickedName = await name.emit('click');
+    assert.equal(clickedName.defaultPrevented, true);
+    assert.equal(clickedName.immediatePropagationStopped, true);
+    assert.equal(operatorLookups, 1); assert.equal(nativeNameClicks, 0);
+    assert.equal(global.__aoeLaunchTest.promptAoeSetup, true);
+    const clickedImage = await image.emit('click');
+    assert.equal(clickedImage.defaultPrevented, true); assert.equal(operatorLookups, 2);
+    const clickedEdit = await edit.emit('click');
+    assert.equal(clickedEdit.defaultPrevented, false); assert.equal(editClicks, 1);
+    assert.equal(operatorLookups, 2);
+    await item.setFlag('swade-tools', 'aoeEnabled', false);
+    bindAoeInventoryControls(sheet, form);
+    const disabledName = await name.emit('click');
+    assert.equal(disabledName.defaultPrevented, false);
+    assert.equal(disabledName.propagationStopped, false);
+    assert.equal(nativeNameClicks, 2); assert.equal(operatorLookups, 2);
+    assert.equal(controls.querySelector('[data-swade-tools-aoe]'), null);
+    delete global.__aoeLaunchTest;
 });

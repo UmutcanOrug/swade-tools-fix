@@ -34,8 +34,9 @@ if (!game.modules.get("sequencer")?.active || !globalThis.Sequencer?.Crosshair) 
 const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackProfile.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeResourceService.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackDialog.js")),
 };
-const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, getAoeSkills, resolveAoeSkill, listAoeOperators, aoeResource} = aoeServices;
+const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog} = aoeServices;
 
 const getDamageActionFormula = (action) =>
   String(action?.override ?? action?.dmgOverride ?? "").trim();
@@ -87,144 +88,60 @@ const initialGrenade = isAoeItem(contextualItem)
   ? weaponActor.items.get(contextualItem.id) ?? contextualItem
   : grenades.find((item) => getItemDamageFormula(item)) ?? grenades[0];
 
-let driverActor = null;
-const directInventoryAttack = contextualItem && isAoeItem(contextualItem) &&
-  macroScope.promptAoeSetup !== true;
-const explicitlySuppliedOperator = macroScope.operatorActor?.items &&
-  macroScope.operatorActor.type !== "vehicle" ? macroScope.operatorActor : null;
-if (weaponActor.type === "vehicle") {
+let weaponChoice = initialGrenade.id;
+if (!contextualItem) {
+  const weaponOptions = grenades.map((candidate) =>
+    `<option value="${candidate.id}" ${candidate.id === initialGrenade.id ? "selected" : ""}>${foundry.utils.escapeHTML(candidate.name)}</option>`
+  ).join("");
   try {
-    driverActor = weaponActor.system.getCrewMemberForWeapon?.(initialGrenade) ??
-      weaponActor.system.operator ?? null;
-  } catch (error) {
-    console.warn("SWADE AoE Attack | Vehicle operator lookup failed", error);
-  }
-  if (!driverActor && weaponActor.system.driver?.id) {
-    const driverReference = String(weaponActor.system.driver.id);
-    driverActor = await fromUuid(driverReference).catch(() => null) ??
-      game.actors.get(driverReference.replace(/^Actor\./, "")) ?? null;
-  }
+    const choice = await foundry.applications.api.DialogV2.prompt({
+      window: {title: "Choose AoE Weapon"},
+      content: `<div class="standard-form"><label>AoE Weapon</label><select name="grenadeId">${weaponOptions}</select></div>`,
+      ok: {label: "Continue", callback: (_event, button) => button.form.elements.grenadeId.value},
+      rejectClose: false, modal: false,
+    });
+    if (!choice) return;
+    weaponChoice = choice;
+  } catch { return; }
 }
-if (weaponActor.type === "vehicle" && directInventoryAttack) {
-  const assignedOperator = explicitlySuppliedOperator ?? driverActor;
-  if (!assignedOperator || assignedOperator.type === "vehicle") {
-    return ui.notifications.warn("Assign a gunner or operator to this vehicle before using its AoE weapon. Shift-click AoE to choose one for this attack.");
-  }
-  if ((!assignedOperator.isOwner && !game.user.isGM) || !getAoeSkills(assignedOperator).length) {
-    return ui.notifications.warn("The assigned vehicle gunner is unavailable or has no attack skills. Assign an owned gunner or Shift-click AoE to choose one.");
-  }
-}
-const operators = listAoeOperators({
-  weaponOwner: weaponActor,
-  preferredActor: explicitlySuppliedOperator ??
-    (actingActor.type === "vehicle" ? driverActor : actingActor),
-  driverActor,
-  actors: game.actors,
-  isGM: game.user.isGM,
-});
-if (!operators.length) return ui.notifications.error("No owned actor with attack skills is available. Assign a vehicle gunner/operator first.");
-const initialOperator = operators[0];
-const skillOptions = operators.map((operator) => `<optgroup label="${foundry.utils.escapeHTML(operator.name)}">${getAoeSkills(operator).map((skill) => {
-  return `<option value="${operator.uuid}|${skill.id}">${foundry.utils.escapeHTML(skill.name)} (d${Number(skill.system.die?.sides ?? 4)})</option>`;
-}).join("")}</optgroup>`).join("");
-
-const options = grenades
-  .map((item) => {
-    const selected = item.id === initialGrenade.id ? "selected" : "";
-    const quantity = Number(item.system.quantity ?? 1);
-    const damageFormula = getItemDamageFormula(item);
-    const damageSummary = damageFormula
-      ? `; ${foundry.utils.escapeHTML(damageFormula)}`
-      : "; NO DAMAGE";
-    return `<option value="${item.id}" ${selected}>${foundry.utils.escapeHTML(
-      item.name
-    )} (x${quantity}${damageSummary})</option>`;
-  })
-  .join("");
-
-const initialAoeSettings = getAoeItemSettings(initialGrenade);
-let setup = directInventoryAttack
-  ? {grenadeId: initialGrenade.id, attackSkill: "auto", otherModifier: Number(initialAoeSettings.attackModifier ?? 0),
-     consume: initialAoeSettings.consume}
-  : null;
-if (!setup) try {
-  setup = await foundry.applications.api.DialogV2.prompt({
-    window: { title: "AoE Attack" },
-    content: `
-      <div class="standard-form">
-        <div class="form-group">
-          <label>AoE Weapon</label>
-          <div class="form-fields">
-            <select name="grenadeId">${options}</select>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>${weaponActor.type === "vehicle" ? "Operator / Attack Skill" : "Attack Skill"}</label>
-          <div class="form-fields"><select name="attackSkill"><option value="auto" selected>Weapon Default (assigned Trait)</option>${skillOptions}</select></div>
-          <p class="hint">Default: the weapon's assigned Trait. Any skill, including Gunnery, can be selected.</p>
-        </div>
-        <div class="form-group">
-          <label>Other Modifier</label>
-          <div class="form-fields">
-            <input name="otherModifier" type="number" value="${Number(initialAoeSettings.attackModifier ?? 0)}" step="1">
-          </div>
-          <p class="hint">Range and Wound/Fatigue penalties are calculated automatically.</p>
-        </div>
-        <div class="form-group">
-          <label>Consume Ammunition</label>
-          <div class="form-fields">
-            <input name="consume" type="checkbox" ${initialAoeSettings.consume ? "checked" : ""}>
-          </div>
-        </div>
-      </div>
-    `,
-    ok: {
-      label: "Choose Target",
-      callback: (event, button) => ({
-        grenadeId: button.form.elements.grenadeId.value,
-        attackSkill: button.form.elements.attackSkill.value,
-        otherModifier:
-          button.form.elements.otherModifier.valueAsNumber || 0,
-        consume: button.form.elements.consume.checked,
-      }),
-    },
-    rejectClose: false,
-    modal: false,
-  });
-} catch {
-  return;
-}
-
-if (!setup) return;
-
-const grenade = weaponActor.items.get(setup.grenadeId);
-if (!grenade) {
-  return ui.notifications.error("The selected AoE weapon could not be found.");
-}
-
-const [operatorUuid, attackSkillId] = String(setup.attackSkill ?? "").split("|");
+const grenade = weaponActor.items.get(weaponChoice);
+if (!grenade) return ui.notifications.error("The selected AoE weapon could not be found.");
 const selectedAoeSettings = getAoeItemSettings(grenade);
 if (selectedAoeSettings.damageAction && grenade.system.actions?.additional?.[selectedAoeSettings.damageAction]?.type !== "damage") {
   return ui.notifications.warn("This item's configured AoE damage action no longer exists. Update AoE Settings before firing.");
 }
-let defaultOperator = initialOperator;
-if (setup.attackSkill === "auto" && weaponActor.type === "vehicle") {
+
+// A mounted weapon always uses its assigned gunner/operator, never an
+// arbitrary world actor and never a skill or operator picker.
+if (weaponActor.type === "vehicle") {
+  let assignedOperator = macroScope.operatorActor?.items && macroScope.operatorActor.type !== "vehicle"
+    ? macroScope.operatorActor : null;
   try {
-    const gunner = explicitlySuppliedOperator ?? weaponActor.system.getCrewMemberForWeapon?.(grenade) ??
-      weaponActor.system.operator ?? driverActor;
-    defaultOperator = operators.find((operator) => operator.uuid === gunner?.uuid) ??
-      (directInventoryAttack ? null : initialOperator);
+    assignedOperator ??= weaponActor.system.getCrewMemberForWeapon?.(grenade) ??
+      weaponActor.system.operator ?? null;
   } catch (error) {
-    console.warn("SWADE AoE Attack | Default gunner lookup failed", error);
+    console.warn("SWADE AoE Attack | Vehicle operator lookup failed", error);
   }
+  if (!assignedOperator && typeof weaponActor.getDriver === "function") {
+    try { assignedOperator = await weaponActor.getDriver(); } catch { /* try legacy reference */ }
+  }
+  if (!assignedOperator && weaponActor.system.driver?.id) {
+    const reference = String(weaponActor.system.driver.id);
+    assignedOperator = await fromUuid(reference).catch(() => null) ??
+      game.actors?.get(reference.replace(/^Actor\./, "")) ?? null;
+  }
+  if (!assignedOperator || assignedOperator.type === "vehicle") {
+    return ui.notifications.warn("Assign a gunner or operator to this vehicle before using its AoE weapon.");
+  }
+  actingActor = assignedOperator;
+} else {
+  actingActor = weaponActor;
 }
-actingActor = setup.attackSkill === "auto"
-  ? defaultOperator
-  : operators.find((operator) => operator.uuid === operatorUuid);
-const attackSkill = actingActor && resolveAoeSkill(actingActor, grenade,
-  setup.attackSkill === "auto" ? (selectedAoeSettings.skill || null) : attackSkillId);
-if (!actingActor || !attackSkill) return ui.notifications.error("The selected operator or attack skill could not be found.");
 if (!actingActor.isOwner && !game.user.isGM) return ui.notifications.error("You do not own this attack's operator.");
+const nativeTrait = String(grenade.system.actions?.trait ?? "").trim();
+if (!nativeTrait) return ui.notifications.warn("Set this item's Trait in its Properties before using AoE.");
+const attackSkill = resolveAoeSkill(actingActor, grenade);
+if (!attackSkill) return ui.notifications.warn(`${actingActor.name} does not have the item's assigned Trait (${nativeTrait}). Update its Properties or the actor's skills before using AoE.`);
 const attackSkillName = String(attackSkill.name);
 const rollData = actingActor.getRollData?.() ?? {};
 const globalAttackModifiers = actingActor.system.stats?.globalMods ?? {};
@@ -241,28 +158,55 @@ const bennyTraitModifiers = Array.from(globalAttackModifiers.bennyTrait ?? [])
   .filter((modifier) => !modifier.ignore && String(modifier.value ?? "").trim());
 // Validate saved expressions before ammunition is committed. This also catches
 // a stale @field instead of silently evaluating it as zero after firing.
-for (const formula of [itemTraitModifier, preparedAttackFormula,
-  bennyTraitModifiers.map((modifier) => `(${String(modifier.value).trim()})`).join("+")].filter(Boolean)) {
+const validateAttackFormula = (formula) => {
   const missingReference = [...formula.matchAll(/@([A-Za-z0-9_.]+)/g)]
     .find(([, reference]) => foundry.utils.getProperty(rollData, reference) === undefined);
-  if (missingReference) return ui.notifications.warn(`The AoE modifier references an unavailable field: @${missingReference[1]}. Update the item or actor effects before firing.`);
+  if (missingReference) {
+    ui.notifications.warn(`The AoE modifier references an unavailable field: @${missingReference[1]}. Update the item or actor effects before firing.`);
+    return false;
+  }
   const resolved = typeof Roll.replaceFormulaData === "function" ? Roll.replaceFormulaData(formula, rollData) : formula;
   if (typeof Roll.validate === "function" && !Roll.validate(resolved)) {
-    return ui.notifications.warn("An AoE attack modifier has an invalid roll formula. Update the item or actor effects before firing.");
+    ui.notifications.warn("An AoE attack modifier has an invalid roll formula. Update the item or actor effects before firing.");
+    return false;
   }
+  return true;
+};
+for (const formula of [itemTraitModifier, preparedAttackFormula,
+  bennyTraitModifiers.map((modifier) => `(${String(modifier.value).trim()})`).join("+")].filter(Boolean)) {
+  if (!validateAttackFormula(formula)) return;
 }
+const setup = await showAoeAttackDialog({
+  item: grenade, weaponOwner: weaponActor, operatorActor: actingActor,
+  attackSkill, settings: selectedAoeSettings,
+  resource: aoeResource.describe(grenade, weaponActor, {
+    consume: selectedAoeSettings.consume, legacyGrenade: isLegacyGrenadeItem(grenade), cost: selectedAoeSettings.ammoCost,
+    mode: selectedAoeSettings.consumeMode,
+  }),
+});
+if (!setup) return;
+const otherModifierFormula = String(setup.otherModifierFormula ?? setup.otherModifier ?? 0).trim() || "0";
+if (!validateAttackFormula(otherModifierFormula)) return;
+// Like the native Mod. field, allow dice and @data expressions. Evaluate this
+// attack-only modifier once, before ammunition; it stays fixed on Benny rerolls.
+const otherModifierRoll = Number.isFinite(Number(otherModifierFormula)) ? null :
+  await new Roll(otherModifierFormula, rollData).evaluate();
+setup.otherModifier = Number(otherModifierRoll?.total ?? otherModifierFormula) + Number(setup.situationalModifier ?? 0);
 const resourceOptions = {
-  consume: setup.consume,
+  consume: selectedAoeSettings.consumeMode !== "none" && setup.consume,
+  mode: selectedAoeSettings.consumeMode,
   legacyGrenade: isLegacyGrenadeItem(grenade),
   cost: selectedAoeSettings.ammoCost,
 };
 const explainResourceFailure = (result) => ({
-  permission: "You do not have permission to consume this weapon's ammunition.",
+  permission: "You do not have permission to consume this item's configured resource.",
   insufficient: `${grenade.name}: not enough ${String(result.label ?? "ammunition").toLowerCase()} (${result.available}/${result.cost}).`,
-  unsupported: "This item's ammunition API is unavailable. Turn off Consume Ammunition only if the GM will track it manually.",
-  busy: "This ammunition is already being used by another attack. Please try again.",
-  "update-failed": "The weapon's ammunition could not be updated.",
-}[result.reason] ?? "The AoE weapon cannot expend ammunition.");
+  unsupported: result.source === "unsupported"
+    ? `${grenade.name}: ${result.label}. Review Consume Ammunition / Consume Item in AoE Settings.`
+    : "This item's resource API is unavailable. Disable consumption only if the GM will track it manually.",
+  busy: "This resource is already being used by another attack. Please try again.",
+  "update-failed": "The item's resource could not be updated.",
+}[result.reason] ?? "The AoE item cannot expend its configured resource.");
 const resourceValidation = await aoeResource.validate(grenade, weaponActor, resourceOptions);
 if (!resourceValidation.ok) return ui.notifications.warn(explainResourceFailure(resourceValidation));
 
@@ -277,7 +221,8 @@ const damageSourceItem = getItemDamageFormula(grenade)
 
 // A native consumable may be deleted when its last charge is spent. Keep the
 // damage item available for SWADE Tools and the GM's Apply buttons.
-if (damageSourceItem.id === grenade.id && resourceValidation.managed &&
+if (damageSourceItem.id === grenade.id && resourceValidation.managed && resourceValidation.native &&
+    resourceValidation.source === "consumable" &&
     grenade.type === "consumable" && grenade.system.destroyOnEmpty &&
     resourceValidation.available <= resourceValidation.cost) {
   return ui.notifications.warn("This AoE consumable would be deleted before damage can be resolved. Disable Destroy on Empty, use a persistent weapon profile, or let the GM track its consumption manually.");
@@ -596,7 +541,7 @@ const getGrenadeBennyControlsHtml = () => {
   }
   return buttons.length
     ? `<div style="display:flex;gap:4px">${buttons.join("")}</div>
-       <p><small>Reroll ${foundry.utils.escapeHTML(attackSkillName)} only. No additional ammunition is consumed.
+       <p><small>Reroll ${foundry.utils.escapeHTML(attackSkillName)} only. No additional ammunition or items are consumed.
        Use before the GM applies damage. These controls work in the attacking player's current session.</small></p>`
     : "<p><small>No Bennies available for an attack reroll.</small></p>";
 };
@@ -869,6 +814,9 @@ const modifierParts = [
 const preparedEffectsSummary = preparedAttackModifiers.map((modifier) =>
   `${String(modifier.label ?? "Effect")}: ${String(modifier.value)}`
 ).join(", ");
+const situationalSummary = setup.modifierParts
+  ? `Mod. ${setup.modifierParts.modifier}; Multi-Action ${setup.modifierParts.multiAction}; Cover ${setup.modifierParts.cover}; Illumination ${setup.modifierParts.illumination}`
+  : "";
 
 return `
     <h2>${foundry.utils.escapeHTML(grenade.name)}</h2>
@@ -886,6 +834,7 @@ return `
     )}, ${rangeBand} (${rangePenalty})</p>
     <p><strong>Total Modifier:</strong> ${totalModifier >= 0 ? "+" : ""}${totalModifier}</p>
     <p><small>${modifierParts}</small></p>
+    ${situationalSummary ? `<p><small>Other Modifiers: ${foundry.utils.escapeHTML(situationalSummary)}</small></p>` : ""}
     ${preparedEffectsSummary ? `<p><small>Prepared effects: ${foundry.utils.escapeHTML(preparedEffectsSummary)}</small></p>` : ""}
     <p><strong>Blast:</strong> ${blastSize} Blast Template</p>
     <p data-grenade-targets><strong>Targets:</strong> ${getBlastTargetNamesHtml(
@@ -902,7 +851,7 @@ return `
 const updateGrenadeThrowMessage = async () => {
   if (!throwMessage) return;
   await throwMessage.update({
-    rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, bennyModifierRoll].filter(Boolean).map((roll) => roll.toJSON()),
+    rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, otherModifierRoll, bennyModifierRoll].filter(Boolean).map((roll) => roll.toJSON()),
     content: await renderGrenadeThrowContent(),
   });
 };
@@ -913,7 +862,7 @@ throwMessage = await ChatMessage.create({
     actor: actingActor,
     token: selectedToken.document,
   }),
-  rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, bennyModifierRoll].filter(Boolean),
+  rolls: [traitRoll, wildRoll, criticalConfirmationRoll, itemModifierRoll, preparedModifierRoll, otherModifierRoll, bennyModifierRoll].filter(Boolean),
   flags: { world: { grenadeBennySession: grenadeBennyKey } },
   content: await renderGrenadeThrowContent(),
 });

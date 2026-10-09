@@ -29,11 +29,13 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   crewForWeapon = true, legacyDriver = false, nativeDamage = true,
   damage = '3d6', additional = {}, failureOnSpend = false, ammoManagement = true,
   noOperator = false, globalMods = {}, skillEffects = [], itemModifier = '', rollData = {}, secondaryWeapon = false,
-  wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false} = {}) {
+  wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false,
+  panelCanceled = false, panelReload = false, panelValues = null} = {}) {
   const profile = await loadServices();
   const events = [], notices = [], cards = [], nativeCalls = [], nativeCards = [];
   const queue = [...dice], hooks = new Map(), timers = new Map();
-  let nextId = 0, crosshairCalls = 0, setupDialogs = 0, quantityUpdates = 0;
+  let nextId = 0, crosshairCalls = 0, setupDialogs = 0, quantityUpdates = 0, panelCalls = 0;
+  const panelContexts = [];
   const gunner = {
     id: 'gunner', uuid: 'Actor.gunner', name: 'Assigned Gunner', type: 'character', isOwner: true,
     system: {wildcard, wounds: {value: 0}, fatigue: {value: 0}, bennies: {value: 3}, stats: {globalMods}},
@@ -62,6 +64,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     canExpendResources(cost) { return this.system.currentShots >= cost; },
     async consume(cost) { events.push('ammo'); if (failureOnSpend) throw Error('mock failure'); this.system.currentShots -= cost; },
     async update(change) { events.push('quantity'); quantityUpdates++; this.system.quantity = change['system.quantity']; },
+    async reload() { events.push('reload'); this.system.currentShots = this.system.shots; },
   };
   owner.items.push(weapon);
   if (secondaryWeapon) owner.items.push({...weapon,id:'other-grenade',uuid:`${owner.uuid}.Item.other-grenade`,
@@ -83,7 +86,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     for (const handler of [...hooks.values()]) if (handler.name === name) handler.callback(...args);
   };
   class MockRoll {
-    static validate(formula) { return /^[\d() +\-]+$/.test(formula); }
+    static validate(formula) { return /^[\d() dx+\-]+$/.test(formula); }
     static replaceFormulaData(formula, data) {
       return formula.replace(/@([A-Za-z0-9_.]+)/g, (_match, reference) =>
         String(reference.split('.').reduce((value,key)=>value?.[key],data) ?? 0));
@@ -95,7 +98,9 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
         assert.ok(queue.length, 'No unexpected attack dice'); this.total = queue.shift();
         this.dice = [{results: [{result: this.total}]}];
       } else {
-        const expression = MockRoll.replaceFormulaData(this.formula,this.data);
+        const expression = MockRoll.replaceFormulaData(this.formula,this.data).replace(/\d+d\d+x?/g, () => {
+          assert.ok(queue.length, 'No unexpected modifier dice'); return String(queue.shift());
+        });
         assert.match(expression, /^[\d() +\-]+$/); this.total = Function(`return (${expression})`)();
       }
       return this;
@@ -134,7 +139,12 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   const dependencies = {
     scope: {actor: vehicle ? owner : gunner, operatorActor: vehicle ? null : gunner,
       weaponActor: owner, item: manualChoice ? null : weapon, token,
-      aoeServices: {...profile, aoeResource: {
+      aoeServices: {...profile, showAoeAttackDialog: async context => {
+        panelCalls++; panelContexts.push(context); events.push('attack-panel');
+        if (panelCanceled) return null;
+        if (panelReload) { await context.item.reload(); return null; }
+        return panelValues ?? {otherModifierFormula:'0',situationalModifier:0,consume:context.settings.consume};
+      }, aoeResource: {
         describe: (item, actualOwner, opts) => profile.aoeResource.describe(item, actualOwner, {...opts, ammoManagement}),
         validate: (item, actualOwner, opts) => profile.aoeResource.validate(item, actualOwner, {...opts, ammoManagement}),
         spend: (item, actualOwner, opts) => profile.aoeResource.spend(item, actualOwner, {...opts, ammoManagement}),
@@ -145,7 +155,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     foundry: {utils: {escapeHTML, randomID: () => 'aoe-session', getRoute: value => value,
       getProperty(object, name) { return name.split('.').reduce((value, key) => value?.[key], object); }},
       applications: {api: {DialogV2: {async prompt() {
-        setupDialogs++; return {grenadeId:'weapon', attackSkill:manualChoice ?? 'auto', otherModifier:0, consume: true};
+        setupDialogs++; return manualChoice ?? 'weapon';
       }}}}},
     CONST: {GRID_SNAPPING_MODES: {CENTER: 1, VERTEX: 2}},
     ChatMessage: {getSpeaker: input => ({actor: input.actor.uuid, token: input.token.id}),
@@ -157,7 +167,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   };
   await new AsyncFunction(...Object.keys(dependencies), source)(...Object.values(dependencies));
   return {weapon, owner, gunner, other, events, notices, cards, nativeCalls, nativeCards,
-    crosshairCalls, setupDialogs, quantityUpdates, scene, platform, queue};
+    crosshairCalls, setupDialogs, quantityUpdates, scene, platform, queue, panelCalls, panelContexts};
 }
 
 test('AoE core parses as a Foundry async macro and never modifies user target rings', () => {
@@ -179,6 +189,8 @@ test('skill resolver supports arbitrary skill ID, name, SWID and saved override'
 test('tank uses assigned gunner Gunnery and native damage, consumes one shell not gun quantity', async () => {
   const s = await runAttack({vehicle: true});
   assert.equal(s.setupDialogs, 0); assert.equal(s.crosshairCalls, 1);
+  assert.equal(s.panelCalls,1);
+  assert.ok(s.events.indexOf('attack-panel') < s.events.indexOf('crosshair'));
   assert.equal(s.weapon.system.currentShots, 3); assert.equal(s.weapon.system.quantity, 1);
   assert.equal(s.quantityUpdates, 0); assert.match(s.cards[0].content, /Gunnery:<\/strong> 6/);
   assert.match(s.cards[0].content, /Assigned Gunner; <strong>Vehicle:<\/strong> Tank/);
@@ -199,9 +211,8 @@ test('GM tank with no assigned crew/operator never silently picks a random world
   assert.equal(s.weapon.system.currentShots,4);
   assert.ok(!s.events.some(event=>event.startsWith('roll:')));
   assert.ok(s.notices.some(notice=>/Assign a gunner or operator/.test(notice.text)));
-  const manual = await runAttack({vehicle:true,noOperator:true,manualChoice:'Actor.other|gunnery2'});
-  assert.equal(manual.cards.length,1);
-  assert.ok(manual.nativeCalls.every(call=>call.operator===manual.other));
+  const manual = await runAttack({vehicle:true,noOperator:true,manualChoice:'weapon'});
+  assert.equal(manual.cards.length,0); assert.equal(manual.panelCalls,0);
 });
 
 test('deleted saved damage action is rejected before spending a shell or creating a template', async () => {
@@ -218,14 +229,82 @@ test('new explicitly enabled AoE item never borrows damage from an unrelated gre
   assert.ok(!/9d6/.test(s.cards[0].content));
 });
 
-test('saved AoE skill, blast size, consume flag and damage action apply on direct use', async () => {
+test('native Trait ignores old AoE skill override; saved blast, consume and damage action still apply', async () => {
   const s = await runAttack({flags:{aoeSkill:'Shooting', aoeBlastSize:'large', aoeConsume:false, aoeDamageAction:'he'},
     additional:{he:{type:'damage',name:'HE Damage',override:'4d6',ap:2}}, dice:[8,3]});
   assert.equal(s.weapon.system.currentShots,4); assert.equal(s.setupDialogs,0);
-  assert.match(s.cards[0].content,/Shooting:<\/strong> 8/); assert.match(s.cards[0].content,/Large Blast Template/);
+  assert.match(s.cards[0].content,/Gunnery:<\/strong> 8/); assert.match(s.cards[0].content,/Large Blast Template/);
+  assert.equal(s.panelCalls,1); assert.equal(s.panelContexts[0].attackSkill.name,'Gunnery');
   assert.match(s.cards[0].content,/4d6; AP 2/);
   assert.equal(s.scene.templates.get('template').distance,3);
   assert.ok(s.nativeCards.every(card => card.action === 'he' && card.raise));
+});
+
+test('blank native Trait cannot fall back to a saved AoE skill or implicit Shooting', async () => {
+  const s = await runAttack({trait:'',flags:{aoeSkill:'Gunnery'}});
+  assert.equal(s.panelCalls,0); assert.equal(s.crosshairCalls,0); assert.equal(s.cards.length,0);
+  assert.equal(s.weapon.system.currentShots,4);
+  assert.ok(s.notices.some(notice=>/Set this item's Trait in its Properties/.test(notice.text)));
+});
+
+test('canceling the attack panel or reloading creates no attack, template or firing ammo debit', async () => {
+  const canceled = await runAttack({panelCanceled:true});
+  assert.equal(canceled.panelCalls,1); assert.equal(canceled.crosshairCalls,0);
+  assert.equal(canceled.cards.length,0); assert.equal(canceled.weapon.system.currentShots,4);
+  assert.ok(!canceled.events.some(event=>event.startsWith('roll:')));
+  const reloaded = await runAttack({currentShots:0,panelReload:true});
+  assert.equal(reloaded.panelCalls,1); assert.equal(reloaded.crosshairCalls,0);
+  assert.equal(reloaded.cards.length,0); assert.equal(reloaded.weapon.system.currentShots,4);
+  assert.deepEqual(reloaded.events,['attack-panel','reload']);
+});
+
+test('panel Mod dice and MAP/Cover/Illumination combine once and stay fixed on Benny without affecting damage', async () => {
+  const s = await runAttack({dice:[5,8,4,9,5],panelValues:{
+    otherModifierFormula:'+1d6',situationalModifier:-4,consume:true,
+    modifierParts:{modifier:'+1d6',multiAction:-2,cover:-2,illumination:0}}});
+  assert.match(s.cards[0].content,/Gunnery:<\/strong> 9/);
+  assert.match(s.cards[0].content,/Other Modifiers: Mod. \+1d6; Multi-Action -2; Cover -2; Illumination 0/);
+  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  assert.match(s.cards[0].content,/Gunnery:<\/strong> 10/);
+  assert.equal(s.events.filter(event=>event==='roll:+1d6').length,1);
+  assert.equal(s.weapon.system.currentShots,3);
+  assert.ok(s.nativeCalls.every(call=>!call.options?.otherModifier && !call.options?.cover && !call.options?.multiAction));
+});
+
+test('invalid panel Mod formula is rejected before ammo, placement or attack roll', async () => {
+  const s = await runAttack({panelValues:{otherModifierFormula:'bad formula',situationalModifier:0,consume:true}});
+  assert.equal(s.panelCalls,1); assert.equal(s.crosshairCalls,0); assert.equal(s.cards.length,0);
+  assert.equal(s.weapon.system.currentShots,4);
+});
+
+test('native-style AoE panel keeps English item data, textual Mod, ordinary modifiers, Reload and trait button, without skill/operator selectors', async () => {
+  const {showAoeAttackDialog,readAoeAttackDialogValues} = await import(pathToFileURL(path.join(services,'AoeAttackDialog.js')));
+  const previousFoundry = global.foundry;
+  global.foundry = {utils:{escapeHTML}};
+  let config, options, modifierButtons=0, reloaded=0;
+  const context = {item:{name:'HE Cannon',system:{damage:'3d6',ap:1,range:'10/20/40',currentShots:0,shots:4,rof:1,reloadType:'single'},async reload(){reloaded++;}},
+    weaponOwner:{type:'vehicle',name:'Tank'},operatorActor:{name:'Gunner'},attackSkill:{name:'Gunnery'},
+    settings:{blastSize:'medium',consume:true,ammoCost:1,damageAction:''},resource:{label:'Loaded ammunition',available:0}};
+  const fields = {mod:{value:'+1d6'},multiaction:{value:'-2'},cover:{value:'-4'},illumination:{value:'-2'},'aoe-consume':{checked:true}};
+  const form = {querySelector: selector=>fields[selector.slice(1)]};
+  class FakeDialog {constructor(data,opts){config=data;options=opts;} render(){config.render(form);return this;}}
+  try {
+    const answer = showAoeAttackDialog(context,{DialogClass:FakeDialog,addModifierButtons:()=>modifierButtons++});
+    assert.deepEqual(options.classes,['dialog swadetools-vertical']);
+    for (const text of ['swadetools-dialog-item','Damage:','AP:','Range:','Shots:','RoF:','Medium Blast Template','Other Modifiers','Multi-Action Penalty','Cover:','Illumination:','Consume Ammunition']) assert.ok(config.content.includes(text),text);
+    assert.match(config.content,/type="text" id="mod"/);
+    assert.ok(!/name="attackSkill"|name="operator"|name="grenadeId"|Called Shot|Raise Damage|Use Result/.test(config.content));
+    assert.equal(config.buttons.attack.label,'Gunnery / AoE');
+    assert.equal(config.buttons.cancel.label,'Cancel'); assert.equal(config.buttons.reload.label,'Reload');
+    assert.equal(modifierButtons,1);
+    config.buttons.attack.callback(form);config.close();
+    assert.deepEqual(await answer,{otherModifierFormula:'+1d6',situationalModifier:-8,consume:true,
+      modifierParts:{modifier:'+1d6',multiAction:-2,cover:-4,illumination:-2}});
+    const reload = showAoeAttackDialog(context,{DialogClass:FakeDialog,addModifierButtons:()=>{}});
+    await config.buttons.reload.callback();config.close();
+    assert.equal(await reload,null);assert.equal(reloaded,1);
+    assert.equal(readAoeAttackDialogValues(form).otherModifierFormula,'+1d6');
+  } finally { global.foundry=previousFoundry; }
 });
 
 test('Benny rerolls Gunnery within the same attack, with no extra shot/template or damage', async () => {
@@ -272,6 +351,69 @@ test('saved ammunition cost expends exactly the configured count, once', async (
   assert.equal(s.events.filter(event=>event==='ammo').length,1);
 });
 
+test('Consume Item reduces exactly selected item quantity, preserves ammunition, and Benny cannot repeat it', async () => {
+  const s = await runAttack({quantity:2,currentShots:4,dice:[6,4,9,5],flags:{aoeConsumeMode:'item'}});
+  assert.equal(s.panelContexts[0].settings.consumeMode,'item');
+  assert.equal(s.panelContexts[0].resource.source,'quantity');
+  assert.equal(s.weapon.system.quantity,1);assert.equal(s.weapon.system.currentShots,4);
+  assert.equal(s.quantityUpdates,1);assert.ok(!s.events.includes('ammo'));
+  await s.platform.__swadeGrenadeBennyRuntime.handlers.get('aoe-session')('actor');
+  assert.equal(s.weapon.system.quantity,1);assert.equal(s.weapon.system.currentShots,4);
+  assert.equal(s.quantityUpdates,1);assert.equal(s.nativeCards.length,2);
+});
+
+test('explicit Consume Ammunition on a thrown grenade uses native ammo, never its item quantity', async () => {
+  const s = await runAttack({name:'Throw Grenade',trait:'Athletics',category:'Throwable',quantity:3,
+    actorSkills:[skill('athletics','Athletics')],flags:{aoeConsumeMode:'ammo'}});
+  assert.equal(s.panelContexts[0].settings.consumeMode,'ammo');
+  assert.equal(s.panelContexts[0].resource.source,'magazine');
+  assert.equal(s.weapon.system.quantity,3);assert.equal(s.weapon.system.currentShots,3);
+  assert.equal(s.quantityUpdates,0);assert.equal(s.events.filter(event=>event==='ammo').length,1);
+});
+
+test('saved none mode cannot silently consume even if a forged panel result enables its checkbox', async () => {
+  const s = await runAttack({quantity:2,flags:{aoeConsumeMode:'none'},
+    panelValues:{otherModifierFormula:'0',situationalModifier:0,consume:true}});
+  assert.equal(s.panelContexts[0].settings.consumeMode,'none');
+  assert.equal(s.panelContexts[0].resource.managed,false);
+  assert.equal(s.weapon.system.quantity,2);assert.equal(s.weapon.system.currentShots,4);
+  assert.equal(s.quantityUpdates,0);assert.ok(!s.events.includes('ammo'));
+  assert.equal(s.nativeCards.length,2);
+});
+
+test('per-attack consumption unchecked skips the resource without changing saved item mode', async () => {
+  const s = await runAttack({quantity:2,flags:{aoeConsumeMode:'item'},
+    panelValues:{otherModifierFormula:'0',situationalModifier:0,consume:false}});
+  assert.equal(s.weapon.system.quantity,2);assert.equal(s.weapon.system.currentShots,4);
+  assert.equal(s.weapon.flags['swade-tools'].aoeConsumeMode,'item');
+  assert.equal(s.quantityUpdates,0);assert.equal(s.nativeCards.length,2);
+});
+
+test('attack panel has one context-dependent consume checkbox and none mode cannot be enabled there', async () => {
+  const {buildAoeAttackDialogContent,readAoeAttackDialogValues,showAoeAttackDialog} = await import(pathToFileURL(path.join(services,'AoeAttackDialog.js')));
+  const previousFoundry=global.foundry;global.foundry={utils:{escapeHTML}};
+  const context={item:{name:'Bomb',system:{damage:'3d6',range:'5/10/20'}},weaponOwner:{type:'character'},
+    operatorActor:{name:'Thrower'},attackSkill:{name:'Athletics'},
+    settings:{blastSize:'medium',consume:true,ammoCost:1,consumeMode:'item'},resource:{label:'Item quantity',available:2}};
+  try {
+    const itemContent=buildAoeAttackDialogContent(context);
+    assert.equal((itemContent.match(/id="aoe-consume"/g)??[]).length,1);
+    assert.match(itemContent,/<strong>Consume Item<\/strong>/);assert.match(itemContent,/Items per Attack: 1/);
+    assert.ok(!itemContent.includes('<strong>Consume Ammunition</strong>'));
+    const noneContext={...context,settings:{...context.settings,consumeMode:'none',consume:false}};
+    const noneContent=buildAoeAttackDialogContent(noneContext);
+    assert.match(noneContent,/id="aoe-consume" disabled/);
+    assert.match(noneContent,/Configure Consume Ammunition or Consume Item in AoE Settings/);
+    const form={querySelector:id=>id==='#aoe-consume'?{checked:true}: {value:'0'}};
+    assert.equal(readAoeAttackDialogValues(form,{consumeMode:'none'}).consume,false);
+    let config;
+    class FakeDialog{constructor(data){config=data;}render(){return this;}}
+    const result=showAoeAttackDialog(noneContext,{DialogClass:FakeDialog,addModifierButtons:()=>{}});
+    config.buttons.attack.callback(form);config.close();
+    assert.equal((await result).consume,false);
+  } finally {global.foundry=previousFoundry;}
+});
+
 test('prepared Gunnery effects and global trait/attribute/attack modifiers apply once without Benny stacking', async () => {
   const s = await runAttack({vehicle:true,dice:[5,3,6,4,7,5],
     skillEffects:[{label:'Skill bonus',value:2},{value:99,ignore:true}],
@@ -301,10 +443,11 @@ test('invalid configured modifier formula or missing @field cannot consume ammun
   }
 });
 
-test('manual all-skills override can choose another owned vehicle gunner', async () => {
-  const s = await runAttack({vehicle:true,manualChoice:'Actor.other|gunnery2'});
-  assert.equal(s.setupDialogs,1); assert.ok(s.events.includes('roll:1d12x'));
-  assert.ok(s.nativeCalls.every(call => call.operator === s.other && call.actualOwner === s.owner));
+test('manual macro only chooses weapon, then uses its native Trait and assigned gunner', async () => {
+  const s = await runAttack({vehicle:true,manualChoice:'weapon'});
+  assert.equal(s.setupDialogs,1); assert.equal(s.panelCalls,1);
+  assert.ok(s.events.includes('roll:1d10x'));
+  assert.ok(s.nativeCalls.every(call => call.operator === s.gunner && call.actualOwner === s.owner));
 });
 
 test('canceling placement, disabled AoE, missing skill or empty magazine never consumes or rolls', async () => {
@@ -362,11 +505,21 @@ test('gear AoE uses a named native damage action without requiring a main Damage
 });
 
 test('last auto-destroy consumable charge is blocked before ammo debit, but manual consumption is allowed', async () => {
-  const opts = {itemType:'consumable',quantity:1,charges:{default:{value:1,max:1}},destroyOnEmpty:true};
+  const opts = {itemType:'consumable',quantity:1,charges:{default:{value:1,max:1}},destroyOnEmpty:true,flags:{aoeConsumeMode:'ammo'}};
   const blocked = await runAttack(opts);
   assert.equal(blocked.crosshairCalls,0); assert.equal(blocked.cards.length,0);
   assert.ok(!blocked.events.includes('ammo'));
   assert.ok(blocked.notices.some(notice=>/deleted before damage/.test(notice.text)));
   const manual = await runAttack({...opts,flags:{aoeConsume:false}});
   assert.equal(manual.nativeCards.length,2); assert.ok(!manual.events.includes('ammo'));
+});
+
+test('last consumable in Consume Item mode can become quantity zero while its profile remains for GM damage', async () => {
+  const s=await runAttack({itemType:'consumable',quantity:1,charges:{default:{value:1,max:1}},destroyOnEmpty:true,
+    flags:{aoeConsumeMode:'item'}});
+  assert.equal(s.weapon.system.quantity,0);assert.equal(s.weapon.system.currentShots,4);
+  assert.equal(s.weapon.system.charges.default.value,1);
+  assert.equal(s.owner.items.get(s.weapon.id),s.weapon);
+  assert.equal(s.quantityUpdates,1);assert.equal(s.nativeCards.length,2);
+  assert.ok(!s.events.includes('ammo'));
 });
