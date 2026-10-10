@@ -1,6 +1,7 @@
 export const AOE_FLAG_SCOPE = 'swade-tools';
 export const AOE_ENABLED_FLAG = 'aoeEnabled';
-export const AOE_ITEM_TYPES = new Set(['weapon', 'consumable', 'gear']);
+export const AOE_ITEM_TYPES = new Set(['weapon', 'consumable', 'gear', 'power']);
+export const POWER_AOE_SHAPES = Object.freeze(['small', 'medium', 'large', 'scone', 'cone', 'stream']);
 
 export const canEnableAoe = item => Boolean(
     item && AOE_ITEM_TYPES.has(item.type)
@@ -24,8 +25,11 @@ export const getAoeEnabledFlag = item => {
 
 export const isAoeItem = item => {
     if (!canEnableAoe(item)) return false;
+    if (item.type === 'power') return getAoeEnabledFlag(item) === true;
     return getAoeEnabledFlag(item) ?? isLegacyGrenadeItem(item);
 };
+
+export const isPowerAoeItem = item => item?.type === 'power' && isAoeItem(item);
 
 export const setAoeEnabled = async (item, enabled) => {
     if (!canEnableAoe(item)) {
@@ -49,12 +53,36 @@ const readFlag = (item, key) => typeof item?.getFlag === 'function'
     ? item.getFlag(AOE_FLAG_SCOPE, key)
     : item?.flags?.[AOE_FLAG_SCOPE]?.[key];
 
+export const getPowerAoeSettings = item => {
+    const saved = readFlag(item, 'aoePowerShape');
+    return {
+        shape: POWER_AOE_SHAPES.includes(saved) ? saved
+            : ['cone', 'scone', 'stream', 'small', 'medium', 'large']
+                .find(shape => item?.system?.templates?.[shape] === true) ?? 'medium'
+    };
+};
+
+export const savePowerAoeSettings = async (item, settings = {}) => {
+    if (item?.type !== 'power' || !item.isOwner) {
+        throw new Error('You do not own an eligible AoE power.');
+    }
+    if (!POWER_AOE_SHAPES.includes(settings.shape)) {
+        throw new Error('Choose a valid power template shape.');
+    }
+    const saved = { shape: settings.shape };
+    await item.update({ 'flags.swade-tools.aoePowerShape': saved.shape });
+    return saved;
+};
+
 const readAmmoCost = item => {
     const value = Number(readFlag(item, 'aoeAmmoCost'));
     return Number.isSafeInteger(value) && value >= 1 ? value : 1;
 };
 
 export const getAoeConsumptionMode = item => {
+    // A power uses the native casting / Power Point flow, never weapon ammo or
+    // inventory quantity, including when old or imported resource flags exist.
+    if (item?.type === 'power') return 'none';
     const mode = readFlag(item, 'aoeConsumeMode');
     if (['ammo','item','none'].includes(mode)) return mode;
     if (readFlag(item, 'aoeConsume') === false) return 'none';
@@ -82,6 +110,7 @@ export const getAoeItemSettings = item => ({
 });
 
 export const saveAoeItemSettings = async (item, settings) => {
+    if (item?.type === 'power') throw new Error('Use Power AoE Settings for this item.');
     if (!canEnableAoe(item) || !item.isOwner) {
         throw new Error('You do not own an eligible AoE item.');
     }

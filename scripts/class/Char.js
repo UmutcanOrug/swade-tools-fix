@@ -193,7 +193,7 @@ export default class Char {
          
          let newpp=gb.realInt(actualPP)-pp;
         
-                entity.update({[updateKey]:newpp})
+                return entity.update({[updateKey]:newpp})
     }
 
 

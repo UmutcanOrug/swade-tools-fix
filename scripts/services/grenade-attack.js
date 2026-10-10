@@ -38,10 +38,11 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAttackDialog.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAnimationService.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/WeaponDamageModifier.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeChatControl.js")),
 };
 const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
   playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
-  prepareWeaponDamageModifier} = aoeServices;
+  prepareWeaponDamageModifier, renderAoeAttackTargets} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -70,6 +71,7 @@ if (typeof contextualItem === "string") {
 if (!contextualItem && macroScope.itemUuid) {
   contextualItem = await fromUuid(macroScope.itemUuid);
 }
+if (contextualItem?.type === "power") return ui.notifications.warn("Use the native Power casting panel for this AoE power.");
 let weaponActor = macroScope.weaponActor ?? contextualItem?.actor ??
   (contextualItem?.parent?.items ? contextualItem.parent : null) ?? selectedToken.actor;
 if (typeof weaponActor === "string") weaponActor = await fromUuid(weaponActor);
@@ -80,6 +82,7 @@ if (contextualItem && !isAoeItem(contextualItem)) return ui.notifications.warn("
 
 const grenades = weaponActor.items
   .filter(isAoeItem)
+  .filter((candidate) => candidate.type !== "power")
   .filter((candidate) => poolAttack || !isLegacyGrenadeItem(candidate) || Number(candidate.system.quantity ?? 1) > 0)
   .sort((a, b) => {
     const damageDifference =
@@ -522,6 +525,15 @@ const syncGrenadeAthleticsResult = () => {
     traitRoll, wildRoll, bennyModifierRoll, criticalConfirmationRoll, criticalFailure, naturalOneFailure,
     bestDie, chosenDie, total, totalModifier,
   } = athleticsAttempt);
+  const gmModifier = Number(throwMessage?.flags?.world?.aoeAttack?.gmModifier ?? 0);
+  total += gmModifier;
+  totalModifier += gmModifier;
+  const savedTargets = throwMessage?.flags?.world?.aoeAttack?.targets;
+  if (savedTargets) {
+    blastTargets = savedTargets.map((saved) => canvas.tokens.placeables.find(
+      (candidate) => candidate.document?.uuid === saved.uuid
+    )).filter(Boolean);
+  }
   success = !criticalFailure && !naturalOneFailure && total >= 4;
   raise = success && total >= 8;
 };
@@ -628,20 +640,8 @@ const [templateDocument] = await canvas.scene.createEmbeddedDocuments(
 );
 
 let throwMessage = null;
-const getBlastTargetNames = (targets) =>
-  targets.map(
-    (targetToken) => targetToken.name || targetToken.actor?.name || "Unknown"
-  );
-const getBlastTargetsHtml = (targets) => {
-  const names = getBlastTargetNames(targets);
-  const status = success ? "Hit" : "Blast";
-  const borderColor = success ? "#1b7f3a" : "#8a6d3b";
-  return `<div style="font-size:11px;margin-bottom:2px"><strong>Targets:</strong>${names.length ? "" : " None"}</div>${names.length
-    ? `<div style="display:flex;flex-wrap:wrap;gap:3px">${names.map((name) =>
-      `<div class="swadetools-aoe-target" style="flex:1 1 140px;border:1px solid ${borderColor};border-radius:3px;padding:2px 5px;font-size:12px;line-height:17px;overflow-wrap:anywhere"><i class="fa-solid fa-bullseye" aria-hidden="true"></i> ${foundry.utils.escapeHTML(name)}: <strong>${status}</strong></div>`
-    ).join("")}</div>`
-    : ""}`;
-};
+const getBlastTargetsHtml = (targets) => renderAoeAttackTargets(targets,
+  {baseTotal: total, criticalFailure, naturalOneFailure});
 const updateBlastTargetText = async (targets) => {
   if (!throwMessage) return;
   const wrapper = globalThis.document.createElement("div");
@@ -649,14 +649,15 @@ const updateBlastTargetText = async (targets) => {
   const targetLine = wrapper.querySelector("[data-grenade-targets]");
   if (!targetLine) return;
   targetLine.innerHTML = getBlastTargetsHtml(targets);
-  await throwMessage.update({ content: wrapper.innerHTML });
+  await throwMessage.update({ content: wrapper.innerHTML,
+    "flags.world.aoeAttack": getGrenadeChatState(targets) });
 };
 
 const collectTokensInBlast = (centerX, centerY, notificationLabel) => {
   const radiusPixels =
     (blastRadius / Math.max(sceneDistance, Number.EPSILON)) * gridSize;
   const blastTargets = canvas.tokens.placeables.filter((candidate) => {
-    if (!candidate.actor || candidate.isVisible === false) return false;
+    if (!candidate.actor || candidate.isVisible === false || candidate.visible === false || candidate.document?.hidden) return false;
     const candidateCenter = candidate.center ?? candidate.getCenterPoint?.();
     if (!candidateCenter) return false;
     return (
@@ -706,6 +707,11 @@ const armGrenadeDeviation = () => {
     "updateMeasuredTemplate",
     async (document, changes) => {
       if (document.id !== templateDocument.id || suppressDeviationUpdate || success) return;
+      if (changes["flags.world.aoeGmCorrection"]) return;
+      if (throwMessage?.flags?.world?.aoeAttack?.success) {
+        cleanupDeviationTargeting();
+        return;
+      }
       if (!("x" in changes) && !("y" in changes)) return;
       blastTargets = collectTokensInBlast(
         Number(document.x),
@@ -827,22 +833,25 @@ const renderGrenadeThrowContent = async () => {
   const confirmationDetails = criticalConfirmationRoll
     ? `<div><strong>Extra confirmation:</strong> d6 = ${criticalConfirmationRoll.total}. ${criticalFailure ? "Confirmed Critical Failure." : "Critical Failure not confirmed. The natural 1 remains a failed attack regardless of modifiers."}</div>` : "";
   const gmReview = athleticsDamageReviewNote
-    ? `<div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: ${raise && /gained a Raise/.test(athleticsDamageReviewNote) ? `review existing damage and its ${raiseDamageFormula} Raise bonus.` : "review existing damage and blast result."}</strong></div>` : "";
+    ? `<div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: ${raise && /gained a Raise/.test(athleticsDamageReviewNote) ? `review existing damage and its ${raiseDamageFormula} Raise bonus.` : "review existing damage and blast result."}</strong></div>`
+    : throwMessage?.flags?.world?.aoeAttack?.reviewExistingDamage
+      ? '<div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: review existing damage.</strong></div>' : "";
   return `<article class="swade chat-card swadetools-pseudocard swadetools-aoe-card">
     <header class="card-header flexrow" style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
       <img src="${escape(grenade.img || "icons/svg/explosion.svg")}" alt="${escape(grenade.name)}" width="32" height="32" style="flex:0 0 32px;object-fit:contain;border:0">
       <strong style="font-size:15px;line-height:18px">${escape(grenade.name)}</strong>
     </header>
-    <div class="swadetools-aoe-skill" style="font-size:12px;line-height:18px"><strong>${escape(attackSkillName)}:</strong> <span style="color:${resultColor};font-weight:bold">${compactResultLabel}</span></div>
+    <div class="swadetools-aoe-skill" style="font-size:12px;line-height:18px"><strong>${escape(attackSkillName)}:</strong> <span data-aoe-result style="color:${resultColor};font-weight:bold">${compactResultLabel}</span></div>
     ${athleticsAttempts.length > 1 && athleticsAttempts.at(-1) !== athleticsAttempt ? `<div style="font-size:11px;line-height:16px">Previous result kept (reroll ${athleticsAttempts.at(-1).total}${athleticsAttempts.at(-1).naturalOneFailure ? ", natural 1" : ""}).</div>` : ""}
     ${modifierParts ? `<div class="swadetools-aoe-modifiers" style="font-size:11px;line-height:16px">${escape(modifierParts)}</div>` : ""}
+    <!--aoe-gm-mod-start-->${throwMessage?.flags?.world?.aoeAttack?.gmModifier ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${signed(Number(throwMessage.flags.world.aoeAttack.gmModifier))}</div>` : ""}<!--aoe-gm-mod-end-->
     <div class="dice-roll" style="margin:3px 0"><div class="dice-result">
       <div class="dice-formula" style="padding:2px"><ol class="formula-list" style="display:flex;align-items:center;justify-content:center;gap:4px;list-style:none;margin:0;padding:0">${dieResultsHtml(traitRoll, traitSides, "Trait")}${dieResultsHtml(wildRoll, wildSides, "Wild")}${totalModifier ? `<li style="font-size:12px" title="Total Modifier">${signed(totalModifier)}</li>` : ""}</ol></div>
-      <div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div>
+      <div style="position:relative"><div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div><button type="button" data-aoe-gm-mod class="swadetools-rollbutton" title="Adjust AoE Attack" style="position:absolute;left:3px;bottom:3px;margin:0"${game.user.isGM ? "" : " hidden"}><i class="fa fa-plus" aria-hidden="true"></i></button></div>
     </div></div>
     <div data-grenade-targets style="margin:4px 0">${getBlastTargetsHtml(blastTargets)}</div>
-    ${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}
-    ${gmReview}
+    <!--aoe-deviation-start-->${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}<!--aoe-deviation-end-->
+    <!--aoe-review-start-->${gmReview}<!--aoe-review-end-->
     ${getGrenadeBennyControlsHtml()}
     <details class="swadetools-aoe-details" style="font-size:11px;margin-top:4px">
       <summary style="cursor:pointer">Details</summary>
@@ -872,10 +881,34 @@ const getGrenadeThrowRolls = () => {
       latestAttempt.criticalConfirmationRoll, latestAttempt.bennyModifierRoll] : []),
   ].filter(Boolean))];
 };
+const getGrenadeChatState = (targets = blastTargets) => ({
+  version: 1,
+  sceneId: String(canvas.scene.id ?? selectedToken.document.uuid?.split(".")[1] ?? ""),
+  weaponActorUuid: weaponActor.uuid,
+  operatorActorUuid: actingActor.uuid,
+  itemUuid: grenade.uuid,
+  damageItemUuid: damageSourceItem.uuid,
+  sourceTokenUuid: selectedToken.document.uuid,
+  templateId: templateDocument.id,
+  originalPoint: {x: target.x, y: target.y},
+  targets: targets.map((entry) => ({id: entry.id,
+    uuid: entry.document.uuid, name: entry.name || entry.actor?.name || "Unknown"})),
+  baseTotal: athleticsAttempt.total,
+  gmModifier: Number(throwMessage?.flags?.world?.aoeAttack?.gmModifier ?? 0),
+  total, success, raise, criticalFailure, naturalOneFailure,
+  damageActionId: selectedDamageActionEntry?.[0] ?? "",
+  damageModifier: extraDamageModifier,
+  reviewExistingDamage: throwMessage?.flags?.world?.aoeAttack?.reviewExistingDamage === true,
+  damageWorkflowStarted: damageWorkflowStarted ||
+    throwMessage?.flags?.world?.aoeAttack?.damageWorkflowStarted === true,
+});
 const updateGrenadeThrowMessage = async () => {
   if (!throwMessage) return;
+  syncGrenadeAthleticsResult();
+  resultColor = success ? "#1b7f3a" : "#a61b1b";
   await throwMessage.update({
     rolls: getGrenadeThrowRolls().map((roll) => roll.toJSON()),
+    "flags.world.aoeAttack": getGrenadeChatState(),
     content: await renderGrenadeThrowContent(),
   });
 };
@@ -887,7 +920,7 @@ const createGrenadeThrowMessage = async (previousMessage = null) => ChatMessage.
     token: selectedToken.document,
   }),
   rolls: getGrenadeThrowRolls(),
-  flags: { world: { ...(poolAttack ? {aoePoolId: poolAttack.poolId,
+  flags: { world: { aoeAttack: getGrenadeChatState(), ...(poolAttack ? {aoePoolId: poolAttack.poolId,
       aoePoolCandidate: poolAttack.candidateIndex} : {grenadeBennySession: grenadeBennyKey}),
     ...(previousMessage ? {aoePreviousMessage: previousMessage.id} : {}),
   } },
@@ -1214,7 +1247,7 @@ if (damage) {
   };
 
   runGrenadeDamageForTargets = async (targetsForDamage) => {
-    if (damageWorkflowStarted) return;
+    if (damageWorkflowStarted || throwMessage?.flags?.world?.aoeAttack?.damageWorkflowStarted) return;
 
     const uniqueTargets = Array.from(
       new Map(
@@ -1286,6 +1319,8 @@ if (success) {
 // Optional chat-card rerolls never re-enter the one-shot throw above.
 const rerollGrenadeAthletics = async (source, messageId) => {
   if (poolAttack || !grenadeThrowReady || athleticsRerollInProgress || !throwMessage || messageId !== throwMessage.id) return;
+  syncGrenadeAthleticsResult();
+  damageWorkflowStarted ||= throwMessage.flags?.world?.aoeAttack?.damageWorkflowStarted === true;
   const spender = source === "gm" ? game.user : actingActor;
   const rerollLocked = criticalFailure && !dumbLuckEnabled;
   if (

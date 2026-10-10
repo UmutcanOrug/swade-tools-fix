@@ -154,6 +154,7 @@ export const playAoeAnimation = async (context, runtime = {}) => {
             return {engine: 'automated-animations', ok: false, reason: 'api-error'};
         }
     }
+    if (context.allowFallback === false) return {engine: 'none', ok: false, reason: 'fallback-disabled'};
     if (typeof SequenceClass !== 'function' ||
         !databasePathExists(sequencerRef, impactEffect) ||
         (throwProjectile && !databasePathExists(sequencerRef, projectileEffect))) {

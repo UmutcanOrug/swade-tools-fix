@@ -170,10 +170,62 @@ test('AoE requires opt-in for HE weapons, supports legacy grenades, and honors e
     assert.equal(isAoeItem(item), false);
     delete item.flags['swade-tools'].aoeEnabled;
     assert.equal(isAoeItem(item), true);
-    assert.equal(canEnableAoe({ type: 'power' }), false);
+    assert.equal(canEnableAoe({ type: 'power' }), true);
     assert.equal(canEnableAoe({ type: 'skill' }), false);
     item.isOwner = false;
     await assert.rejects(setAoeEnabled(item, true), /own/);
+});
+
+test('powers require explicit AoE opt-in and never inherit grenade resource behavior', async () => {
+    const { isAoeItem, isPowerAoeItem, setAoeEnabled, getAoeConsumptionMode } = await load('AoeItemFlags.js');
+    const item = makeItem(makeActor('caster'), {
+        type: 'power', name: 'Grenade Burst',
+        system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, quantity: 4, pp: 2 },
+        flags: { 'swade-tools': { aoeConsumeMode: 'item', aoeConsume: true, aoeAmmoCost: 3 } }
+    });
+    assert.equal(isAoeItem(item), false);
+    assert.equal(isPowerAoeItem(item), false);
+    assert.equal(getAoeConsumptionMode(item), 'none');
+    await setAoeEnabled(item, true);
+    assert.equal(isAoeItem(item), true);
+    assert.equal(isPowerAoeItem(item), true);
+    assert.equal(isPowerAoeItem(makeItem(makeActor('rifle'), {
+        flags: { 'swade-tools': { aoeEnabled: true } }
+    })), false);
+    await setAoeEnabled(item, false);
+    assert.equal(isPowerAoeItem(item), false);
+    assert.equal(item.system.quantity, 4);
+    assert.equal(item.system.pp, 2);
+});
+
+test('Power AoE shapes use native templates by default and save only validated shape flags', async () => {
+    const { getPowerAoeSettings, savePowerAoeSettings, saveAoeItemSettings, POWER_AOE_SHAPES } = await load('AoeItemFlags.js');
+    const item = makeItem(makeActor('caster'), {
+        type: 'power', name: 'Burst', system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, pp: 2 }
+    });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone' });
+    for (const shape of POWER_AOE_SHAPES) {
+        assert.deepEqual(await savePowerAoeSettings(item, { shape, consumeMode: 'ammo', skill: 'Shooting' }), { shape });
+        assert.deepEqual(getPowerAoeSettings(item), { shape });
+        assert.deepEqual(item.updates.at(-1), { 'flags.swade-tools.aoePowerShape': shape });
+    }
+    assert.equal(item.system.actions.trait, 'Aetherics');
+    assert.equal(item.system.pp, 2);
+    const changes = item.updates.length;
+    await assert.rejects(savePowerAoeSettings(item, { shape: 'ray' }), /valid power template/);
+    await assert.rejects(saveAoeItemSettings(item, { blastSize: 'small' }), /Power AoE Settings/);
+    item.isOwner = false;
+    await assert.rejects(savePowerAoeSettings(item, { shape: 'small' }), /own/);
+    assert.equal(item.updates.length, changes);
+    item.flags['swade-tools'].aoePowerShape = 'invalid-imported-shape';
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone' });
+    item.system.templates = {};
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'medium' });
+    item.system.templates = { scone: true };
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'scone' });
+    item.system.templates = { stream: true };
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'stream' });
+    await assert.rejects(savePowerAoeSettings(makeItem(makeActor('weapon')), { shape: 'small' }), /eligible AoE power/);
 });
 
 test('saved AoE settings default from item and update flags without changing its native Trait', async () => {
@@ -294,6 +346,44 @@ test('V13 item sheet gets English opt-in plus settings control and saves all con
     await showAoeItemSettings(owner, item); assert.equal(item.updates.length, 1);
 });
 
+test('Power AoE Properties controls open compact shape settings without ammo or casting overrides', async () => {
+    const { messages } = platform();
+    const { bindAoeItemSheetControl, showAoeItemSettings } = await load('AoeItemConfig.js');
+    const owner = makeActor('caster');
+    const item = makeItem(owner, {
+        type: 'power', name: 'Burst',
+        system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, pp: 2 }
+    });
+    const root = new Element('form'), tab = new Element('section');
+    tab.className = 'tab'; tab.dataset.tab = 'properties'; root.append(tab);
+    bindAoeItemSheetControl({ document: item, isEditable: true }, root);
+    assert.equal(tab.querySelector('label').textContent, 'Enable AoE');
+    assert.ok(tab.querySelector('[data-swade-tools-aoe-settings]'));
+    let captured;
+    foundry.applications.api.DialogV2.prompt = async options => {
+        captured = options;
+        return options.ok.callback(null, { form: { elements: { aoePowerShape: { value: 'scone' } } } });
+    };
+    await showAoeItemSettings(owner, item);
+    assert.equal(captured.window.title, 'Burst - Power AoE Settings');
+    assert.equal(captured.position.width, 420);
+    assert.match(captured.content, /<option value="cone" selected>/);
+    assert.match(captured.content, /Small Cone Template/);
+    assert.match(captured.content, /Stream Template/);
+    assert.doesNotMatch(captured.content, /aoeConsume|aoeAmmoCost|Consume Ammunition|Consume Item|Attack Skill|name="aoeSkill"/);
+    assert.deepEqual(item.updates, [{ 'flags.swade-tools.aoePowerShape': 'scone' }]);
+    assert.equal(item.system.actions.trait, 'Aetherics');
+    assert.equal(item.system.pp, 2);
+    assert.deepEqual(messages, [['info', 'Power AoE settings saved.']]);
+    foundry.applications.api.DialogV2.prompt = async () => null;
+    await showAoeItemSettings(owner, item);
+    assert.equal(item.updates.length, 1);
+    item.isOwner = false;
+    foundry.applications.api.DialogV2.prompt = async () => { throw Error('Unowned Power must not open settings'); };
+    await showAoeItemSettings(owner, item);
+    assert.equal(item.updates.length, 1);
+});
+
 test('AoE Settings consumption checkboxes are mutually exclusive and both off saves None', async () => {
     platform();
     const { showAoeItemSettings } = await load('AoeItemConfig.js');
@@ -369,6 +459,61 @@ test('experimental AoE name, image and explosion clicks use one unified panel wi
     assert.equal(calls.length,3);
     for (const call of calls){assert.equal(call[0],owner);assert.equal(call[1],item.id);assert.equal(call[3].token,token);}
     assert.equal(calls[0][3].restoreLast,true);assert.equal(calls[1][3].restoreLast,false);assert.equal(calls[2][3].restoreLast,true);
+});
+
+test('AoE power name, image and explosion always use native casting panel without Experimental Unified RoF', async () => {
+    platform();
+    const { bindAoeInventoryControls } = await load('AoeItemConfig.js');
+    const owner = makeActor('caster');
+    const item = makeItem(owner, {
+        type: 'power', name: 'Burst',
+        flags: { 'swade-tools': { aoeEnabled: true } },
+        system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, range: '8', pp: 2 }
+    });
+    const token = { actor: owner, id: 'caster-token', document: { uuid: 'Scene.scene.Token.caster-token' } };
+    const root = new Element('form'), row = makeRow(root, item);
+    const name = new Element('a'); name.className = 'item-name';
+    const image = new Element('img'); row.append(name, image);
+    const calls = [];
+    game.settings = { get: () => false };
+    game.swadetools = { item: async (...args) => calls.push(args) };
+    global.fetch = async () => { throw Error('Power must never load weapon AoE engine'); };
+    bindAoeInventoryControls({ actor: owner, isEditable: true, token }, root);
+    await name.emit('click', { shiftKey: true });
+    await image.emit('click');
+    const explosion = row.querySelector('[data-swade-tools-aoe]');
+    assert.equal(explosion.title, 'Open AoE Power');
+    await explosion.emit('click');
+    assert.equal(calls.length, 3);
+    for (const call of calls) {
+        assert.equal(call[0], owner); assert.equal(call[1], item.id); assert.equal(call[2], null);
+        assert.equal(call[3].token, token);
+    }
+    assert.equal(calls[0][3].restoreLast, true);
+    assert.equal(calls[1][3].restoreLast, false);
+    assert.equal(calls[2][3].restoreLast, false);
+    assert.equal(item.updates.length, 0);
+});
+
+test('unavailable native Power panel and direct grenade API fail safely instead of consuming ammo', async () => {
+    const { messages } = platform();
+    const { bindAoeInventoryControls } = await load('AoeItemConfig.js');
+    const { launchAoeMacro, resolveAoeLaunchScope, prepareAoePoolPoints } = await load('AoeMacroLauncher.js');
+    const owner = makeActor('caster'), item = makeItem(owner, {
+        type: 'power', flags: { 'swade-tools': { aoeEnabled: true } }
+    });
+    const root = new Element('form'), row = makeRow(root, item);
+    global.fetch = async () => { throw Error('Power must never load weapon AoE engine'); };
+    bindAoeInventoryControls({ actor: owner, isEditable: true }, root);
+    const explosion = row.querySelector('[data-swade-tools-aoe]');
+    await explosion.emit('click');
+    assert.equal(explosion.disabled, false);
+    assert.match(messages[0][1], /native power panel is not available/);
+    assert.equal(await launchAoeMacro(owner, item), false);
+    assert.match(messages[1][1], /native power casting panel/);
+    await assert.rejects(resolveAoeLaunchScope(owner, item), /native power casting panel/);
+    assert.deepEqual(await prepareAoePoolPoints({ actor: owner, item, candidates: [{}] }), []);
+    assert.equal(item.updates.length, 0);
 });
 
 test('per-item launch guard blocks duplicate attacks across a rerender and releases after completion', async () => {

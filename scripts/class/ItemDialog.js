@@ -10,6 +10,8 @@ import { readWeaponPanelSettings, restoreWeaponPanelSettings, toInlineRofSetup, 
 import { getShotgunSettings, getShotgunDamageProfiles } from '../services/ShotgunRules.js';
 import { prepareNativeShotgunAttack, applyNativeShotgunProfile } from '../services/NativeShotgunAttack.js';
 import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js';
+import { isPowerAoeItem, getPowerAoeSettings, POWER_AOE_SHAPES } from '../services/AoeItemFlags.js';
+import { runPowerAoe } from '../services/PowerAoeCast.js';
 
 export default class ItemDialog {
     constructor(actor,itemId,operator=null,options={}){
@@ -49,6 +51,19 @@ export default class ItemDialog {
         const context=this.weaponSettingsContext();
         if (context) saveLastWeaponSettings(context,values);
         return values;
+    }
+
+    async executePowerAoe(html,actionType='skill',actionId='',damageOverride=null){
+        return runPowerAoe({actor:this.actor,item:this.item,token:this.options.token,
+            shape:html.find('#power-aoe-shape')[0]?.value ?? getPowerAoeSettings(this.item).shape,
+            extraPP:html.find('#extrapp')[0]?.value ?? 0,actionType,actionId,
+            noPowerPoints:gb.systemSetting('noPowerPoints'),
+            getActualPP:()=>new Char(this.actor).getActualPP(this.item.system.arcane),
+            createRoll:()=>new ItemRoll(this.actor,this.item),
+            prepareRoll:roll=>this.processItemFormDialog(html,roll,actionType),
+            performRoll:roll=>actionId ? roll.rollAction(actionId)
+                : actionType==='damage' ? roll.rollBaseDamage(damageOverride) : roll.rollBaseSkill()
+        });
     }
 
     async executeSystemItemAction(actionId){
@@ -146,6 +161,10 @@ export default class ItemDialog {
     }
 
     showDialog(){
+        if (!this.damageOnly && this.item.type==='power' && isAoeItem(this.item) && !this.actor){
+            ui.notifications.warn('Assign a casting actor before opening this AoE power.');
+            return;
+        }
         const experimentalUnified=!this.damageOnly && typeof gb.setting==='function' &&
             gb.setting('unifiedRofExperimental')===true;
         const unifiedWeapon=experimentalUnified && this.item.type==='weapon' &&
@@ -156,7 +175,7 @@ export default class ItemDialog {
         }
         // All normal item entry points share this dialog. Opted-in weapons use
         // the AoE attack panel; internal native damage calls bypass the route.
-        if (!this.damageOnly && isAoeItem(this.item) && !unifiedWeapon){
+        if (!this.damageOnly && this.item.type!=='power' && isAoeItem(this.item) && !unifiedWeapon){
             return launchAoeMacro(this.weaponActor,this.item,{
                 operatorActor:this.actor?.type!=='vehicle' ? this.actor : null,
                 promptAoeSetup:true, token:this.options.token, restoreLast:this.options.restoreLast===true
@@ -171,6 +190,7 @@ export default class ItemDialog {
             (item.system.isRanged===true || String(item.system.range ?? '').trim()!=='');
         const unifiedRof=!this.damageOnly && rangedWeapon && experimentalUnified;
         const weaponPanel=!this.damageOnly && item.type==='weapon';
+        const powerAoePanel=!this.damageOnly && item.type==='power' && isPowerAoeItem(item);
         const aoeWeaponPanel=unifiedRof && isAoeItem(item);
         const aoeSettings=aoeWeaponPanel ? getAoeItemSettings(item) : null;
         const shotgunSettings=unifiedRof ? getShotgunSettings(item) : {enabled:false};
@@ -277,7 +297,11 @@ export default class ItemDialog {
             <label class="swadetools-small-check" title="Consume the configured resource on this attack"><input id="rof-consume-ammo" type="checkbox" ${aoeSettings?.consumeMode==='none' ? 'disabled' : 'checked'}>${aoeSettings?.consumeMode==='item' ? 'Consume Item' : 'Ammunition'}</label>
             </div></div>`;
 
-        if (item.type=='power' || item.type=='weapon'){
+        if (powerAoePanel){
+            const labels={small:'Small Blast',medium:'Medium Blast',large:'Large Blast',scone:'Small Cone',cone:'Cone',stream:'Line'};
+            const selected=getPowerAoeSettings(item).shape;
+            content+=`<div class="swadetools-mod-add"><label for="power-aoe-shape"><strong>Area</strong></label><select id="power-aoe-shape">${POWER_AOE_SHAPES.map(shape=>`<option value="${shape}" ${shape===selected?'selected':''}>${labels[shape]}</option>`).join('')}</select></div>`;
+        } else if (item.type=='power' || item.type=='weapon'){
             let templatehtml=gb.getTemplatesHTML(item);
             if (templatehtml){
                 content+=`<span class="swade-tools-template-buttons"><strong>Templates:</strong>${templatehtml}</span>`
@@ -577,6 +601,7 @@ export default class ItemDialog {
         buttons.mainSkill={
             label: skillIcon+skillName+gb.stringMod(gb.itemSkillMod(this.item)),
             callback: async (html)=>{
+                if (powerAoePanel) return this.executePowerAoe(html);
                 if (unifiedRof){
                     if (aoeWeaponPanel && shotgunSettings.enabled){ui.notifications.warn('Shotgun and AoE damage profiles cannot be enabled together. Choose the appropriate item profile.');return;}
                     const values=readWeaponPanelSettings(html);
@@ -662,6 +687,7 @@ export default class ItemDialog {
             label: damageIcon+gb.trans('Damage'),//weaponinfo.damage+gb.stringMod(weaponactions.dmgMod),
             
             callback: async (html)=>{
+                if (powerAoePanel) return this.executePowerAoe(html,'damage','',this.damageOverride);
                
                 let itemRoll=new ItemRoll(this.actor,this.item)
                 let damageOverride=this.damageOverride;
@@ -839,6 +865,9 @@ export default class ItemDialog {
                         } else if (action.type=='macro'){
                             await this.executeSystemItemAction(id);
                         }else  {
+                            if (powerAoePanel && ['trait','damage'].includes(action.type)) {
+                                return this.executePowerAoe(html,action.type,id);
+                            }
                             let itemRoll=new ItemRoll(this.actor,this.item)
                             if (await this.processItemFormDialog(html,itemRoll,action.type)===false) return;
                             await itemRoll.rollAction(id);
@@ -951,6 +980,7 @@ export default class ItemDialog {
 
     async processItemFormDialog(html,charRoll,actionType,modifierOverride,preparedWeaponDamage){
         const weaponPanel=!this.damageOnly && this.item.type==='weapon';
+        const powerAoeDamage=actionType==='damage' && this.item.type==='power' && isPowerAoeItem(this.item);
         if (weaponPanel){
             const values=readWeaponPanelSettings(html);
             const damage=preparedWeaponDamage ?? prepareWeaponDamageModifier(values.damageModifier,this.actor);
@@ -965,7 +995,7 @@ export default class ItemDialog {
             charRoll.usingVehicle(this.vehicle);
         }
         
-           charRoll.addModifier(weaponPanel && actionType==='damage' ? '0' : modifierOverride ?? html.find("#mod")[0].value,gb.trans('Additional'))
+           charRoll.addModifier((weaponPanel && actionType==='damage') || powerAoeDamage ? '0' : modifierOverride ?? html.find("#mod")[0].value,gb.trans('Additional'))
             if (html.find("#raise")[0]?.checked){
                 charRoll.raiseDmg();
             } 
@@ -995,7 +1025,7 @@ export default class ItemDialog {
                 
             }
 
-            if (html.find("#multiaction")[0] && !(weaponPanel && actionType==='damage')){
+            if (html.find("#multiaction")[0] && !(weaponPanel && actionType==='damage') && !powerAoeDamage){
                 charRoll.addModifier(html.find('#multiaction')[0].value,gb.trans('MAPenalty.Label','SWADE'));
             } 
 
@@ -1013,7 +1043,7 @@ export default class ItemDialog {
                 }
             } 
 
-            if (html.find('#cover')[0] && !(weaponPanel && actionType==='damage')){
+            if (html.find('#cover')[0] && !(weaponPanel && actionType==='damage') && !powerAoeDamage){
                 switch (html.find('#cover')[0].value) {
                     case 'Light':
                         charRoll.addModifier(-2,gb.trans('Cover.Light','SWADE'));
@@ -1029,7 +1059,7 @@ export default class ItemDialog {
                         break;
                 }
             }
-            if (html.find('#illumination')[0] && !(weaponPanel && actionType==='damage')){
+            if (html.find('#illumination')[0] && !(weaponPanel && actionType==='damage') && !powerAoeDamage){
                 switch (html.find('#illumination')[0].value) {
                     case 'Dim':
                         charRoll.addModifier(-2,gb.trans('Illumination.Dim','SWADE'));

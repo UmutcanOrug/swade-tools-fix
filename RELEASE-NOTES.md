@@ -1,3 +1,51 @@
+## SWADE Tools 2.1.14 — Power Areas, GM Attack Corrections & Compact RoF Chat
+
+All new interface text is English. Back up the world and update between sessions.
+
+### Power AoE
+
+- Powers now have **Properties → Enable AoE** and an adjacent settings gear.
+- Choose Small/Medium/Large Blast, Small Cone, Cone or Stream. The native Power
+  panel retains its casting Trait, Extra PP, Power Modifiers and Raise Damage.
+- Casting places the area before the native activation roll; cancelling spends
+  no PP and rolls no dice. Sequencer must be active for placement.
+- Frozen area targets appear on native SWADE Tools cards without changing target
+  rings. Click a successful target to roll native damage; the GM applies wounds.
+- Power casting and Benny retain native PP bookkeeping. Damage-only area rolls
+  and innate-power damage do not cast again or spend additional PP.
+- GM correction of a failed Power activation settles only the remaining native
+  PP cost before enabling target damage; critical failures cannot be overridden.
+- Uses native SWADE rounded cone/stream geometry, not grenade scatter or weapon
+  range bands. Automated Animations receives the actual placed template; no
+  circular grenade fallback is forced on cone/stream powers.
+
+### AoE attack cards
+
+- GM **+** can adjust a grenade/weapon AoE attack from a separate GM client.
+  A corrected successful target becomes clickable to roll native damage,
+  including Raise damage. The correction itself never rolls/applies damage.
+- Adjustments and target damage do not repeat ammunition, item use or animation.
+  Critical failures/natural-one failures remain failures. Existing damage cards
+  remain unchanged; a changed result can show a short GM review reminder.
+- Scene-qualified targets are preserved; empty areas do not inherit selected
+  targets, and hidden/missing tokens are not exposed by area recollection.
+
+### RoF consistency and compact chat
+
+- Pooled attacks now use the same nearest-grid-cell/elevation distance helper as
+  native single shots, and honor the existing **Ignore Range** world setting.
+- Regression checks cover **24/48/96 at distance 15** with RoF 3 and three targets,
+  with and without Brawny: this is Short range, with no range penalty. Brawny
+  continues to affect the Minimum Strength calculation, not weapon range.
+- Compact RoF chat keeps the weapon header, usable dice and assigned targets
+  visible; detailed modifiers, resource accounting and pool history are folded
+  into **Details**. Attack/assignment/damage mechanics are unchanged.
+
+Validated with automated native-adapter/geometry/chat/range regression tests
+and a local UI preview. No live Foundry game was accessed or modified.
+
+---
+
 ## SWADE Tools 2.1.13 — Compact Controls & Configurable Shotgun Damage
 
 New interface text remains English. **Experimental Unified RoF is still off

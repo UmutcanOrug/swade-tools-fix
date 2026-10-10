@@ -1448,6 +1448,80 @@ const rerollHistoryRows = poolAttempts.map((pool) => `
   </tr>
 `).join("");
 
+const compactPoolDice = usableResults.map((candidate, index) => {
+  const shortLabel = candidate.source === "wild" ? "W" : (candidate.label.match(/(\d+)$/)?.[1] ?? String(index + 1));
+  const description = `${candidate.label}: ${candidate.rawTotal} ` +
+    `${candidate.modifier >= 0 ? "+" : ""}${candidate.modifier} = ${candidate.total}`;
+  return `<span class="swadetools-rof-pool-die" title="${escapeHTML(description)}"
+    style="display:inline-flex;align-items:center;gap:3px;white-space:nowrap">
+    <small style="font-size:10px;opacity:0.8">${shortLabel}</small>
+    <b style="display:inline-block;min-width:20px;padding:1px 4px;border-radius:3px;background:rgba(0,0,0,0.12)">
+      ${candidate.rawTotal}</b></span>`;
+}).join("");
+
+// Keep the chat footprint close to a native SWADE attack card. All mechanical
+// bookkeeping remains available in closed Details instead of filling the chat.
+const renderAttackPoolCard = ({targetRows = "", targetDetails = ""} = {}) => `
+  <section class="swadetools-rof-card" style="max-width:320px;width:100%;min-width:0;box-sizing:border-box;font-size:12px;line-height:1.3">
+    <div class="swadetools-rof-card-header" style="display:flex;align-items:center;gap:7px;margin:2px 0 4px;min-width:0">
+      <img src="${escapeHTML(weapon.img || "icons/svg/item-bag.svg")}" alt=""
+        width="32" height="32" style="width:32px;height:32px;flex:0 0 32px;object-fit:contain;border:1px solid #777">
+      <strong style="font-size:15px;line-height:18px;min-width:0;overflow-wrap:anywhere">${escapeHTML(weapon.name)}</strong>
+    </div>
+    <div class="swadetools-rof-skill" style="margin:2px 0 4px">
+      ${escapeHTML(attackSkill.name)} &middot; RoF ${selectedRof}${isInlineAoe ? " &middot; AoE" : ""}${
+        commonModifier ? ` &middot; Mod ${commonModifier >= 0 ? "+" : ""}${commonModifier}` : ""
+      }
+    </div>
+    <div class="dice-roll swadetools-rof-pool" style="margin:3px 0 4px">
+      <div class="dice-result">
+        <div class="dice-formula" style="display:flex;flex-wrap:wrap;justify-content:center;gap:4px 9px;padding:3px 4px;margin:0;font-size:13px;line-height:20px">
+          ${compactPoolDice}
+        </div>
+        <div class="dice-total" style="margin:3px 0 0;font-size:18px;line-height:24px;font-weight:bold;text-align:center"
+          title="Usable attack totals">${escapeHTML(usableResults.map(candidate => candidate.total).join(" · "))}</div>
+      </div>
+    </div>
+    <div class="swadetools-rof-targets" style="margin:3px 0">
+      ${targetRows || `<small>${isInlineAoe ? "AoE projectiles resolve below." : "Targets: assign results in the attack window."}</small>`}
+    </div>
+    <details class="swadetools-rof-details" style="margin:4px 0 0;font-size:11px;line-height:1.3">
+      <summary style="cursor:pointer">Details</summary>
+      <div style="padding:4px 0;overflow-wrap:anywhere">
+        <div><strong>${isInlineAoe && aoeResourceOptions.mode === "item" ? "Items spent" : "Ammo spent"}:</strong>
+          ${setup.consumeAmmo ? poolAmmoSpent : "Disabled"}</div>
+        <div><strong>Attack skill:</strong> ${escapeHTML(attackSkill.name)}</div>
+        <div><strong>Base common modifier:</strong>
+          ${commonModifier >= 0 ? "+" : ""}${commonModifier}</div>
+        <div><strong>Benny rerolls:</strong> ${Math.max(0, poolAttempts.length - 1)}
+          (final pool: attempt ${attackPool.attemptNumber})</div>
+        <div><strong>Benny reroll modifier:</strong> ${escapeHTML(bennyTraitSummary)}</div>
+        <div><strong>Minimum Strength:</strong> ${escapeHTML(minimumStrengthSummary)}</div>
+        <div><strong>Damage modifier:</strong> ${escapeHTML([
+          damageModifier || null, theDropDamageBonus ? "The Drop +4" : null,
+        ].filter(Boolean).join(", ") || "None")}</div>
+        <div style="margin-top:4px">${escapeHTML(modifierParts)}</div>
+        <div style="max-width:100%;overflow-x:auto">
+          <table style="width:100%;margin:5px 0;font-size:11px;line-height:1.2;white-space:nowrap">
+            <thead><tr><th>Die</th><th>Raw</th><th>Mod</th><th>Total</th><th>Pool</th></tr></thead>
+            <tbody>${resultRows}</tbody>
+          </table>
+        </div>
+        ${poolAttempts.length > 1 ? `
+          <strong>Benny Reroll History</strong>
+          <div style="max-width:100%;overflow-x:auto">
+            <table style="width:100%;margin:5px 0;font-size:11px;line-height:1.2;white-space:nowrap">
+              <thead><tr><th>Attempt</th><th>Type</th><th>Usable Totals</th><th>Decision</th></tr></thead>
+              <tbody>${rerollHistoryRows}</tbody>
+            </table>
+          </div>` : ""}
+        <div>The best ${selectedRof} result(s) are available for manual target assignment.
+          Target-specific modifiers are decided in the next step.</div>
+        ${targetDetails}
+      </div>
+    </details>
+  </section>`;
+
 const attackPoolMessage = await ChatMessage.create({
   user: game.user.id,
   speaker: ChatMessage.getSpeaker({
@@ -1457,80 +1531,7 @@ const attackPoolMessage = await ChatMessage.create({
   rolls: [...inlineModifierRolls, ...poolAttempts.flatMap((pool) =>
     pool.candidates.map((candidate) => candidate.roll)
   )],
-  content: `
-    <h2>${escapeHTML(weapon.name)} - RoF ${selectedRof}</h2>
-    <p>
-      <strong>${isInlineAoe && aoeResourceOptions.mode === "item" ? "Items spent" : "Ammo spent"}:</strong>
-      ${setup.consumeAmmo ? poolAmmoSpent : "Disabled"}
-    </p>
-    <p>
-      <strong>Attack skill:</strong>
-      ${escapeHTML(attackSkill.name)}
-    </p>
-    <p>
-      <strong>Base common modifier:</strong>
-      ${commonModifier >= 0 ? "+" : ""}${commonModifier}
-    </p>
-    <p>
-      <strong>Benny rerolls:</strong>
-      ${Math.max(0, poolAttempts.length - 1)}
-      (final pool: attempt ${attackPool.attemptNumber})
-    </p>
-    <p>
-      <strong>Benny reroll modifier:</strong>
-      ${escapeHTML(bennyTraitSummary)}
-    </p>
-    <p>
-      <strong>Minimum Strength:</strong>
-      ${escapeHTML(minimumStrengthSummary)}
-    </p>
-    <p>
-      <strong>Damage modifier:</strong>
-      ${escapeHTML(
-        [
-          damageModifier || null,
-          theDropDamageBonus ? "The Drop +4" : null,
-        ].filter(Boolean).join(", ") || "None"
-      )}
-    </p>
-    <p><small>${escapeHTML(modifierParts)}</small></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Die</th>
-          <th>Raw</th>
-          <th>Mod</th>
-          <th>Total</th>
-          <th>Pool</th>
-        </tr>
-      </thead>
-      <tbody>${resultRows}</tbody>
-    </table>
-    ${
-      poolAttempts.length > 1
-        ? `
-          <h3>Benny Reroll History</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Attempt</th>
-                <th>Type</th>
-                <th>Usable Totals</th>
-                <th>Decision</th>
-              </tr>
-            </thead>
-            <tbody>${rerollHistoryRows}</tbody>
-          </table>
-        `
-        : ""
-    }
-    <p>
-      <small>
-        The best ${selectedRof} result(s) are available for manual target
-        assignment. Target-specific modifiers are decided in the next step.
-      </small>
-    </p>
-  `,
+  content: renderAttackPoolCard(),
 });
 
 if (isInlineAoe) {
@@ -1617,6 +1618,23 @@ function getTokenCenter(tokenOrDocument) {
 }
 
 function measureTargetDistance(targetToken) {
+  // Native RoF 1 measures between the nearest occupied grid cells (including
+  // large tokens and elevation), not between token centers. Use exactly the
+  // same helper and scene-unit conversion for pooled attacks when launched
+  // by the module. Standalone copies keep their existing distance fallback.
+  if (typeof rofServices.getNativeRange === "function") {
+    try {
+      const measured = rofServices.getNativeRange(selectedToken, targetToken);
+      const distance = Number(measured);
+      const units = Number(canvas.dimensions?.distance) || 1;
+      if (measured !== null && measured !== undefined && Number.isFinite(distance)) {
+        return distance * units;
+      }
+    } catch {
+      // A standalone macro or a missing placeable may not support native
+      // token geometry. Retain the center/path fallback below in that case.
+    }
+  }
   const sourceDocument = selectedToken.document ?? selectedToken;
   const targetDocument = targetToken.document ?? targetToken;
   const sourceCenter = getTokenCenter(sourceDocument);
@@ -1833,7 +1851,7 @@ const collectTargetAttackProfile = (targetToken) => {
   }
 
   const rangeBands = weaponRangeBands;
-  if (rangeBands) {
+  if (rangeBands && getOptionalSetting("swade-tools", "ignoreRange", false) !== true) {
     if (distance > rangeBands.long) {
       additionalMods.push(
         getSystemModifier(
@@ -2321,6 +2339,22 @@ const resolvedAssignments = assignments
 
 if (resolvedAssignments.length) {
   const resolutionRows = resolvedAssignments.map((assignment) => {
+    const targetName = targetDisplayNames.get(assignment.targetUuid) ??
+      getBaseTargetName(assignment.targetToken);
+    const outcome = assignment.outcome === "raise" ? {label: "Raise", color: "#800080", icon: "bullseye"}
+      : assignment.outcome === "hit" ? {label: "Hit", color: "#008000", icon: "circle-check"}
+        : {label: "Miss", color: "#777777", icon: "circle-xmark"};
+    const arithmetic = `${assignment.result.label}: ${assignment.result.total} ` +
+      `${formatSignedModifier(assignment.targetProfile?.total ?? 0)} = ${assignment.adjustedTotal}`;
+    return `<div class="swadetools-rof-target" title="${escapeHTML(arithmetic)}"
+      style="display:flex;align-items:baseline;gap:4px;padding:3px 4px;margin:3px 0;border:1px solid #777;border-radius:2px;color:${outcome.color}">
+      <i class="fa-solid fa-${outcome.icon}" aria-hidden="true"></i>
+      <strong style="flex:1;min-width:0;overflow-wrap:anywhere">${escapeHTML(targetName)}: ${outcome.label}</strong>
+      <b style="flex:0 0 auto">${assignment.adjustedTotal}</b>
+    </div>`;
+  }).join("");
+
+  const resolutionDetails = resolvedAssignments.map((assignment) => {
     const targetName =
       targetDisplayNames.get(assignment.targetUuid) ??
       getBaseTargetName(assignment.targetToken);
@@ -2345,11 +2379,10 @@ if (resolvedAssignments.length) {
   }).join("");
 
   await attackPoolMessage.update({
-    content: `
-      ${attackPoolMessage.content}
-      <h3>Target Resolution</h3>
-      ${resolutionRows}
-    `,
+    content: renderAttackPoolCard({
+      targetRows: `<small>Targets:</small>${resolutionRows}`,
+      targetDetails: `<strong>Target Resolution</strong>${resolutionDetails}`,
+    }),
   });
 }
 

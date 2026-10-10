@@ -39,7 +39,7 @@ export const describeAoeResource = (item, owner = item?.actor ?? item?.parent, o
     const cost = Math.max(1, Math.floor(number(options.cost ?? getFlag(item, 'aoeAmmoCost'), 1)));
     const base = { source: 'unmanaged', cost: 0, available: Infinity, managed: false,
         label: 'No resource is consumed', native: false, resource: item };
-    if (!requested || mode === 'none' || !item) return base;
+    if (!requested || mode === 'none' || !item || item.type === 'power') return base;
     if (mode === 'item') {
         return { ...base, source: 'quantity', cost, managed: true,
             available: number(item.system?.quantity), label: 'Item quantity' };

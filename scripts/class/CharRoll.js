@@ -340,7 +340,10 @@ export default class CharRoll extends BasicRoll{
 
         if (this.item && this.manageshots){
            
-            this.countShots();
+            if (this.flagUpdate?.powerAoe) {
+                await this.countShots();
+                if (!this.canCast) return;
+            } else this.countShots();
         }
 
         
@@ -531,6 +534,10 @@ export default class CharRoll extends BasicRoll{
   
 
     powerCount(){
+
+        // AoE damage cards (including innate powers) are not another casting.
+        if (this.item?.type==='power' && this.flagUpdate?.powerAoe &&
+            (this.rolltype==='damage' || this.shotsUsed===0)) return;
 
        // console.log(this.rolltype);
 
@@ -943,7 +950,7 @@ export default class CharRoll extends BasicRoll{
 
       // console.log(this.roll);
 
-       this.roll.toMessage(chatData,{rollMode:game.settings.get("core","rollMode")})
+       return this.roll.toMessage(chatData,{rollMode:game.settings.get("core","rollMode")})
        /* .then((chat)=>{ => already in chatData
        
         

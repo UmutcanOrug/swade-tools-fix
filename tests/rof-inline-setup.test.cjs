@@ -13,7 +13,8 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   ownerPermission=true,shots=50,dice=[9,7,4],globalMods={},skillEffects=[],traitMod='',trademark=0,
   rollData={},reviewActions=['continue'],choosePool='use-reroll',targetCover=0,targetIllumination=false,
   targetDistance=5,mutate=null,flags={},assignedOutcome='miss',aoe=false,noTargets=false,
-  placements=null,afterPrepare=null,quantity=20,ammoManagement=true}={}) {
+  placements=null,afterPrepare=null,quantity=20,ammoManagement=true,
+  nativeRange=null,sceneDistance=1,ignoreRange=false,targetCount=1}={}) {
   const shotgunRules=await import(pathToFileURL(path.join(services,'ShotgunRules.js')));
   const {nativeWeaponDamageFormula}=await import(pathToFileURL(path.join(services,'WeaponDamageModifier.js')));
   const aoeFlags=await import(pathToFileURL(path.join(services,'AoeItemFlags.js')));
@@ -46,7 +47,10 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   if(targetIllumination)target.document.regions.push({behaviors:[{type:'attackModifiers',system:{illumination:'dark'}}]});
   const inlineSetup={weaponId:weapon.id,itemUuid:weapon.uuid,actorUuid:actor.uuid,weaponActorUuid:actor.uuid,
     trait,rof:2,recoil:false,consumeAmmo:true,calledShot:'Torso',otherModifierFormula:'0',aoe,...setup};
-  if(mutate)mutate({actor,weapon,skill,inlineSetup});
+  if(mutate)mutate({actor,weapon,skill,inlineSetup,token,target});
+  const targets=Array.from({length:targetCount},(_unused,index)=>index===0?target:{
+    ...target,id:`target-${index}`,name:`Target ${index+1}`,document:{...target.document,uuid:`Scene.scene.Token.target-${index}`}
+  });
   actor.isOwner=ownerPermission;
   class MockRoll {
     static replaceFormulaData(formula,data){return formula.replace(/@([A-Za-z0-9_.]+)/g,(_m,ref)=>String(ref.split('.').reduce((v,k)=>v?.[k],data)));}
@@ -58,9 +62,9 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
       assert.match(expression,/^[\d() +\-]+$/);this.total=Function(`return (${expression})`)();
       this.dice=[{results:[{result:this.total}]}];return this;}
   }
-  const game={user:{id:'gm',isGM:true,bennies:0,targets:new Set(noTargets?[]:[target])},
+  const game={user:{id:'gm',isGM:true,bennies:0,targets:new Set(noTargets?[]:targets)},
     modules:new Map([['swade-tools',{active:true}]]),
-    settings:{get(_ns,key){return key==='shootingSkill'?'Shooting':key==='ammoManagement'&&ammoManagement;}},
+    settings:{get(_ns,key){return key==='shootingSkill'?'Shooting':key==='ignoreRange'?ignoreRange:key==='ammoManagement'&&ammoManagement;}},
     i18n:{localize:key=>key},messages:{get:id=>nativeMessages.find(message=>message.id===id)},
     swadetools:{async item(owner,id,operator,options){events.push('native-damage');nativeCalls.push({owner,id,operator,options});
       const raise={checked:false},mod={value:'0'},called={value:'Torso',options:['None','Torso','Head'].map(value=>({value}))};
@@ -74,12 +78,12 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   const DialogV2={async prompt(config){prompts.push(config);
     if(config.window.title==='SWADE RoF Attack Pool')return{weaponId:'weapon',rof:2,recoil:false,consumeAmmo:true,otherModifier:0,calledShot:'None'};
     const elements={};for(let i=0;i<Number(inlineSetup.rof||2);i++){
-      elements[`target-${i}`]={value:target.document.uuid};elements[`outcome-${i}`]={value:assignedOutcome};
+      elements[`target-${i}`]={value:targets[i%targets.length].document.uuid};elements[`outcome-${i}`]={value:assignedOutcome};
     }
     const result=config.ok.callback(null,{form:{elements}});assignments.push(...result);return result;
   },async wait(config){reviews.push(config);return config.window.title.includes('Choose Benny')?choosePool:actions.length?actions.shift():'continue';}};
   const dependencies={scope:{actor,item:weapon,weaponActor:actor,token,...(inline?{rofSetup:inlineSetup}:{})},
-    game,canvas:{scene:{},tokens:{controlled:[token]},dimensions:{size:100,distance:1}},Roll:MockRoll,
+    game,canvas:{scene:{},tokens:{controlled:[token]},dimensions:{size:100,distance:sceneDistance}},Roll:MockRoll,
     CONFIG:{SWADE:{rollModifiers:{illumination:{modifiers:{dark:{label:'Dark Region',value:-4}}}}}},
     foundry:{utils:{escapeHTML,getProperty:(obj,ref)=>ref.split('.').reduce((v,k)=>v?.[k],obj)},applications:{api:{DialogV2}}},
     ui:{notifications:Object.fromEntries(['warn','error','info'].map(kind=>[kind,text=>notices.push({kind,text})]))},
@@ -88,14 +92,28 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
     fromUuid:async()=>null,setTimeout(callback,ms){if(ms<=100)callback();return 1;},clearTimeout(){}};
   dependencies.scope.rofServices={...shotgunRules,...aoeFlags,aoeResource,withSuppressedAoeAutomation,nativeWeaponDamageFormula,
     isAoeItem:item=>item.flags?.['swade-tools']?.aoeEnabled===true,
+    ...(typeof nativeRange==='function'?{getNativeRange:nativeRange}:{}),
     async prepareAoePoolPoints(context){events.push('prepare-aoe');preparations.push(context);
       if(afterPrepare)afterPrepare({actor,weapon});
       return placements??context.candidates.map((_candidate,candidateIndex)=>({candidateIndex,attackPoint:{x:100+candidateIndex*100,y:100}}));},
     async launchAoeMacro(actualActor,item,options){events.push('aoe-projectile');aoeCalls.push({actualActor,item,options});return true;},
   };
   await new AsyncFunction(...Object.keys(dependencies),source)(...Object.values(dependencies));
-  return{actor,weapon,skill,events,notices,prompts,reviews,cards,assignments,queue,nativeCalls,nativeMessages,aoeCalls,preparations};
+  return{actor,weapon,skill,token,targets,events,notices,prompts,reviews,cards,assignments,queue,nativeCalls,nativeMessages,aoeCalls,preparations};
 }
+
+// Exercise the actual native geometry functions, without loading Foundry UI
+// classes. These are the same functions injected by the production launcher.
+const nativeGeometrySource=fs.readFileSync(path.join(services,'../gb.js'),'utf8');
+const nativeGeometry=nativeGeometrySource.slice(nativeGeometrySource.indexOf('export const getTokenCoordinates='),
+  nativeGeometrySource.indexOf('export const trans=')).replace(/export const /g,'const ');
+const nativeRangeFor=(sceneDistance=1)=>Function('canvas',`${nativeGeometry}\nreturn getRange;`)({
+  grid:{distance:sceneDistance,measurePath:([a,b])=>({distance:Math.hypot(b.x-a.x,b.y-a.y)/100*sceneDistance})}
+});
+const tokenGeometry=(token,{x=0,y=0,width=1,height=1,elevation=0}={})=>{
+  Object.assign(token,{x,y,scene:{grid:{size:100},gridType:1}});
+  Object.assign(token.document,{width,height,elevation,center:{x:x+width*50,y:y+height*50}});
+};
 
 test('inline RoF skips only the initial setup and preserves review plus target allocation',async()=>{
   const s=await runPool();
@@ -209,6 +227,75 @@ test('manual Cover and Illumination are non-stacking target candidates and range
   assert.equal(profile.modifiers.filter(mod=>mod.label.includes('Cover')).length,1);
   assert.equal(profile.modifiers.filter(mod=>/Illumination|Dark/.test(mod.label)).length,1);
   assert.ok(profile.ignoredMods.some(mod=>mod.label==='Manual Cover'));
+});
+
+test('RoF 3 with 24/48/96 ranges and three targets at 15 stays Short; Brawny only changes Min Str',async()=>{
+  for(const brawny of [false,true]){
+    const s=await runPool({setup:{rof:3},dice:[9,8,7,4],targetDistance:15,targetCount:3,nativeRange:nativeRangeFor(),
+      mutate:({actor,weapon,token,target})=>{
+        weapon.system.range='24/48/96';weapon.system.minStr='d8';actor.system.attributes.strength.die.sides=6;
+        if(brawny)actor.items.push({name:'Brawny',type:'edge',system:{swid:'brawny'}});
+        tokenGeometry(token);tokenGeometry(target,{x:1500});
+      }});
+    assert.equal(s.assignments.length,3);
+    assert.equal(new Set(s.assignments.map(assignment=>assignment.targetUuid)).size,3);
+    for(const assignment of s.assignments){
+      assert.equal(assignment.targetProfile.distance,15);
+      assert.equal(assignment.targetProfile.modifiers.filter(mod=>mod.label.includes('Range')).length,0);
+      assert.equal(assignment.targetProfile.total,0);
+      assert.equal(assignment.result.modifier,brawny?0:-1);
+    }
+    assert.match(s.cards[0].content,new RegExp(`Min Str ${brawny?'\\+0':'-1'}`));
+  }
+});
+
+test('pooled range uses the native nearest occupied cells for large tokens, not center distance',async()=>{
+  const s=await runPool({nativeRange:nativeRangeFor(),targetDistance:25,mutate:({weapon,token,target})=>{
+    weapon.system.range='24/48/96';
+    tokenGeometry(token,{width:2,height:2});tokenGeometry(target,{x:2500});
+  }});
+  const centerDistance=Math.hypot(s.targets[0].document.center.x-s.token.document.center.x,
+    s.targets[0].document.center.y-s.token.document.center.y)/100;
+  assert.ok(centerDistance>24,'Previous center-only measurement crossed the Short boundary');
+  assert.equal(s.assignments[0].targetProfile.distance,24);
+  assert.equal(s.assignments[0].targetProfile.total,0);
+  assert.ok(!s.assignments[0].targetProfile.modifiers.some(mod=>mod.label.includes('Range')));
+});
+
+test('native range scene units are converted once and native elevation affects the same target band',async()=>{
+  const scaled=await runPool({nativeRange:nativeRangeFor(5),sceneDistance:5,mutate:({weapon,token,target})=>{
+    weapon.system.range='24/48/96';tokenGeometry(token);tokenGeometry(target,{x:300});
+  }});
+  assert.equal(scaled.assignments[0].targetProfile.distance,15);
+  assert.equal(scaled.assignments[0].targetProfile.total,0);
+  const elevated=await runPool({nativeRange:nativeRangeFor(),mutate:({weapon,token,target})=>{
+    weapon.system.range='12/24/48';tokenGeometry(token);tokenGeometry(target,{x:1200,elevation:5});
+  }});
+  assert.equal(elevated.assignments[0].targetProfile.distance,13);
+  const modifiers=elevated.assignments[0].targetProfile.modifiers.filter(mod=>mod.label.includes('Range'));
+  assert.equal(modifiers.length,1);assert.equal(modifiers[0].value,-2);
+  assert.equal(elevated.assignments[0].result.modifier,0,'Range must not also enter the shared pool modifier');
+});
+
+test('pooled attacks honor native Ignore Range without altering distances or Shotgun damage bands',async()=>{
+  for(const ignoreRange of [false,true]){
+    const s=await runPool({targetDistance:15,ignoreRange,nativeRange:()=>15,flags:{sgEnabled:true},assignedOutcome:'hit'});
+    const profile=s.assignments[0].targetProfile;
+    assert.equal(profile.distance,15);
+    assert.equal(profile.modifiers.filter(mod=>mod.label.includes('Range')).length,ignoreRange?0:1);
+    assert.equal(profile.total,ignoreRange?0:-2);
+    assert.equal(profile.shotgunDamage,'2d6');
+    assert.ok(s.nativeCalls.every(call=>call.options.damageOverride==='2d6'));
+  }
+});
+
+test('standalone pools retain center/path distance when native geometry is unavailable or fails',async()=>{
+  for(const nativeRange of [null,()=>{throw Error('Missing native placeable');},()=>null]){
+    const s=await runPool({targetDistance:15,nativeRange});
+    assert.equal(s.assignments[0].targetProfile.distance,15);
+    assert.equal(s.assignments[0].targetProfile.total,-2);
+    assert.equal(s.assignments[0].targetProfile.modifiers.filter(mod=>mod.label.includes('Range')).length,1);
+  }
 });
 
 test('invalid inline formulas and modifier enums cannot roll or consume ammo',async()=>{
@@ -371,6 +458,7 @@ test('launcher injects optional inline setup without changing the legacy scope a
     assert.equal(getInlineRofMaximum({...actor,items:collection([])},item),3);
     assert.equal(getInlineRofMaximum(actor,{...item,system:{...item.system,rof:6}}),6);
     assert.equal(await launchRofMacro(actor,item,owner),true);assert.equal(Object.hasOwn(captures[0],'rofSetup'),false);
+    assert.equal(typeof captures[0].rofServices.getNativeRange,'function');
     assert.equal(await launchRofMacro(actor,item,owner,{setup:{rof:2,otherModifierFormula:'+1d6'}}),true);
     assert.deepEqual(captures[1].rofSetup,{weaponId:'gun',itemUuid:item.uuid,actorUuid:actor.uuid,weaponActorUuid:owner.uuid,
       trait:'shoot',rof:2,otherModifierFormula:'+1d6'});

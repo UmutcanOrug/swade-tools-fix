@@ -87,6 +87,7 @@ async function signedPoolScope({vehicle = false, total = 7, modifier = 1,
         ...await import(pathToFileURL(path.join(services, 'AoeResourceService.js'))),
         ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
         ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
+        ...await import(pathToFileURL(path.join(services, 'AoeChatControl.js'))),
         isTrustedAoePoolAttack: module.isTrustedAoePoolAttack,
         showAoeAttackDialog() { throw new Error('A resolved pool must not open a second setup dialog'); },
     };

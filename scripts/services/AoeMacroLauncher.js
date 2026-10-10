@@ -1,6 +1,7 @@
 import { isAoeItem } from './AoeItemFlags.js';
 import { aoeResource } from './AoeResourceService.js';
 import * as profile from './AoeAttackProfile.js';
+import * as aoeChat from './AoeChatControl.js';
 import { showAoeAttackDialog } from './AoeAttackDialog.js';
 import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
 import { nativeWeaponDamageFormula, prepareWeaponDamageModifier } from './WeaponDamageModifier.js';
@@ -126,6 +127,7 @@ const getVehicleOperator = async (vehicle, item) => {
 };
 
 export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
+    if (item?.type === 'power') throw new Error('Power AoE must use the native power casting panel, not the weapon AoE engine.');
     const weaponActor = item?.actor ?? item?.parent ?? actor;
     const vehicleActor = weaponActor?.type === 'vehicle' ? weaponActor : null;
     const operatorActor = options.operatorActor ??
@@ -146,7 +148,7 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
         token: options.token?.object ?? options.token ??
             findAoeActorToken(weaponActor),
         aoeResource,
-        aoeServices: { ...profile, aoeResource,
+        aoeServices: { ...profile, ...aoeChat, aoeResource,
             nativeWeaponDamageFormula, prepareWeaponDamageModifier,
             showAoeAttackDialog: context => showAoeAttackDialog({ ...context,
                 token: scope.token, restoreLast: scope.restoreLast }),
@@ -165,7 +167,7 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
 // Collect all points before the parent RoF workflow commits ammunition. A
 // cancelled/invalid point cancels the entire volley, not a partially paid burst.
 export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, candidates, setup} = {}) => {
-    if (!isAoeItem(item) || !Array.isArray(candidates) || !candidates.length) return [];
+    if (item?.type === 'power' || !isAoeItem(item) || !Array.isArray(candidates) || !candidates.length) return [];
     const scope = await resolveAoeLaunchScope(actor, item, {operatorActor: actor, token, attackSetup: setup});
     const owner = scope.weaponActor;
     const operator = scope.operatorActor;
@@ -261,6 +263,10 @@ const getBundledAoeAttack = async () => {
 };
 
 export const launchAoeMacro = async (actor, item, options = {}) => {
+    if (item?.type === 'power') {
+        ui.notifications.warn('Power AoE uses the native power casting panel. Open this power from its actor sheet.');
+        return false;
+    }
     if (!isAoeItem(item)) {
         ui.notifications.warn('Enable AoE for this item in its inventory row or item sheet.');
         return false;

@@ -14,9 +14,11 @@ import CharRoll from './class/CharRoll.js';
 import CharUp from './class/CharUp.js';
 import { registerAoeItemControls } from './services/AoeItemConfig.js';
 import { registerShotgunItemControls } from './services/ShotgunItemConfig.js';
+import { registerAoeChatControls } from './services/AoeChatControl.js';
 
 registerAoeItemControls();
 registerShotgunItemControls();
+registerAoeChatControls();
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)

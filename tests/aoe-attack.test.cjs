@@ -29,6 +29,7 @@ const loadServices = async () => ({
   ...await import(pathToFileURL(path.join(services, 'AoeResourceService.js'))),
   ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
   ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
+  ...await import(pathToFileURL(path.join(services, 'AoeChatControl.js'))),
 });
 
 // Execute the full bundled attack. Only the Foundry UI/documents and dice are
@@ -322,8 +323,10 @@ test('AoE card has a compact item header, exactly one dice box, visible native-s
   for (const text of ['Range:','Medium Blast Template','3d6; AP 1','Assigned Gunner']) {
     assert.ok(content.includes(text),text);assert.ok(!visible.includes(text),`${text} belongs in Details`);
   }
-  for (const name of ['Target one','Target two']) assert.ok(visible.includes(`${name}: <strong>Hit</strong>`));
-  assert.equal((visible.match(/class="swadetools-aoe-target"/g)??[]).length,2);
+  for (const name of ['Target one','Target two']) assert.ok(visible.includes(`${name}: Hit`));
+  assert.equal((visible.match(/class="swadetools-aoe-target /g)??[]).length,2);
+  assert.equal((visible.match(/data-aoe-damage-target=/g)??[]).length,2);
+  assert.match(visible,/data-aoe-gm-mod/);
   assert.equal((visible.match(/fa-bullseye/g)??[]).length,2);
   assert.match(visible,/Benny Reroll \(3\)/);assert.match(visible,/GM Reroll \(3\)/);
   assert.ok(!visible.includes('These controls work')&&!visible.includes('Use before the GM'));
@@ -359,20 +362,21 @@ test('Benny history is collapsed but GM Raise review remains visible and compact
 test('deviation refresh preserves styled target rows and never labels a failed intended blast as Hit', async () => {
   const s=await runAttack({dice:[2,3,6,4]});
   const initial=visibleCardHtml(s.cards[0].content);
-  assert.ok(!initial.includes(': <strong>Hit</strong>'));
-  assert.match(initial,/Target one: <strong>Blast<\/strong>/);
+  assert.ok(!initial.includes(': Hit'));
+  assert.match(initial,/Target one: Miss/);
+  assert.ok(!initial.includes('data-aoe-damage-target'));
   assert.match(initial,/Deviation:<\/strong> GM: move the red template to resolve/);
   s.victims[0].name='Moved Target';
   const template=s.scene.templates.get('template');template.x=100;template.y=100;
   await s.emitHook('updateMeasuredTemplate',template,{x:100,y:100});
   const deviated=visibleCardHtml(s.cards[0].content);
-  assert.match(deviated,/Moved Target: <strong>Blast<\/strong>/);
-  assert.ok(!deviated.includes('Target one')&&!deviated.includes(': <strong>Hit</strong>'));
-  assert.equal((deviated.match(/class="swadetools-aoe-target"/g)??[]).length,2);
+  assert.match(deviated,/Moved Target: Miss/);
+  assert.ok(!deviated.includes('Target one')&&!deviated.includes(': Hit'));
+  assert.equal((deviated.match(/class="swadetools-aoe-target /g)??[]).length,2);
   assert.equal(s.nativeCards.length,2);
   await rerollCurrentCard(s);
   const rerolled=visibleCardHtml(currentCard(s).content);
-  assert.match(rerolled,/Moved Target: <strong>Hit<\/strong>/);
+  assert.match(rerolled,/Moved Target: Hit/);
   assert.match(rerolled,/data-aoe-gm-review/);
   assert.ok(!rerolled.includes('Deviation:'));
   assert.equal(s.nativeCards.length,2);

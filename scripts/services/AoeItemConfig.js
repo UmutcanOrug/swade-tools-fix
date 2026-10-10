@@ -1,12 +1,19 @@
 import {
     canEnableAoe, isAoeItem, setAoeEnabled,
-    getAoeItemSettings, saveAoeItemSettings
+    getAoeItemSettings, saveAoeItemSettings, getPowerAoeSettings, savePowerAoeSettings
 } from './AoeItemFlags.js';
 import launchAoeMacro from './AoeMacroLauncher.js';
 import { getWeaponSettingsClickOptions } from './LastWeaponSettings.js';
 
 const openInventoryAoePanel = (actor, item, sheet, event) => {
     const options=getWeaponSettingsClickOptions(event,sheet);
+    if (item.type==='power'){
+        if (typeof game.swadetools?.item!=='function'){
+            ui.notifications.warn('The native power panel is not available. Reload Foundry before using this shortcut.');
+            return false;
+        }
+        return game.swadetools.item(actor,item.id,null,options);
+    }
     let unified=false;
     try { unified=game.settings?.get('swade-tools','unifiedRofExperimental')===true; }
     catch { /* Older worlds retain their existing AoE panel. */ }
@@ -79,8 +86,41 @@ const bindAoeItemNameClicks = (sheet, actor, row, itemId) => {
     }
 };
 
+export const showPowerAoeItemSettings = async item => {
+    if (item?.type !== 'power' || !item.isOwner) return;
+    const settings = getPowerAoeSettings(item);
+    const shapes = [
+        ['small', 'Small Blast Template'], ['medium', 'Medium Blast Template'],
+        ['large', 'Large Blast Template'], ['scone', 'Small Cone Template'],
+        ['cone', 'Cone Template'], ['stream', 'Stream Template']
+    ];
+    try {
+        const result = await foundry.applications.api.DialogV2.prompt({
+            window: { title: `${item.name} - Power AoE Settings` },
+            position: { width: 420 },
+            content: `<div class="standard-form">
+                <div class="form-group"><label>Template Shape</label>
+                    <div class="form-fields"><select name="aoePowerShape">${shapes.map(([shape, label]) =>
+                        `<option value="${shape}" ${settings.shape === shape ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+                </div>
+                <p class="hint">Uses native casting Trait, Extra PP and Power Modifiers. Power Points remain managed by SWADE Tools.</p>
+            </div>`,
+            ok: { label: 'Save Settings', callback: (_event, button) => ({shape: button.form.elements.aoePowerShape.value}) },
+            rejectClose: false,
+            modal: false
+        });
+        if (!result) return;
+        await savePowerAoeSettings(item, result);
+        ui.notifications.info('Power AoE settings saved.');
+    } catch (error) {
+        console.error('SWADE Tools | Power AoE settings could not be saved', error);
+        ui.notifications.error('The Power AoE settings could not be saved. Check the template shape and item ownership.');
+    }
+};
+
 export const showAoeItemSettings = async (actor, item) => {
     if (!item?.isOwner || !canEnableAoe(item)) return;
+    if (item.type === 'power') return showPowerAoeItemSettings(item);
     const settings = getAoeItemSettings(item);
     const escape = foundry.utils.escapeHTML;
     const damageOptions = Object.entries(item.system?.actions?.additional ?? {})
@@ -210,8 +250,8 @@ export const bindAoeInventoryControls = (sheet, html) => {
             const attack = document.createElement('button');
             attack.type = 'button';
             attack.dataset.swadeToolsAoe = '';
-            attack.title = 'Open AoE Attack';
-            attack.setAttribute('aria-label', 'AoE Attack');
+            attack.title = item.type === 'power' ? 'Open AoE Power' : 'Open AoE Attack';
+            attack.setAttribute('aria-label', item.type === 'power' ? 'AoE Power' : 'AoE Attack');
             attack.style.cssText = 'width:24px;height:24px;line-height:20px;flex:0 0 24px;padding:0;';
             const icon = document.createElement('i');
             icon.className = 'fa-solid fa-explosion';

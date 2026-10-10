@@ -40,7 +40,7 @@ const mockHtml = content => {
 
 async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel=false,
     restoreLast=false, damageOnly=false, damageOverride, maxRof=3, rapidFire=false, consumeMode='ammo',
-    cache, tokenId='source',translations,missingVehicleOperator=false,damageProfiles}={}) {
+    cache, tokenId='source',translations,missingVehicleOperator=false,damageProfiles,power=false}={}) {
     const [helpers,memory] = await Promise.all([load('WeaponPanelSettings'),load('LastWeaponSettings')]);
     const events=[], notices=[], dialogs=[];
     const item={id:'weapon',uuid:'Actor.shooter.Item.weapon',name:'Test Weapon',type:'weapon',isOwner:true,
@@ -50,6 +50,13 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         items:{get:()=>item},system:{}};
     if(missingVehicleOperator)actor.type='vehicle';
     item.actor=actor; item.parent=actor;
+    if (power){
+        item.type='power'; item.name='Burst';
+        Object.assign(item.system,{damage:'2d6',ap:0,range:'8',pp:2,duration:'Instant',arcane:'general',templates:{cone:true}});
+        for (const key of ['isRanged','shots','currentShots','rof','reloadType']) delete item.system[key];
+        item.system.actions.trait='Aetherics';
+        actor.system.powerPoints={general:{value:9}};
+    }
     const token={id:tokenId,actor,document:{id:tokenId,uuid:`Scene.scene.Token.${tokenId}`}};
     const context=()=>memory.resolveWeaponSettingsContext({weaponOwner:actor,operator:actor,item,token,userId:'test-user'});
     if (!cache) memory.clearLastWeaponSettings();
@@ -61,6 +68,7 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         setWeaponDamageModifier(value){events.push(['damage-modifier',value]);}
         setConsumeAmmunition(value){events.push(['consume-ammunition',value]);}
         setWeaponTheDrop(value){events.push(['the-drop',value]);}
+        usePP(value){events.push(['extra-pp',value]);}
         usingVehicle(){} raiseDmg(){events.push(['raise']);} useTarget(){}
         async rollBaseSkill(...args){events.push(['native-skill',...args]);}
         async rollBaseDamage(...args){events.push(['native-damage',...args]);}
@@ -69,11 +77,13 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
     const gb=new Proxy({setting:key=>({unifiedRofExperimental:experimental,selectModifiers:true,
             askCalledShots:true,wildAttackSkills:'',shootingSkill:'Shooting',fightingSkill:'Fighting'}[key] ?? ''),
         trans:(key,scope='SWADETOOLS')=>translations?.[`${scope}.${key}`] ?? key,systemSetting:()=>false,stringMod:()=>'',itemSkillMod:()=>0,realInt:value=>Number(value)||0,
-        getTemplatesHTML:()=>'',log(){},modButtons(){}}, {get:(object,key)=>object[key] ?? (()=>'')});
+        getTemplatesHTML:()=>power ? '<button data-template="cone">Cone</button>' : '',getPPCostMod:()=>2,log(){},modButtons(){}}, {get:(object,key)=>object[key] ?? (()=>'')});
     const ItemDialog=vm.runInNewContext(`${source}\nItemDialog;`,{gb,ItemRoll,CharRoll:class {},
-        Char:class {hasEdgeSetting(key){return key==='Rapid Fire' && rapidFire;} hasAbilitySetting(){return false;}},
+        Char:class {hasEdgeSetting(key){return key==='Rapid Fire' && rapidFire;} hasAbilitySetting(){return false;} getActualPP(){return 9;}},
         Dialog:class {constructor(config,options){dialogs.push({config,options});} render(){return this;}},
         isAoeItem:()=>aoe,getAoeItemSettings:()=>({consumeMode}),getInlineRofMaximum:()=>maxRof,
+        isPowerAoeItem:()=>aoe,getPowerAoeSettings:()=>({shape:'cone'}),POWER_AOE_SHAPES:['small','medium','large','scone','cone','stream'],
+        runPowerAoe:async context=>events.push(['power-aoe',context]),
         getShotgunSettings:()=>({enabled:shotgun,doubleBarrel}),
         getShotgunDamageProfiles:()=>damageProfiles ?? {shot:{short:'3d6',medium:'2d6',long:'1d6'},slug:{short:'2d10',medium:'2d10',long:'2d10'}},
         prepareWeaponDamageModifier:value=>value==='invalid' ? {ok:false,reason:'Invalid damage modifier.'} : {ok:true,formula:String(value??'').trim()},

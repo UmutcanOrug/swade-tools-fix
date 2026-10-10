@@ -4,6 +4,8 @@ import CharRoll from './CharRoll.js';
 import ItemRoll from './ItemRoll.js';
 import { prepareNativeShotgunDamageForTarget, applyNativeShotgunProfile } from '../services/NativeShotgunAttack.js';
 import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js';
+import { withSuppressedAoeAutomation } from '../services/AoeAnimationService.js';
+import { settlePowerAoeCorrection } from '../services/PowerAoeCast.js';
 
 export default class RollControl {
     
@@ -94,6 +96,19 @@ export default class RollControl {
                               
                                         
                                         update['flags.swade-tools.gmmod']=gmmod;
+                                        if (this.chat.flags['swade-tools']?.powerAoe){
+                                            const caster=this.getActor();
+                                            const item=caster?.items.get(this.chat.flags['swade-tools'].itemroll);
+                                            if (!caster || !item){ui.notifications.warn('The original power caster is no longer available.');return;}
+                                            const char=new Char(caster);
+                                            try {
+                                                update=await settlePowerAoeCorrection({message:this.chat,rawTotal:this.roll.total,
+                                                    modifier:gmmod,criticalFailure:this.isCritical(),
+                                                    getAvailablePP:()=>char.getActualPP(item.system.arcane),
+                                                    spendPP:(pp,id)=>char.spendPP(pp,id),
+                                                    failedPpHtml:`<div>${gb.trans('FailedPP')}</div>`});
+                                            } catch (error){ui.notifications.warn(error.message);return;}
+                                        }
                                 
 
 
@@ -458,13 +473,25 @@ export default class RollControl {
 
 
 
-            if (this.chat.flags["swade-tools"].usetarget){
+            const areaFlags=this.chat.flags['swade-tools'];
+            const powerArea=areaFlags.powerAoe;
+            const weaponArea=areaFlags.aoeArea;
+            if (powerArea || weaponArea){
+                const area=powerArea ?? weaponArea;
+                const ids=powerArea ? area.targetIds ?? [] : (area.targets ?? [])
+                    .filter(uuid=>String(uuid).startsWith(`Scene.${area.sceneId}.Token.`))
+                    .map(uuid=>String(uuid).split('.').at(-1));
+                this.targets=area.sceneId===canvas.scene?.id ? [...new Set(ids)]
+                    .map(id=>canvas.tokens.get(id)).filter(token=>token?.actor) : [];
+                if (powerArea && globalThis.game?.scenes?.get && !this.getActor()) this.targets=[];
+            } else if (this.chat.flags["swade-tools"].usetarget){
 
                 let usetargets=this.chat.flags["swade-tools"].usetarget.split(',');
                 this.targets=new Array;
 
                 usetargets.map(target=>{
-                    this.targets.push(canvas.tokens.get(target))
+                    const token=canvas.tokens.get(target);
+                    if (token?.actor) this.targets.push(token);
                 })
                // this.targets=[canvas.tokens.get(this.chat.flags["swade-tools"].usetarget)];
               //  console.log(this.targets);
@@ -742,6 +769,12 @@ export default class RollControl {
     
 
     getActor(orToken=false,useVehicle=false){
+
+            const area=this.chat.flags['swade-tools']?.powerAoe;
+            if (area){
+                const document=game.scenes?.get(area.sceneId)?.tokens?.get(area.sourceTokenId);
+                return orToken ? document?.object ?? null : document?.actor ?? null;
+            }
         
             if (this.chat.flags["swade-tools"]?.usetoken){
                 let tokenid=this.chat.flags["swade-tools"].usetoken
@@ -782,7 +815,8 @@ export default class RollControl {
             this.powerfail=true;
             
             if (rof<2){
-                if (gb.raiseCount(this.roll.total,4)>=0){
+                const powerArea=this.chat.flags['swade-tools']?.powerAoe;
+                if (!(powerArea && this.isCritical()) && gb.raiseCount(this.roll.total+(powerArea ? this.gmmod : 0),4)>=0){
                     this.powerfail=false;
                 } 
             } else {
@@ -888,7 +922,7 @@ export default class RollControl {
 
             if ((!item.system.damage)){ /// damaging powers
                 powertype='nodamage';
-            } else if (item.system?.templates?.cone || item.system?.templates.large || item.system?.templates?.medium || item.system?.templates?.small || item.system?.templates?.stream){  /// template powers
+            } else if (this.chat.flags['swade-tools']?.powerAoe || item.system?.templates?.scone || item.system?.templates?.cone || item.system?.templates?.large || item.system?.templates?.medium || item.system?.templates?.small || item.system?.templates?.stream){  /// template powers
                 powertype='template'
             } 
            
@@ -1207,6 +1241,10 @@ export default class RollControl {
 
 
 
+           if (!this.getActor() || !this.getItemOwner()){
+            ui.notifications.warn('The original attack actor is no longer available.');
+            return false;
+           }
            if (this.getActor().permission!=3 || this.getItemOwner().permission!=3){
             ui.notifications.error(gb.trans('PermissionActor'))
             return false;
@@ -1231,6 +1269,12 @@ export default class RollControl {
       
            
             let charRoll=new ItemRoll(shotgunDamage ? this.getActor() : this.getItemOwner(),item);
+
+            if (shotgunFlags?.powerAoe){
+                if (shotgunFlags.powerAoe.sceneId!==canvas.scene?.id || !canvas.tokens.get(targetid)?.actor) return false;
+                charRoll.addFlag('powerAoe',{...shotgunFlags.powerAoe,targetIds:[targetid]});
+                charRoll.manageshots=false;
+            }
 
             if (shotgunFlags?.weaponTheDrop===true) charRoll.setWeaponTheDrop(true);
 
@@ -1282,6 +1326,7 @@ export default class RollControl {
             }
 
 
+            const displayTargetDamage=async()=>{
             if (this.chat.flags["swade-tools"].damageaction){
                 await charRoll.rollAction(this.chat.flags["swade-tools"].damageaction)
             } else {
@@ -1295,7 +1340,10 @@ export default class RollControl {
            /*    charRoll.addModifier(item.data.data.actions.dmgMod,gb.trans('ModItem'));
               
             charRoll.rollDamage(`${item.data.data.damage}`); */
-            charRoll.display();
+            await charRoll.display();
+            };
+            if (shotgunFlags?.powerAoe) await withSuppressedAoeAutomation([item],displayTargetDamage);
+            else await displayTargetDamage();
         }
         }
     }
@@ -1699,6 +1747,11 @@ export default class RollControl {
     findActor(){
 
         let actor;
+        if (this.chat.flags['swade-tools']?.powerAoe){
+            actor=this.getActor();
+            if (!actor) ui.notifications.warn('The original power caster is no longer available.');
+            return actor || false;
+        }
         if (this.chat.flags["swade-tools"]?.useactor){
             actor=game.actors.get(this.chat.flags["swade-tools"].useactor)
         } else {
@@ -1715,6 +1768,16 @@ export default class RollControl {
     }
 
     async rerollBasic(actor,freeReroll=false){
+
+        // Native Power Benny cards retain their frozen area, but neither a
+        // damage reroll nor a casting reroll should replay the area animation.
+        if (this.chat.flags['swade-tools']?.powerAoe && !this.powerAoeRerollGuard){
+            this.powerAoeRerollGuard=true;
+            try {
+                const item=actor.items.get(this.chat.flags['swade-tools'].itemroll);
+                return await withSuppressedAoeAutomation([item],()=>this.rerollBasic(actor,freeReroll));
+            } finally { this.powerAoeRerollGuard=false; }
+        }
 
         let char=new Char(actor);
         let mod=0;
