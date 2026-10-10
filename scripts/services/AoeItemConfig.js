@@ -103,9 +103,18 @@ export const showPowerAoeItemSettings = async item => {
                     <div class="form-fields"><select name="aoePowerShape">${shapes.map(([shape, label]) =>
                         `<option value="${shape}" ${settings.shape === shape ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
                 </div>
-                <p class="hint">Uses native casting Trait, Extra PP and Power Modifiers. Power Points remain managed by SWADE Tools.</p>
+                <div class="form-group"><label>Template Origin</label>
+                    <div class="form-fields"><select name="aoePowerOrigin">
+                        <option value="caster" ${settings.origin === 'caster' ? 'selected' : ''}>Casting Token</option>
+                        <option value="free" ${settings.origin === 'free' ? 'selected' : ''}>Place Freely</option>
+                    </select></div>
+                </div>
+                <p class="hint">Cones and streams only. Free placement: mouse wheel rotates; Shift uses larger steps.</p>
             </div>`,
-            ok: { label: 'Save Settings', callback: (_event, button) => ({shape: button.form.elements.aoePowerShape.value}) },
+            ok: { label: 'Save Settings', callback: (_event, button) => ({
+                shape: button.form.elements.aoePowerShape.value,
+                origin: button.form.elements.aoePowerOrigin.value
+            }) },
             rejectClose: false,
             modal: false
         });

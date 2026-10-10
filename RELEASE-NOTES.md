@@ -1,3 +1,43 @@
+## SWADE Tools 2.1.15 — Reliable AoE GM Corrections & Free Power Origins
+
+All new interface text is English. Back up the world and update between sessions.
+Reload every connected client after updating.
+
+### Grenade / weapon AoE GM corrections
+
+- Fixes the card showing **Success / 4** while its target remained **Miss** after
+  GM **+4**. Foundry removes HTML comments when saving chat messages; updates now
+  use persistent element regions instead of comment delimiters.
+- Total, Hit/Raise/Miss rows, clickable native damage and the deviation reminder
+  stay synchronized, including on already-saved 2.1.14 cards. On an old stuck
+  card, the GM can reopen **+** and reapply the same modifier after reloading;
+  it replaces the previous GM value rather than stacking or spending resources.
+- Correcting an attack does not throw again, spend ammunition/items, replay
+  animation, roll damage automatically or apply wounds. Click the successful
+  target to roll native damage. Existing critical-failure safeguards remain.
+- Flat and expanded template-update flags both suppress the stale deviation
+  handler while a GM correction is being synchronized.
+
+### Power template origins
+
+- Power **Properties → Enable AoE → settings gear → Template Origin** adds
+  **Casting Token** (the existing default) and **Place Freely**.
+- **Place Freely** lets Cone, Small Cone and Stream originate away from the
+  caster. Blast circles already allow free placement and remain unchanged.
+- During free directional placement, use the **mouse wheel** to rotate 5°;
+  **Shift + wheel** rotates 15° on square grids or 30° on hex grids. Left-click
+  confirms and right-click cancels. This does not take over the middle button.
+- Numeric Power range is checked from the caster to the chosen origin. Native
+  shape dimensions, target geometry, PP bookkeeping and target-ring selection
+  are preserved. A caster inside a freely placed area is not automatically
+  excluded. Temporary rotation controls are removed on success, cancel or error.
+
+Validated with 306 automated regression tests, the installed Foundry V13 server
+HTML sanitizer, and a local compact-card browser preview. No live Foundry game
+was accessed or modified.
+
+---
+
 ## SWADE Tools 2.1.14 — Power Areas, GM Attack Corrections & Compact RoF Chat
 
 All new interface text is English. Back up the world and update between sessions.

@@ -1,4 +1,6 @@
 /** Place a native SWADE Power area without changing the user's target selection. */
+import { getPowerAoeSettings } from './AoeItemFlags.js';
+
 const SHAPES = Object.freeze({
     small: {t: 'circle', distance: 1},
     medium: {t: 'circle', distance: 2},
@@ -34,22 +36,27 @@ export const getNumericPowerRange = item => {
     return /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : null;
 };
 
-export const buildPowerAoeTemplateData = ({actor, item, shape, source, target, scene, user}) => {
+export const buildPowerAoeTemplateData = ({actor, item, shape, source, target, scene, user,
+    originMode = 'caster', direction: freeDirection = 0}) => {
     const preset = SHAPES[shape];
     if (!preset) throw new Error('Choose a supported Power AoE template.');
     const sceneDistance = Number(scene?.grid?.distance);
     if (!(sceneDistance > 0)) throw new Error('The scene grid distance must be greater than zero.');
     if (!pointOf(source) || !pointOf(target)) throw new Error('The Power AoE position could not be read.');
+    if (!['caster', 'free'].includes(originMode)) throw new Error('Choose a valid power template origin.');
     const directional = preset.t !== 'circle';
-    const origin = directional ? source : target;
-    const direction = directional
+    const freeOrigin = directional && originMode === 'free';
+    if (freeOrigin && !Number.isFinite(Number(freeDirection))) throw new Error('The Power AoE direction could not be read.');
+    const origin = directional && !freeOrigin ? source : target;
+    const direction = freeOrigin ? (Number(freeDirection) % 360 + 360) % 360 : directional
         ? (Math.atan2(target.y - source.y, target.x - source.x) * 180 / Math.PI + 360) % 360 : 0;
     const data = {
         t: preset.t, x: origin.x, y: origin.y, direction,
         distance: preset.distance * sceneDistance,
         user: user?.id, fillColor: user?.color ?? '#ff6b35', borderColor: '#ff6b35',
         flags: {'swade-tools': {powerAoeTemplate: true, autoTarget: false,
-            itemUuid: item?.uuid, actorUuid: actor?.uuid, templateType: shape, user: user?.id}},
+            itemUuid: item?.uuid, actorUuid: actor?.uuid, templateType: shape,
+            originMode: directional ? originMode : 'free', user: user?.id}},
     };
     // SWADE's rounded cone width is a count of grid squares; a ray width is a scene distance.
     if (preset.width !== undefined) data.width = preset.t === 'cone' ? preset.width : preset.width * sceneDistance;
@@ -155,11 +162,17 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
     const sourceToken = resolveSourceToken(actor, token, canvasRef);
     const source = centerOf(sourceToken);
     const directional = SHAPES[shape].t !== 'circle';
+    const originMode = getPowerAoeSettings(item).origin;
+    const freeOrigin = directional && originMode === 'free';
     const user = gameRef.user;
     const initialTarget = {x: source.x + Number(canvasRef.grid?.size ?? scene.grid.size ?? 100), y: source.y};
-    let data = buildPowerAoeTemplateData({actor, item, shape, source, target: initialTarget, scene, user});
+    let direction = 0;
+    const buildData = target => buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
+        originMode, direction});
+    let data = buildData(initialTarget);
     let preview = null;
     let cancelled = false;
+    let removeRotationListener = null;
     const createPreview = async (show) => {
         const document = new configRef.MeasuredTemplate.documentClass(data, {parent: scene});
         preview = new configRef.MeasuredTemplate.objectClass(document);
@@ -177,23 +190,43 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
     };
     try {
         if (directional) await createPreview(true);
+        if (freeOrigin) {
+            const wheelTarget = runtime.wheelTarget ?? canvasRef.app?.canvas ?? canvasRef.app?.view;
+            if (!wheelTarget?.addEventListener || !wheelTarget?.removeEventListener) {
+                throw new Error('The Power AoE rotation controls are unavailable.');
+            }
+            // Match native SWADE preview rotation, without replacing another module's onwheel handler.
+            const rotate = event => {
+                if (!Number.isFinite(Number(event.deltaY)) || Number(event.deltaY) === 0) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                const square = constRef?.GRID_TYPES?.SQUARE ?? 1;
+                const gridType = Number(canvasRef.grid?.type ?? scene.grid.type ?? square);
+                const step = event.shiftKey ? (gridType > square ? 30 : 15) : 5;
+                direction = (direction + step * Math.sign(event.deltaY) + 360) % 360;
+                data.direction = direction;
+                refreshPreview(preview, data);
+            };
+            wheelTarget.addEventListener('wheel', rotate, {capture: true, passive: false});
+            removeRotationListener = () => wheelTarget.removeEventListener('wheel', rotate, {capture: true});
+        }
         const callbacks = sequencerRef.Crosshair.CALLBACKS ?? {};
         const updateAim = crosshair => {
             const target = pointOf(crosshair);
             if (!target) return;
-            data = buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user});
+            data = buildData(target);
             if (preview) refreshPreview(preview, data);
         };
-        const range = directional ? null : getNumericPowerRange(item);
+        const range = directional && !freeOrigin ? null : getNumericPowerRange(item);
         const radius = directional ? Number(scene.grid.distance) * 0.05 : data.distance;
         const crosshairConfig = {
             t: 'circle', distance: radius, distanceMin: radius, distanceMax: radius,
             lockDrag: true, lockManualRotation: true, gridHighlight: !directional,
             borderColor: '#ff6b35', fillColor: '#ff6b35', fillAlpha: 0.2,
-            label: {text: `${item.name} - ${directional ? 'Aim ' : ''}${LABELS[shape]}`},
-            snap: {position: directional ? 0 : ((constRef?.GRID_SNAPPING_MODES?.CENTER ?? 1) |
+            label: {text: `${item.name} - ${directional && !freeOrigin ? 'Aim ' : ''}${LABELS[shape]}${freeOrigin ? ' (Mouse Wheel: Rotate)' : ''}`},
+            snap: {position: directional && !freeOrigin ? 0 : ((constRef?.GRID_SNAPPING_MODES?.CENTER ?? 1) |
                 (constRef?.GRID_SNAPPING_MODES?.VERTEX ?? 2)), resolution: 1},
-            location: {obj: sourceToken, showRange: !directional,
+            location: {obj: sourceToken, showRange: !directional || freeOrigin,
                 wallBehavior: sequencerRef.Crosshair.PLACEMENT_RESTRICTIONS?.ANYWHERE},
         };
         if (range !== null && range > 0) crosshairConfig.location.limitMaxRange = range;
@@ -219,11 +252,11 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
                 return null;
             }
         }
-        data = buildPowerAoeTemplateData({actor, item, shape, source, target: targetPoint, scene, user});
+        data = buildData(targetPoint);
         if (!preview) await createPreview(false);
         else refreshPreview(preview, data);
         const targetIds = getPowerAoeTargetIds(preview, canvasRef.tokens?.placeables,
-            {sourceToken, excludeSource: directional});
+            {sourceToken, excludeSource: directional && !freeOrigin});
         let documents;
         try { documents = await scene.createEmbeddedDocuments('MeasuredTemplate', [data]); }
         catch (error) { throw new Error(`The Power AoE template could not be created: ${error.message}`, {cause: error}); }
@@ -233,6 +266,7 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
             .filter(key => data[key] !== undefined).map(key => [key, data[key]]));
         return {templateDocument, sceneId: scene.id, targetIds, sourceToken, shape, geometry};
     } finally {
+        removeRotationListener?.();
         destroyPreview(preview, baseTemplateClass, configRef);
     }
 };

@@ -29,7 +29,7 @@ export const getAoeAttackOutcome = state => {
 export const renderAoeAttackTargets = (targets, state) => {
     const outcome = getAoeAttackOutcome(state);
     const title = outcome.success ? 'Targets: click to roll damage.' : 'Targets:';
-    return `<!--aoe-targets-start--><div class="swadetools-target-title" style="font-size:11px;margin-bottom:2px">${title}${targets.length ? '' : ' None'}</div>${targets.map(target => {
+    return `<div class="swadetools-target-title" style="font-size:11px;margin-bottom:2px">${title}${targets.length ? '' : ' None'}</div>${targets.map(target => {
         const name = escapeHTML(target.name || target.actor?.name || 'Unknown');
         const uuid = escapeHTML(target.uuid || target.document?.uuid || '');
         const term = outcome.raise ? 'raise' : outcome.success ? 'hit' : 'miss';
@@ -38,27 +38,58 @@ export const renderAoeAttackTargets = (targets, state) => {
             ? `<a data-aoe-damage-target="${uuid}" class="swadetools-rolldamage-style" title="Roll Damage">${content}</a>`
             : content;
         return `<div class="swadetools-aoe-target swadetools-targetwrap swadetools-term-${term}" style="margin:3px 0;border:1px solid #737171;border-radius:3px;font-size:12px;line-height:17px;overflow-wrap:anywhere">${row}</div>`;
-    }).join('')}<!--aoe-targets-end-->`;
+    }).join('')}`;
+};
+
+// ChatMessage.content is sanitized HTML: comments are not persistent markers.
+// Match a controlled div region and balance its nested divs so target rows can
+// be replaced without consuming the surrounding dice, Benny or Details blocks.
+// This also works without a browser DOM (for headless regression checks).
+const replaceDivRegion = (content, openingPattern, replacement) => {
+    const opening = openingPattern.exec(content);
+    if (!opening) return null;
+    const tags = /<\/?div\b[^>]*>/gi;
+    tags.lastIndex = opening.index + opening[0].length;
+    let depth = 1, tag;
+    while ((tag = tags.exec(content))) {
+        depth += /^<\//.test(tag[0]) ? -1 : 1;
+        if (depth === 0) return content.slice(0, opening.index) + replacement + content.slice(tags.lastIndex);
+    }
+    return null;
+};
+const regionPattern = attribute => new RegExp(`<div\\b(?=[^>]*\\s${attribute}(?:\\s|=|>))[^>]*>`, 'i');
+const insertBeforeDetails = (content, html) => /<details\b/i.test(content)
+    ? content.replace(/<details\b/i, `${html}<details`)
+    : content + html;
+const updateRegion = (content, attribute, html, legacyPattern, insert) => {
+    const wrapper = `<div ${attribute}>${html}</div>`;
+    return replaceDivRegion(content, regionPattern(attribute), wrapper)
+        ?? (legacyPattern ? replaceDivRegion(content, legacyPattern, wrapper) : null)
+        ?? (insert ?? insertBeforeDetails)(content, wrapper);
 };
 
 const replaceCardOutcome = (content, state) => {
     const outcome = getAoeAttackOutcome(state);
     const resultLabel = state.criticalFailure ? 'Critical Failure' : outcome.raise ? 'Raise' : outcome.success ? 'Success' : 'Failure';
     let result = String(content)
+        .replace(/<!--aoe-[\s\S]*?-->/g, '')
         .replace(/(<span data-aoe-result[^>]*>)[\s\S]*?(<\/span>)/,
             `$1${resultLabel}$2`)
         .replace(/(<div class="dice-total"[^>]*>)[\s\S]*?(<\/div>)/,
-            `$1${outcome.total}$2`)
-        .replace(/<!--aoe-targets-start-->[\s\S]*?<!--aoe-targets-end-->/,
-            renderAoeAttackTargets(state.targets ?? [], state))
-        .replace(/<!--aoe-deviation-start-->[\s\S]*?<!--aoe-deviation-end-->/,
-            `<!--aoe-deviation-start-->${outcome.success ? '' : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}<!--aoe-deviation-end-->`)
-        .replace(/<!--aoe-gm-mod-start-->[\s\S]*?<!--aoe-gm-mod-end-->/,
-            `<!--aoe-gm-mod-start-->${state.gmModifier ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${state.gmModifier >= 0 ? '+' : ''}${state.gmModifier}</div>` : ''}<!--aoe-gm-mod-end-->`);
-    if (state.reviewExistingDamage) {
-        result = result.replace(/<!--aoe-review-start-->[\s\S]*?<!--aoe-review-end-->/,
-            '<!--aoe-review-start--><div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: review existing damage.</strong></div><!--aoe-review-end-->');
-    }
+            `$1${outcome.total}$2`);
+    result = updateRegion(result, 'data-grenade-targets', renderAoeAttackTargets(state.targets ?? [], state));
+    result = updateRegion(result, 'data-aoe-deviation', outcome.success ? ''
+        : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>',
+        /<div\b[^>]*>(?=\s*<strong>Deviation:<\/strong>)/i);
+    result = updateRegion(result, 'data-aoe-gm-modifier', state.gmModifier
+        ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${state.gmModifier >= 0 ? '+' : ''}${state.gmModifier}</div>` : '',
+        /<div\b[^>]*class="swadetools-aoe-gm-mod"[^>]*>/i,
+        (html, region) => /<div\b[^>]*class="dice-roll"/i.test(html)
+            ? html.replace(/<div\b(?=[^>]*class="dice-roll")/i, `${region}<div`)
+            : insertBeforeDetails(html, region));
+    result = updateRegion(result, 'data-aoe-review', state.reviewExistingDamage
+        ? '<div data-aoe-gm-review style="color:#a61b1b;font-size:12px;margin:4px 0"><strong>GM: review existing damage.</strong></div>' : '',
+        regionPattern('data-aoe-gm-review'));
     // Color belongs to the effective result, not to the original failed die.
     result = result.replace(/(<span data-aoe-result[^>]*style=")[^"]*(")/,
         `$1color:${outcome.color};font-weight:bold$2`)

@@ -707,7 +707,7 @@ const armGrenadeDeviation = () => {
     "updateMeasuredTemplate",
     async (document, changes) => {
       if (document.id !== templateDocument.id || suppressDeviationUpdate || success) return;
-      if (changes["flags.world.aoeGmCorrection"]) return;
+      if (changes["flags.world.aoeGmCorrection"] || changes.flags?.world?.aoeGmCorrection) return;
       if (throwMessage?.flags?.world?.aoeAttack?.success) {
         cleanupDeviationTargeting();
         return;
@@ -844,14 +844,14 @@ const renderGrenadeThrowContent = async () => {
     <div class="swadetools-aoe-skill" style="font-size:12px;line-height:18px"><strong>${escape(attackSkillName)}:</strong> <span data-aoe-result style="color:${resultColor};font-weight:bold">${compactResultLabel}</span></div>
     ${athleticsAttempts.length > 1 && athleticsAttempts.at(-1) !== athleticsAttempt ? `<div style="font-size:11px;line-height:16px">Previous result kept (reroll ${athleticsAttempts.at(-1).total}${athleticsAttempts.at(-1).naturalOneFailure ? ", natural 1" : ""}).</div>` : ""}
     ${modifierParts ? `<div class="swadetools-aoe-modifiers" style="font-size:11px;line-height:16px">${escape(modifierParts)}</div>` : ""}
-    <!--aoe-gm-mod-start-->${throwMessage?.flags?.world?.aoeAttack?.gmModifier ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${signed(Number(throwMessage.flags.world.aoeAttack.gmModifier))}</div>` : ""}<!--aoe-gm-mod-end-->
+    <div data-aoe-gm-modifier>${throwMessage?.flags?.world?.aoeAttack?.gmModifier ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${signed(Number(throwMessage.flags.world.aoeAttack.gmModifier))}</div>` : ""}</div>
     <div class="dice-roll" style="margin:3px 0"><div class="dice-result">
       <div class="dice-formula" style="padding:2px"><ol class="formula-list" style="display:flex;align-items:center;justify-content:center;gap:4px;list-style:none;margin:0;padding:0">${dieResultsHtml(traitRoll, traitSides, "Trait")}${dieResultsHtml(wildRoll, wildSides, "Wild")}${totalModifier ? `<li style="font-size:12px" title="Total Modifier">${signed(totalModifier)}</li>` : ""}</ol></div>
       <div style="position:relative"><div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div><button type="button" data-aoe-gm-mod class="swadetools-rollbutton" title="Adjust AoE Attack" style="position:absolute;left:3px;bottom:3px;margin:0"${game.user.isGM ? "" : " hidden"}><i class="fa fa-plus" aria-hidden="true"></i></button></div>
     </div></div>
     <div data-grenade-targets style="margin:4px 0">${getBlastTargetsHtml(blastTargets)}</div>
-    <!--aoe-deviation-start-->${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}<!--aoe-deviation-end-->
-    <!--aoe-review-start-->${gmReview}<!--aoe-review-end-->
+    <div data-aoe-deviation>${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}</div>
+    <div data-aoe-review>${gmReview}</div>
     ${getGrenadeBennyControlsHtml()}
     <details class="swadetools-aoe-details" style="font-size:11px;margin-top:4px">
       <summary style="cursor:pointer">Details</summary>

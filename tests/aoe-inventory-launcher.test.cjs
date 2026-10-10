@@ -198,33 +198,41 @@ test('powers require explicit AoE opt-in and never inherit grenade resource beha
     assert.equal(item.system.pp, 2);
 });
 
-test('Power AoE shapes use native templates by default and save only validated shape flags', async () => {
+test('Power AoE shapes and origins use safe defaults and save only validated settings', async () => {
     const { getPowerAoeSettings, savePowerAoeSettings, saveAoeItemSettings, POWER_AOE_SHAPES } = await load('AoeItemFlags.js');
     const item = makeItem(makeActor('caster'), {
         type: 'power', name: 'Burst', system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, pp: 2 }
     });
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster' });
     for (const shape of POWER_AOE_SHAPES) {
-        assert.deepEqual(await savePowerAoeSettings(item, { shape, consumeMode: 'ammo', skill: 'Shooting' }), { shape });
-        assert.deepEqual(getPowerAoeSettings(item), { shape });
-        assert.deepEqual(item.updates.at(-1), { 'flags.swade-tools.aoePowerShape': shape });
+        assert.deepEqual(await savePowerAoeSettings(item, { shape, consumeMode: 'ammo', skill: 'Shooting' }), { shape, origin: 'caster' });
+        assert.deepEqual(getPowerAoeSettings(item), { shape, origin: 'caster' });
+        assert.deepEqual(item.updates.at(-1), {
+            'flags.swade-tools.aoePowerShape': shape, 'flags.swade-tools.aoePowerOrigin': 'caster'
+        });
     }
+    assert.deepEqual(await savePowerAoeSettings(item, { shape: 'cone', origin: 'free' }), { shape: 'cone', origin: 'free' });
+    assert.equal(getPowerAoeSettings(item).origin, 'free');
+    await savePowerAoeSettings(item, { shape: 'stream' });
+    assert.equal(getPowerAoeSettings(item).origin, 'free'); // Older callers do not reset an explicitly saved origin.
     assert.equal(item.system.actions.trait, 'Aetherics');
     assert.equal(item.system.pp, 2);
     const changes = item.updates.length;
     await assert.rejects(savePowerAoeSettings(item, { shape: 'ray' }), /valid power template/);
+    await assert.rejects(savePowerAoeSettings(item, { shape: 'cone', origin: 'other-token' }), /valid power template origin/);
     await assert.rejects(saveAoeItemSettings(item, { blastSize: 'small' }), /Power AoE Settings/);
     item.isOwner = false;
     await assert.rejects(savePowerAoeSettings(item, { shape: 'small' }), /own/);
     assert.equal(item.updates.length, changes);
     item.flags['swade-tools'].aoePowerShape = 'invalid-imported-shape';
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone' });
+    item.flags['swade-tools'].aoePowerOrigin = 'invalid-imported-origin';
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster' });
     item.system.templates = {};
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'medium' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'medium', origin: 'caster' });
     item.system.templates = { scone: true };
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'scone' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'scone', origin: 'caster' });
     item.system.templates = { stream: true };
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'stream' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'stream', origin: 'caster' });
     await assert.rejects(savePowerAoeSettings(makeItem(makeActor('weapon')), { shape: 'small' }), /eligible AoE power/);
 });
 
@@ -362,7 +370,9 @@ test('Power AoE Properties controls open compact shape settings without ammo or 
     let captured;
     foundry.applications.api.DialogV2.prompt = async options => {
         captured = options;
-        return options.ok.callback(null, { form: { elements: { aoePowerShape: { value: 'scone' } } } });
+        return options.ok.callback(null, { form: { elements: {
+            aoePowerShape: { value: 'scone' }, aoePowerOrigin: { value: 'free' }
+        } } });
     };
     await showAoeItemSettings(owner, item);
     assert.equal(captured.window.title, 'Burst - Power AoE Settings');
@@ -370,8 +380,14 @@ test('Power AoE Properties controls open compact shape settings without ammo or 
     assert.match(captured.content, /<option value="cone" selected>/);
     assert.match(captured.content, /Small Cone Template/);
     assert.match(captured.content, /Stream Template/);
+    assert.match(captured.content, /Template Origin/);
+    assert.match(captured.content, /<option value="caster" selected>/);
+    assert.match(captured.content, /Place Freely/);
+    assert.match(captured.content, /mouse wheel rotates/);
     assert.doesNotMatch(captured.content, /aoeConsume|aoeAmmoCost|Consume Ammunition|Consume Item|Attack Skill|name="aoeSkill"/);
-    assert.deepEqual(item.updates, [{ 'flags.swade-tools.aoePowerShape': 'scone' }]);
+    assert.deepEqual(item.updates, [{
+        'flags.swade-tools.aoePowerShape': 'scone', 'flags.swade-tools.aoePowerOrigin': 'free'
+    }]);
     assert.equal(item.system.actions.trait, 'Aetherics');
     assert.equal(item.system.pp, 2);
     assert.deepEqual(messages, [['info', 'Power AoE settings saved.']]);

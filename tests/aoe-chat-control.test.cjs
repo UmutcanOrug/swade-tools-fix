@@ -25,7 +25,7 @@ async function fixture({gm = true, vehicle = false, total = 3,
         originalPoint: {x: 100, y: 100}, targets: [{id: target.id, uuid: target.uuid, name: target.name}],
         damageModifier: '+4', damageActionId: '', criticalFailure, naturalOneFailure,
         damageWorkflowStarted: false, ...api.getAoeAttackOutcome({baseTotal: total, criticalFailure, naturalOneFailure})};
-    const content = `<span data-aoe-result style="color:red;font-weight:bold">Failure</span><div class="dice-total" style="color:red">${total}</div><div data-grenade-targets>${api.renderAoeAttackTargets(state.targets, state)}</div><!--aoe-gm-mod-start--><!--aoe-gm-mod-end--><!--aoe-deviation-start-->Deviation<!--aoe-deviation-end--><!--aoe-review-start--><!--aoe-review-end--><button data-aoe-gm-mod></button>`;
+    const content = `<span data-aoe-result style="color:red;font-weight:bold">Failure</span><div class="dice-total" style="color:red">${total}</div><div data-grenade-targets>${api.renderAoeAttackTargets(state.targets, state)}</div><div data-aoe-gm-modifier></div><div data-aoe-deviation><div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div></div><div data-aoe-review></div><button data-aoe-gm-mod></button>`;
     const message = {id: 'message', flags: {world: {aoeAttack: state}}, content,
         async update(change) {
             if (change['flags.world.aoeAttack']) this.flags.world.aoeAttack = change['flags.world.aoeAttack'];
@@ -58,6 +58,29 @@ async function fixture({gm = true, vehicle = false, total = 3,
     return {api, state, message, runtime, owner, operator, item, target, template, changes, calls, warnings, documents};
 }
 
+// Foundry's persisted HTML fields strip comments. Reproduce that boundary on
+// both the initial player-authored card and every subsequent GM update, rather
+// than letting a mock keep update markers that the real server removes.
+function persistSanitizedCard(s, {durableRegions = false} = {}) {
+    const clean = html => String(html).replace(/<!--[\s\S]*?-->/g, '');
+    const region = (attribute, html) => durableRegions
+        ? `<div ${attribute}>${html}</div>` : html;
+    s.message.content = clean(`<article class="swadetools-aoe-card">
+        <header><strong>Imperial Fragmentation Grenade</strong></header>
+        <div><strong>Athletics:</strong> <span data-aoe-result style="color:red;font-weight:bold">Failure</span></div>
+        ${region('data-aoe-gm-modifier', '<!--aoe-gm-mod-start--><!--aoe-gm-mod-end-->')}
+        <div class="dice-roll"><div class="dice-total" style="color:red">${s.state.baseTotal}</div><button data-aoe-gm-mod></button></div>
+        <div data-grenade-targets>${s.api.renderAoeAttackTargets(s.state.targets, s.state)}</div>
+        ${region('data-aoe-deviation', '<!--aoe-deviation-start--><div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div><!--aoe-deviation-end-->')}
+        ${region('data-aoe-review', '<!--aoe-review-start--><!--aoe-review-end-->')}
+        <button data-grenade-benny="actor">Benny Reroll (3)</button>
+        <details class="swadetools-aoe-details"><summary>Details</summary><div>Range -2</div></details>
+    </article>`);
+    const update = s.message.update.bind(s.message);
+    s.message.update = change => update({...change,
+        ...(change.content !== undefined ? {content: clean(change.content)} : {})});
+}
+
 test('serialized AoE card exposes native-style + and click damage controls, without runtime closure requirements', async () => {
     const s = await runAttack({dice: [2, 3]});
     const card = s.cards[0], state = card.flags.world.aoeAttack;
@@ -88,6 +111,80 @@ test('a separate GM client can correct failure to Raise without damage, ammo or 
     await s.api.applyAoeGmModifier(s.message, '-1', s.runtime);
     assert.equal(s.message.flags.world.aoeAttack.total, 2, 'GM modifier replaces instead of stacking');
     assert.doesNotMatch(s.message.content, /data-aoe-damage-target=/);
+});
+
+test('a sanitized legacy grenade card corrects total zero plus GM four into a clickable Hit', async () => {
+    const s = await fixture({total: 0});
+    persistSanitizedCard(s);
+    assert.doesNotMatch(s.message.content, /<!--/);
+    assert.match(s.message.content, /Victim: Miss/);
+    assert.equal(await s.api.applyAoeGmModifier(s.message, '+4', s.runtime), true);
+    assert.equal(s.message.flags.world.aoeAttack.total, 4);
+    assert.equal(s.message.flags.world.aoeAttack.success, true);
+    assert.match(s.message.content, /data-aoe-result[^>]*>Success</);
+    assert.match(s.message.content, /class="dice-total"[^>]*>4</);
+    assert.match(s.message.content, /Victim: Hit/);
+    assert.match(s.message.content, /data-aoe-damage-target="Scene.scene.Token.victim"/);
+    assert.match(s.message.content, /GM Modifier: \+4/);
+    assert.doesNotMatch(s.message.content, /Victim: Miss|Deviation:|<!--/);
+    assert.match(s.message.content, /Benny Reroll \(3\)/, 'Keep existing Benny controls');
+    assert.match(s.message.content, /<summary>Details<\/summary>/, 'Keep the compact card details');
+    assert.equal(s.calls.length, 0, 'The correction alone must not attack or roll damage');
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), true);
+    assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+    assert.equal(s.calls.filter(value => value[0] === 'display').length, 1);
+    assert.ok(!s.calls.some(value => value[0] === 'raise'), 'A total of four is not a Raise');
+});
+
+test('comment-free durable and legacy cards keep targets, deviation and review in sync on repeated GM corrections', async () => {
+    for (const durableRegions of [false, true]) {
+        const s = await fixture({total: 0});
+        persistSanitizedCard(s, {durableRegions});
+        s.item.system.currentShots = 3;
+        s.item.system.quantity = 4;
+        for (const [modifier, total, status] of [['+4', 4, 'Hit'], ['+8', 8, 'Raise'], ['-1', -1, 'Miss'], ['+4', 4, 'Hit']]) {
+            const before = s.calls.length;
+            assert.equal(await s.api.applyAoeGmModifier(s.message, modifier, s.runtime), true);
+            const state = s.message.flags.world.aoeAttack;
+            assert.equal(state.baseTotal, 0, 'The original attack total remains unchanged');
+            assert.equal(state.total, total, 'Each GM value replaces the previous value, never stacking');
+            assert.equal(state.success, status !== 'Miss');
+            assert.equal(state.raise, status === 'Raise');
+            assert.match(s.message.content, new RegExp(`Victim: ${status}`));
+            assert.equal((s.message.content.match(/Victim: /g) ?? []).length, 1, 'Only one current target row');
+            assert.equal((s.message.content.match(/GM Modifier:/g) ?? []).length, 1, 'Only one current GM modifier line');
+            assert.doesNotMatch(s.message.content, /<!--/);
+            assert.equal(s.calls.length, before, 'A correction never repeats damage or resource use');
+            if (status === 'Miss') {
+                assert.doesNotMatch(s.message.content, /data-aoe-damage-target=/);
+                assert.equal((s.message.content.match(/Deviation:/g) ?? []).length, 1);
+                assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false);
+                assert.equal(s.calls.length, before);
+            } else {
+                assert.doesNotMatch(s.message.content, /Deviation:/);
+                assert.match(s.message.content, /data-aoe-damage-target="Scene.scene.Token.victim"/);
+            }
+            if (total === 8) {
+                // Damage is deliberately requested only after the explicit
+                // target click, and uses the corrected Raise result.
+                assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), true);
+                assert.ok(s.calls.some(value => value[0] === 'raise'));
+                assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+            }
+            if (state.reviewExistingDamage) {
+                assert.equal((s.message.content.match(/GM: review existing damage\./g) ?? []).length, 1);
+            }
+            assert.equal(s.item.system.currentShots, 3, 'Native damage-only rolls do not consume ammunition');
+            assert.equal(s.item.system.quantity, 4, 'Native damage-only rolls do not consume another grenade');
+            if (durableRegions) {
+                for (const attribute of ['data-aoe-gm-modifier', 'data-aoe-deviation', 'data-aoe-review']) {
+                    assert.equal((s.message.content.match(new RegExp(attribute, 'g')) ?? []).length, 1);
+                }
+            }
+        }
+        assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+        assert.equal(s.calls.filter(value => value[0] === 'display').length, 1);
+    }
 });
 
 test('corrected target click creates one native damage-only card with Raise and frozen damage modifier', async () => {
@@ -260,6 +357,19 @@ test('GM-corrected successful template cannot trigger the stale failed-throw dev
     await s.emitHook('updateMeasuredTemplate', template, {x: 150});
     assert.equal(s.nativeCards.length, 0);
     assert.equal(s.weapon.system.currentShots, 3);
+});
+
+test('both flat and expanded GM template corrections skip the pending deviation hook before chat synchronization', async () => {
+    for (const correction of [{'flags.world.aoeGmCorrection': true},
+        {flags: {world: {aoeGmCorrection: true}}}]) {
+        const s = await runAttack({dice: [2, 3]});
+        const original = s.cards[0].content;
+        assert.equal(s.cards[0].flags.world.aoeAttack.success, false);
+        await s.emitHook('updateMeasuredTemplate', s.scene.templates.get('template'), {x: 150, ...correction});
+        assert.equal(s.nativeCards.length, 0);
+        assert.equal(s.cards[0].content, original, 'The GM correction owns the eventual target/card update');
+        assert.equal(s.weapon.system.currentShots, 3);
+    }
 });
 
 test('a manual target-damage marker prevents later skill Bennies from duplicating the damage workflow', async () => {

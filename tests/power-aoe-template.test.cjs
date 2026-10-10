@@ -5,11 +5,11 @@ const {pathToFileURL} = require('node:url');
 const service = import(pathToFileURL(path.join(__dirname, '../scripts/services/PowerAoeTemplate.js')).href);
 
 const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distance = 1,
-    cancel = false, createError = null, onShow = null} = {}) => {
+    origin = 'caster', cancel = false, createError = null, onShow = null} = {}) => {
     const calls = [], previews = [];
     const actor = {id: 'caster', uuid: 'Actor.caster', isOwner: true};
     const item = {id: 'burst', uuid: 'Actor.caster.Item.burst', actor, isOwner: true,
-        type: 'power', name: 'Burst', system: {range}};
+        type: 'power', name: 'Burst', system: {range}, flags: {'swade-tools': {aoePowerOrigin: origin}}};
     const scene = {id: 'scene', grid: {size: 100, distance},
         async createEmbeddedDocuments(type, data) {
             calls.push(['create', type, structuredClone(data)]);
@@ -56,6 +56,23 @@ const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distan
     }
     const previewLayer = {children: [], addChild(child) { this.children.push(child); child.parent = this; },
         removeChild(child) { this.children = this.children.filter(entry => entry !== child); child.parent = null; }};
+    const wheelListeners = new Set();
+    const wheelTarget = {
+        addEventListener(type, listener, options) {
+            assert.equal(type, 'wheel'); assert.deepEqual(options, {capture: true, passive: false});
+            wheelListeners.add(listener); calls.push(['wheel-add']);
+        },
+        removeEventListener(type, listener, options) {
+            assert.equal(type, 'wheel'); assert.deepEqual(options, {capture: true});
+            wheelListeners.delete(listener); calls.push(['wheel-remove']);
+        },
+        rotate(deltaY, shiftKey = false) {
+            const event = {deltaY, shiftKey, preventDefault() { this.defaultPrevented = true; },
+                stopImmediatePropagation() { this.stopped = true; }};
+            for (const listener of wheelListeners) listener(event);
+            return event;
+        }
+    };
     const canvasRef = {ready: true, scene, grid: {size: 100,
         measurePath(points) { return {distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y) / 100 * distance}; }},
         tokens: {controlled: [source], placeables: tokens}, templates: {preview: previewLayer}};
@@ -70,14 +87,15 @@ const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distan
             calls.push(['crosshair', config, callbacks]);
             callbacks.show({document: {x: 150, y: 50}});
             callbacks.move({document: point});
-            await onShow?.({canvasRef, callbacks, config, previews});
+            await onShow?.({canvasRef, callbacks, config, previews, wheelTarget});
             if (cancel) { callbacks.cancel(); return false; }
             return {x: point.x, y: point.y};
         }}};
     const notifications = {warn(message) { calls.push(['warn', message]); }};
     return {input: {actor, item, token: source, shape}, runtime: {canvasRef, gameRef, configRef, sequencerRef,
-        constRef: {GRID_SNAPPING_MODES: {CENTER: 1, VERTEX: 2}}, baseTemplateClass: CoreTemplate, notifications},
-        calls, previews, tokens, source, oldPreview, selectedTargets};
+        constRef: {GRID_SNAPPING_MODES: {CENTER: 1, VERTEX: 2}, GRID_TYPES: {SQUARE: 1}},
+        baseTemplateClass: CoreTemplate, notifications, wheelTarget},
+        calls, previews, tokens, source, oldPreview, selectedTargets, wheelTarget, wheelListeners};
 };
 
 test('Power template presets scale circles and streams but keep SWADE rounded-cone width in squares', async () => {
@@ -142,6 +160,93 @@ test('stream is anchored, uses scene-scaled width, and excludes only the caster 
     assert.deepEqual(result.targetIds, ['west']);
     assert.equal(result.geometry.direction, 180); assert.equal(result.geometry.distance, 60);
     assert.equal(result.geometry.width, 5);
+});
+
+test('free-origin cone follows its own placement point and preserves native mouse-wheel rotation while moving', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'cone', origin: 'free', point: {x: 50, y: 50},
+        onShow({previews, callbacks, wheelTarget, config}) {
+            const preview = previews[0];
+            assert.equal(preview.document.x, 50); assert.equal(preview.document.y, 50);
+            assert.equal(config.location.showRange, true); assert.equal(config.location.limitMaxRange, 8);
+            assert.equal(config.snap.position, 3);
+            assert.match(config.label.text, /Mouse Wheel: Rotate/);
+            const event = wheelTarget.rotate(1);
+            assert.equal(event.defaultPrevented, true); assert.equal(event.stopped, true);
+            assert.equal(preview.document.direction, 5);
+            wheelTarget.rotate(1, true);
+            assert.equal(preview.document.direction, 20);
+            callbacks.move({document: {x: 250, y: 50}});
+            assert.equal(preview.document.x, 250); assert.equal(preview.document.y, 50);
+            assert.equal(preview.document.direction, 20);
+            wheelTarget.rotate(-1, true); wheelTarget.rotate(-1);
+            callbacks.move({document: {x: 50, y: 50}});
+        }});
+    const result = await placePowerAoeTemplate(f.input, f.runtime);
+    assert.deepEqual(result.geometry, {t: 'cone', x: 50, y: 50, direction: 0, distance: 9, width: 3, angle: 0});
+    assert.deepEqual(result.targetIds, ['source', 'inside']); // A remote origin does not grant caster immunity.
+    assert.equal(result.templateDocument.flags['swade-tools'].originMode, 'free');
+    assert.equal(f.runtime.gameRef.user.targets, f.selectedTargets);
+    assert.equal(f.wheelListeners.size, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'wheel-add').length, 1);
+    assert.equal(f.calls.filter(call => call[0] === 'wheel-remove').length, 1);
+    assert.equal(f.previews[0].destroyed, true);
+});
+
+test('free-origin stream rotates with native hex-grid steps and keeps fixed scene-scaled dimensions', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'stream', origin: 'free', distance: 5, range: '30',
+        point: {x: 250, y: 50}, onShow({canvasRef, previews, wheelTarget}) {
+            canvasRef.grid.type = 2;
+            wheelTarget.rotate(-1, true);
+            assert.equal(previews[0].document.direction, 330);
+        }});
+    const result = await placePowerAoeTemplate(f.input, f.runtime);
+    assert.equal(result.geometry.x, 250); assert.equal(result.geometry.direction, 330);
+    assert.equal(result.geometry.distance, 60); assert.equal(result.geometry.width, 5);
+    assert.equal(f.wheelListeners.size, 0);
+});
+
+test('free directional origin observes numeric range and leaves no preview or wheel listener on rejection', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'scone', origin: 'free', range: '1', point: {x: 350, y: 50}});
+    assert.equal(await placePowerAoeTemplate(f.input, f.runtime), null);
+    assert.equal(f.calls.some(call => call[0] === 'create'), false);
+    assert.match(f.calls.find(call => call[0] === 'warn')[1], /outside.*range \(1\)/);
+    assert.equal(f.wheelListeners.size, 0); assert.equal(f.previews[0].destroyed, true);
+});
+
+test('free-origin cancellation, scene change and document errors always remove scoped rotation controls', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const cancelled = fixture({shape: 'cone', origin: 'free', cancel: true});
+    assert.equal(await placePowerAoeTemplate(cancelled.input, cancelled.runtime), null);
+    const changed = fixture({shape: 'cone', origin: 'free', onShow({canvasRef}) { canvasRef.scene = {id: 'other'}; }});
+    await assert.rejects(placePowerAoeTemplate(changed.input, changed.runtime), /active scene changed/);
+    const rejected = fixture({shape: 'cone', origin: 'free', createError: 'permission denied'});
+    await assert.rejects(placePowerAoeTemplate(rejected.input, rejected.runtime), /permission denied/);
+    for (const f of [cancelled, changed, rejected]) {
+        assert.equal(f.wheelListeners.size, 0); assert.equal(f.previews[0].destroyed, true);
+        assert.equal(f.runtime.canvasRef.templates.preview.children.length, 0);
+        assert.equal(f.runtime.configRef.SWADE.activeMeasuredTemplatePreview, f.oldPreview);
+    }
+});
+
+test('caster-origin and circle placement never install directional rotation handlers', async () => {
+    const {placePowerAoeTemplate} = await service;
+    for (const options of [{shape: 'cone'}, {shape: 'stream'}, {shape: 'medium', origin: 'free'},
+        {shape: 'cone', origin: 'invalid-imported-origin'}]) {
+        const f = fixture(options);
+        await placePowerAoeTemplate(f.input, f.runtime);
+        assert.equal(f.calls.some(call => call[0] === 'wheel-add'), false);
+    }
+});
+
+test('free-origin directional placement fails safely if canvas wheel controls are unavailable', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'cone', origin: 'free'}); delete f.runtime.wheelTarget;
+    await assert.rejects(placePowerAoeTemplate(f.input, f.runtime), /rotation controls are unavailable/);
+    assert.equal(f.calls.some(call => call[0] === 'create'), false);
+    assert.equal(f.previews[0].destroyed, true);
 });
 
 test('right-click cancellation creates no document and always removes directional preview', async () => {

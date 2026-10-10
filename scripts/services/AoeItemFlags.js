@@ -2,6 +2,7 @@ export const AOE_FLAG_SCOPE = 'swade-tools';
 export const AOE_ENABLED_FLAG = 'aoeEnabled';
 export const AOE_ITEM_TYPES = new Set(['weapon', 'consumable', 'gear', 'power']);
 export const POWER_AOE_SHAPES = Object.freeze(['small', 'medium', 'large', 'scone', 'cone', 'stream']);
+export const POWER_AOE_ORIGINS = Object.freeze(['caster', 'free']);
 
 export const canEnableAoe = item => Boolean(
     item && AOE_ITEM_TYPES.has(item.type)
@@ -55,10 +56,12 @@ const readFlag = (item, key) => typeof item?.getFlag === 'function'
 
 export const getPowerAoeSettings = item => {
     const saved = readFlag(item, 'aoePowerShape');
+    const origin = readFlag(item, 'aoePowerOrigin');
     return {
         shape: POWER_AOE_SHAPES.includes(saved) ? saved
             : ['cone', 'scone', 'stream', 'small', 'medium', 'large']
-                .find(shape => item?.system?.templates?.[shape] === true) ?? 'medium'
+                .find(shape => item?.system?.templates?.[shape] === true) ?? 'medium',
+        origin: POWER_AOE_ORIGINS.includes(origin) ? origin : 'caster'
     };
 };
 
@@ -69,8 +72,15 @@ export const savePowerAoeSettings = async (item, settings = {}) => {
     if (!POWER_AOE_SHAPES.includes(settings.shape)) {
         throw new Error('Choose a valid power template shape.');
     }
-    const saved = { shape: settings.shape };
-    await item.update({ 'flags.swade-tools.aoePowerShape': saved.shape });
+    const origin = settings.origin ?? getPowerAoeSettings(item).origin;
+    if (!POWER_AOE_ORIGINS.includes(origin)) {
+        throw new Error('Choose a valid power template origin.');
+    }
+    const saved = { shape: settings.shape, origin };
+    await item.update({
+        'flags.swade-tools.aoePowerShape': saved.shape,
+        'flags.swade-tools.aoePowerOrigin': saved.origin
+    });
     return saved;
 };
 
