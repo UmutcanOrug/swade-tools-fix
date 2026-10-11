@@ -3,9 +3,11 @@ const {test} = require('node:test');
 const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const service = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeFire.js')).href);
+const targetResults = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeTargetResults.js')).href);
 
 async function fixture({dice = [], flammability, gmId = 'a-gm', autoEvade = false, evaded, enabled = true} = {}) {
     const api = await service;
+    const resultApi = await targetResults;
     const calls = [], cards = [], warnings = [], documents = new Map();
     const game = {user: {id: gmId, isGM: gmId !== 'player', active: true},
         users: new Map([['a-gm', {id: 'a-gm', isGM: true, active: true}],
@@ -59,14 +61,42 @@ async function fixture({dice = [], flammability, gmId = 'a-gm', autoEvade = fals
             cards.push(card); game.messages.set(card.id, card); return card;
         }}};
     const context = {message, target, actor, item};
-    return {api, game, actor, target, item, state, message, runtime, context, dice, calls, cards, warnings, documents};
+    return {api, resultApi, game, actor, target, item, state, message, runtime, context, dice, calls, cards, warnings, documents};
 }
 const fireState = effect => effect.flags['swade-tools'].aoeBurning;
+const fireResult = (s, uuid = s.target.uuid) => s.resultApi.getAoeTargetResult(s.message.flags.world.aoeFireResults, uuid);
 const rolls = s => s.calls.filter(call => call[0] === 'roll').map(call => call[1]);
 const addEffect = s => s.api.applyAoeBurning(s.actor, {intensity: 3, maxIntensity: 3,
     tokenUuid: s.target.uuid, sourceActorUuid: 'Actor.source', sourceItemUuid: s.item.uuid}, s.runtime);
 const combat = (s, round = 1, turn = 0, actor = s.actor) => ({id: 'combat', uuid: 'Combat.combat', started: true,
     active: true, round, turn, combatant: {id: actor === s.actor ? 'victim-combatant' : 'other-combatant', actor}});
+
+// Foundry 13 expandObject recursively expands dotted keys even inside the
+// nested value of a flags.world update. Reproduce that document boundary,
+// rather than retaining UUID-keyed objects unchanged in the test double.
+function expandFoundryUpdate(value) {
+    if (Array.isArray(value)) return value.map(expandFoundryUpdate);
+    if (!value || value.constructor !== Object) return value;
+    const expanded = {};
+    for (const [key, child] of Object.entries(value)) {
+        const parts = key.split('.');
+        const leaf = parts.pop();
+        const parent = parts.reduce((object, part) => object[part] ??= {}, expanded);
+        parent[leaf] = expandFoundryUpdate(child);
+    }
+    return expanded;
+}
+function useFoundryPersistence(s) {
+    const merge = (target, source) => {
+        for (const [key, value] of Object.entries(source)) {
+            if (value?.constructor === Object) {
+                if (target[key]?.constructor !== Object) target[key] = {};
+                merge(target[key], value);
+            } else target[key] = value;
+        }
+    };
+    s.message.update = async change => {s.calls.push(['attack-update', change]); merge(s.message, expandFoundryUpdate(change));};
+}
 
 test('fire is opt-in; disabled items do not roll, prompt, or create effects', async () => {
     const s = await fixture({enabled: false});
@@ -114,7 +144,7 @@ test('GM can choose nonflammable and remember the decision on the actual unlinke
     await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'none', true, s.runtime), true);
     assert.equal(s.actor.flags['swade-tools'].aoeFlammability, 'none');
-    assert.equal(s.message.flags.world.aoeFireResults[s.target.uuid].status, 'nonflammable');
+    assert.equal(fireResult(s).status, 'nonflammable');
     assert.match(s.cards[0].content, /Not flammable/); assert.deepEqual(rolls(s), []);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'volatile', true, s.runtime), false);
 });
@@ -291,9 +321,10 @@ test('parallel target results cannot overwrite each other while message writes a
     s.message.update = async change => {await Promise.resolve(); await original(change);};
     await Promise.all([s.api.recordAoeFireHitAsGm(s.context, s.runtime),
         s.api.recordAoeFireHitAsGm({...s.context, target: second}, s.runtime)]);
-    assert.deepEqual(Object.keys(s.message.flags.world.aoeFireResults).sort(), [s.target.uuid, second.uuid].sort());
-    assert.equal(s.message.flags.world.aoeFireResults[s.target.uuid].status, 'nonflammable');
-    assert.equal(s.message.flags.world.aoeFireResults[second.uuid].status, 'nonflammable');
+    assert.deepEqual(Object.keys(s.message.flags.world.aoeFireResults).sort(),
+        [s.resultApi.aoeTargetResultKey(s.target.uuid), s.resultApi.aoeTargetResultKey(second.uuid)].sort());
+    assert.equal(fireResult(s).status, 'nonflammable');
+    assert.equal(fireResult(s, second.uuid).status, 'nonflammable');
 });
 
 test('parallel ignition requests for one actor cannot create stacked Burning effects', async () => {
@@ -347,6 +378,55 @@ test('Fire Check and future-Flammability controls use themed DialogV2 content wi
     await invoke('data-aoe-fire-flammability');
     assert.equal(s.actor.flags['swade-tools'].aoeFlammability, 'volatile');
     assert.match(s.cards[0].content, /Future fire checks: Volatile/);
-    assert.equal(s.message.flags.world.aoeFireResults[s.target.uuid].status, 'nonflammable');
+    assert.equal(fireResult(s).status, 'nonflammable');
     assert.deepEqual(rolls(s), []);
+});
+
+test('Foundry-expanded legacy Evade results allow ignition and saved fire results remain readable without rerolling', async () => {
+    const s = await fixture({autoEvade: true, evaded: false, flammability: 'flammable', dice: [6, 12]});
+    s.message.flags.world.aoeEvadeResults = expandFoundryUpdate(s.message.flags.world.aoeEvadeResults);
+    assert.equal(s.message.flags.world.aoeEvadeResults[s.target.uuid], undefined, 'The old raw UUID lookup is broken by Foundry');
+    useFoundryPersistence(s);
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'burning');
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'burning');
+    assert.equal(fireResult(s).status, 'burning');
+    assert.ok(Object.keys(s.message.flags.world.aoeFireResults).every(key => !key.includes('.')));
+    assert.deepEqual(rolls(s), ['1d6', '3d6x']); assert.equal(s.actor.effects.size, 1);
+});
+
+test('real fire authority plus Foundry persistence creates and resolves one GM Fire Check for a settled Evade hit', async () => {
+    const s = await fixture({autoEvade: true, evaded: false, dice: [2, 11]});
+    const owner = {uuid: 'Actor.source', type: 'character'};
+    s.state.weaponActorUuid = owner.uuid;
+    s.message.user = s.game.user;
+    s.target.parent = {id: 'scene'};
+    Object.assign(s.item, {type: 'weapon', actor: owner, parent: owner});
+    s.game.scenes = new Map([['scene', {id: 'scene'}]]);
+    s.runtime.canvasRef = {scene: {id: 'scene'}};
+    s.documents.set(owner.uuid, owner); s.documents.set(s.item.uuid, s.item);
+    s.message.flags.world.aoeEvadeResults = expandFoundryUpdate(s.message.flags.world.aoeEvadeResults);
+    useFoundryPersistence(s);
+    s.api.registerAoeFire(s.runtime);
+    assert.equal((await s.api.recordAoeFireHit(s.message, s.target.uuid, s.runtime)).status, 'pending');
+    assert.equal(s.cards.length, 1); assert.match(s.cards[0].content, /Fire Check/);
+    assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'volatile', false, s.runtime), true);
+    assert.equal((await s.api.recordAoeFireHit(s.message, s.target.uuid, s.runtime)).status, 'burning');
+    assert.equal(s.cards.length, 2); assert.equal(s.actor.effects.size, 1);
+    assert.deepEqual(rolls(s), ['1d6', '3d6x']); assert.equal(s.warnings.length, 0);
+    assert.equal(fireResult(s).status, 'burning');
+});
+
+test('an already expanded 2.1.17 pending Fire Check can resolve without creating a second check', async () => {
+    const s = await fixture({dice: [6, 10]});
+    const settings = {enabled: true, initialIntensity: 3, maxIntensity: 3};
+    s.message.flags.world.aoeFireResults = expandFoundryUpdate({[s.target.uuid]: {status: 'pending', settings}});
+    useFoundryPersistence(s);
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'pending');
+    assert.equal(s.cards.length, 0);
+    const oldCard = {flags: {'swade-tools': {aoeFireCheck: {attackMessageId: s.message.id, targetUuid: s.target.uuid}}},
+        async update(change) {Object.assign(this, change);}};
+    assert.equal(await s.api.resolveAoeFireCheck(oldCard, 'flammable', false, s.runtime), true);
+    assert.equal(fireResult(s).status, 'burning'); assert.equal(s.actor.effects.size, 1);
+    assert.deepEqual(rolls(s), ['1d6', '3d6x']);
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'burning');
 });

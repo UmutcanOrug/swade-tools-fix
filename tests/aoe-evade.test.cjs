@@ -4,11 +4,13 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const authority = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeAuthority.js')).href);
 const service = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeEvade.js')).href);
+const resultsService = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeTargetResults.js')).href);
 
 async function fixture({wild = true, total = 5, faces = [7, 2], modifier = -2,
     autoEvade = true, improvedDodge = false, activeGm = true} = {}) {
     const api = await service;
     const auth = await authority;
+    const results = await resultsService;
     const gm = {id: 'gm', isGM: true, active: activeGm};
     const player = {id: 'player', isGM: false, active: true};
     const owner = {uuid: 'Actor.owner', ownership: {player: 3}, type: 'character'};
@@ -48,7 +50,7 @@ async function fixture({wild = true, total = 5, faces = [7, 2], modifier = -2,
         notifications: {warn: text => warnings.push(text)}};
     api.registerAoeEvadeAuthority();
     return {api, auth, runtime, gameRef, message, state, owner, item, target, actor,
-        player, gm, documents, calls, chat, warnings, updates};
+        player, gm, documents, calls, chat, warnings, updates, results};
 }
 
 test('AoE with automatic Evade disabled needs no Foundry runtime or GM', async () => {
@@ -71,7 +73,7 @@ test('automatic Evade uses native Agility once per target and persists a compact
     assert.match(s.chat[0].content, /5 — Evaded/);
     assert.doesNotMatch(s.chat[0].content, /<h[1-6]|<table/);
     assert.equal(s.chat[0].flags.world.aoeEvadeCheck.attackId, s.message.id);
-    assert.equal(s.message.flags.world.aoeEvadeResults[s.target.uuid].evaded, true);
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, true);
     assert.equal(s.state.autoEvade, true);
     assert.equal(s.updates.some(update => 'flags.world.aoeAttack' in update), false);
 });
@@ -92,7 +94,7 @@ test('failed Evade allows damage and Improved Dodge is added once rather than or
 test('natural ones cannot become an Evade success through modifiers', async () => {
     const wild = await fixture({total: 9, faces: [1, 1]});
     assert.equal((await wild.api.resolveAoeEvade(wild.message, wild.target.uuid, wild.runtime)).criticalFailure, true);
-    assert.equal(wild.message.flags.world.aoeEvadeResults[wild.target.uuid].evaded, false);
+    assert.equal(wild.results.getAoeTargetResult(wild.message.flags.world.aoeEvadeResults, wild.target.uuid).evaded, false);
     const extra = await fixture({wild: false, total: 9, faces: [1]});
     const result = await extra.api.resolveAoeEvade(extra.message, extra.target.uuid, extra.runtime);
     assert.equal(result.allowed, true);
@@ -259,7 +261,7 @@ test('GM can adjudicate Hit/Evaded without rerolling or silently reversing exist
     const defense = {...s.chat[0], async update(change) { Object.assign(this, change); }};
     s.state.damageWorkflowStarted = true;
     assert.equal(await s.api.setAoeEvadeOutcome(defense, false, s.runtime), true);
-    assert.equal(s.message.flags.world.aoeEvadeResults[s.target.uuid].evaded, false);
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, false);
     assert.equal(s.message.flags.world.aoeAttack.reviewExistingDamage, true);
     assert.equal(s.calls.filter(call => call[0] === 'roll').length, 1);
     s.gameRef.user = s.player;
@@ -281,8 +283,8 @@ test('pending Evade adjudication follows a valid Benny successor without changin
     s.message.flags.world.aoeSupersededBy = next.id;
     s.gameRef.messages.set(next.id, next);
     assert.equal(await s.api.setAoeEvadeOutcome(defense, false, s.runtime), true);
-    assert.equal(next.flags.world.aoeEvadeResults[s.target.uuid].evaded, false);
-    assert.equal(s.message.flags.world.aoeEvadeResults[s.target.uuid].evaded, null);
+    assert.equal(s.results.getAoeTargetResult(next.flags.world.aoeEvadeResults, s.target.uuid).evaded, false);
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, null);
     assert.equal(defense.flags.world.aoeEvadeCheck.attackId, s.message.id);
     for (const mutate of [
         () => { next.flags.world.aoeAttack.itemUuid = 'Actor.other.Item.other'; },
@@ -297,10 +299,17 @@ test('pending Evade adjudication follows a valid Benny successor without changin
 test('player request is routed to the elected GM; non-author requests and malformed responses fail closed', async () => {
     const s = await fixture({total: 3});
     const listeners = [];
-    const socket = {on(channel, listener) { listeners.push(listener); },
-        emit(channel, envelope) { for (const listener of listeners) void listener(envelope); }};
-    s.gameRef.socket = socket;
-    const playerGame = {...s.gameRef, user: s.player, socket};
+    // Foundry V13's server forwards (payload, authenticatedSenderId), and can
+    // route to explicit recipients. Each mock client has its own connection.
+    const socketFor = userId => ({on(channel, listener) { listeners.push({userId, listener}); },
+        emit(channel, envelope, options = {}) {
+            for (const entry of listeners) {
+                if (options.recipients && !options.recipients.includes(entry.userId)) continue;
+                if (entry.userId !== userId) void entry.listener(envelope, userId);
+            }
+        }});
+    s.gameRef.socket = socketFor(s.gm.id);
+    const playerGame = {...s.gameRef, user: s.player, socket: socketFor(s.player.id)};
     s.auth.registerAoeAuthority(s.runtime);
     const playerRuntime = {...s.runtime, gameRef: playerGame, timeoutMs: 50};
     const result = await s.api.resolveAoeEvade(s.message, s.target.uuid, playerRuntime);
@@ -309,7 +318,7 @@ test('player request is routed to the elected GM; non-author requests and malfor
     const other = {id: 'other', active: true, isGM: false};
     s.gameRef.users.set(other.id, other);
     const denied = await s.auth.requestAoeAuthority('evade', {messageId: s.message.id,
-        targetUuid: s.target.uuid}, {...playerRuntime, gameRef: {...playerGame, user: other}});
+        targetUuid: s.target.uuid}, {...playerRuntime, gameRef: {...playerGame, user: other, socket: socketFor(other.id)}});
     assert.equal(denied.allowed, false);
     assert.equal(denied.pending, false);
     const noReplyGame = {...playerGame, socket: {on() {}, emit() {}}};
@@ -317,6 +326,49 @@ test('player request is routed to the elected GM; non-author requests and malfor
         targetUuid: s.target.uuid}, {...playerRuntime, gameRef: noReplyGame, timeoutMs: 10});
     assert.equal(expired.allowed, false);
     assert.equal(expired.pending, true);
+});
+
+test('socket authority ignores forged envelope sender IDs and non-GM response senders', async () => {
+    const s = await fixture();
+    const other = {id: 'other', active: true, isGM: false};
+    s.gameRef.users.set(other.id, other);
+    const emitted = [], callbacks = [];
+    const socket = {on(_channel, callback) { callbacks.push(callback); },
+        emit(_channel, envelope) { emitted.push(envelope); }};
+    s.gameRef.socket = socket;
+    s.auth.registerAoeAuthority(s.runtime);
+    const gmListener = callbacks[0];
+    const envelope = {protocol: 'swade-tools.aoe-authority.v1', kind: 'request', id: 'forged',
+        gmId: s.gm.id, requesterId: s.gm.id, action: 'evade',
+        payload: {messageId: s.message.id, targetUuid: s.target.uuid}};
+    await gmListener(envelope, other.id);
+    assert.equal(emitted[0].result.allowed, false);
+    assert.equal(emitted[0].to, other.id);
+    assert.equal(s.calls.length, 0);
+    const playerSocket = {on(_channel, callback) { callbacks.push(callback); },
+        emit(_channel, envelope) { emitted.push(envelope); }};
+    const playerGame = {...s.gameRef, user: s.player, socket: playerSocket};
+    const waiting = s.auth.requestAoeAuthority('evade', envelope.payload,
+        {...s.runtime, gameRef: playerGame, timeoutMs: 50});
+    const request = emitted.at(-1), playerListener = callbacks.at(-1);
+    const response = {protocol: request.protocol, kind: 'response', id: request.id,
+        gmId: s.gm.id, to: s.player.id, result: {allowed: true}};
+    await playerListener(response, other.id);
+    let completed = false;
+    waiting.then(() => completed = true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed, false);
+    await playerListener(response, s.gm.id);
+    assert.equal((await waiting).allowed, true);
+});
+
+test('denied Evade authority gives a visible warning rather than silently withholding damage', async () => {
+    const s = await fixture();
+    s.state.targets = [];
+    const result = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+    assert.equal(result.allowed, false);
+    assert.equal(result.pending, false);
+    assert.match(s.warnings[0], /no longer eligible/);
 });
 
 test('Evade render hook hides GM controls for players after persisted HTML strips hidden attributes', async () => {

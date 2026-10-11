@@ -1,3 +1,30 @@
+## SWADE Tools 2.1.18 — Fire Check Persistence Fix
+
+Back up the world and update between sessions. Reload all connected clients,
+including every GM. Existing AoE settings do not need to be changed.
+
+- Fixed Fire Check not appearing after an automatic Evade failed and native
+  weapon damage was rolled. Foundry recursively expands dots in document update
+  keys, which broke the UUID-keyed defense/fire result maps introduced in 2.1.17.
+  Results now use safe persisted keys throughout Evade, ignition and chat rows.
+- Previously expanded 2.1.17 results remain readable: completed defenses are
+  reused, and existing pending Fire Check cards can still be resolved. This
+  update does not retroactively roll fire or damage for older attacks.
+- Failed authority validation now shows a warning instead of silently holding
+  the defense. Foundry V13's authenticated socket sender is used for GM requests
+  and replies; requests are directed only to the elected GM/client.
+- Added an end-to-end cone regression with the actual Evade and fire services,
+  native damage handoff and Foundry-style recursive flag expansion, including
+  independent victims, successful Evade and disabled opt-ins. All 412 tests pass.
+
+Fire Check appears for the elected active GM after an affected target fails
+Evade and receives an attack damage roll. The GM chooses target flammability;
+remembered flammability makes future ignition checks automatic. An evaded target
+or failed cone attack receives neither attack damage nor an ignition check.
+
+Verified locally with Foundry V13's actual update expansion and HTML sanitizer.
+No live Foundry world was accessed or modified.
+
 ## SWADE Tools 2.1.17 — Cone Weapons, Optional Evade & Burning
 
 All new interface text is English. Back up the world and update between sessions.

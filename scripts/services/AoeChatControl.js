@@ -3,6 +3,7 @@ import { withSuppressedAoeAutomation } from './AoeAnimationService.js';
 import { resolveAoeEvade } from './AoeEvade.js';
 import { recordAoeFireHit } from './AoeFire.js';
 import { collectAoeTemplateTargets } from './AoeGeometry.js';
+import { getAoeTargetResult } from './AoeTargetResults.js';
 
 const registeredDocuments = new WeakSet();
 const busyMessages = new Set();
@@ -46,7 +47,7 @@ export const renderAoeAttackTargets = (targets, state) => {
     return `<div class="swadetools-target-title" style="font-size:11px;margin-bottom:2px">${title}${targets.length ? '' : ' None'}</div>${targets.map(target => {
         const name = escapeHTML(target.name || target.actor?.name || 'Unknown');
         const uuid = escapeHTML(target.uuid || target.document?.uuid || '');
-        const evaded = state.evadeResults?.[target.uuid || target.document?.uuid]?.evaded === true;
+        const evaded = getAoeTargetResult(state.evadeResults, target.uuid || target.document?.uuid)?.evaded === true;
         const term = evaded ? 'miss' : blast ? 'blast' : outcome.raise ? 'raise' : outcome.success ? 'hit' : 'miss';
         const content = `<i class="fas fa-${damageAllowed && !evaded ? 'bullseye' : 'times-circle'}" aria-hidden="true"></i><div class="swadetools-targetname">${name}: ${evaded ? 'Evaded' : blast ? 'Blast' : outcome.status}</div>`;
         const row = damageAllowed && !evaded

@@ -1,4 +1,5 @@
 import { isPrimaryAoeGm, registerAoeAuthorityHandler, requestAoeAuthority } from './AoeAuthority.js';
+import { getAoeTargetResult, withAoeTargetResult } from './AoeTargetResults.js';
 
 const SCOPE = 'swade-tools';
 const FLAG = 'aoeBurning';
@@ -22,7 +23,7 @@ const actorOf = effect => effect?.parent ?? effect?.actor;
 const effectsOf = actor => Array.from(actor?.effects?.values?.() ?? actor?.effects ?? []);
 const integer = value => Number.isSafeInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 10;
 const activeGm = runtime => isPrimaryAoeGm(env(runtime).game);
-const resultOf = (message, targetUuid) => message?.flags?.world?.aoeFireResults?.[targetUuid];
+const resultOf = (message, targetUuid) => getAoeTargetResult(message?.flags?.world?.aoeFireResults, targetUuid);
 const sourceState = message => message?.flags?.world?.aoeAttack;
 const messageId = message => message?.id ?? message?._id;
 const serial = (queue, key, task) => {
@@ -50,7 +51,7 @@ export const getAoeFireSettings = (message, item) => {
 // A separate top-level flag survives attack-result/card refreshes. A repeated
 // request, damage click, or reroll of one hit can never produce a second catch roll.
 const saveResult = (message, targetUuid, value) => serial(messageWrites, message, async () => {
-    const results = {...(message.flags?.world?.aoeFireResults ?? {}), [targetUuid]: value};
+    const results = withAoeTargetResult(message.flags?.world?.aoeFireResults, targetUuid, value);
     await message.update({'flags.world.aoeFireResults': results});
 });
 const eligibleHit = (message, targetUuid) => {
@@ -59,7 +60,7 @@ const eligibleHit = (message, targetUuid) => {
     const total = Number(state.baseTotal) + Number(state.gmModifier ?? 0);
     const successful = Number.isFinite(total) && total >= 4 && !state.criticalFailure && !state.naturalOneFailure;
     if (!successful && (!state.deviationResolved || ['cone', 'scone', 'stream'].includes(state.shape))) return false;
-    if (state.autoEvade && message.flags?.world?.aoeEvadeResults?.[targetUuid]?.evaded !== false) return false;
+    if (state.autoEvade && getAoeTargetResult(message.flags?.world?.aoeEvadeResults, targetUuid)?.evaded !== false) return false;
     return true;
 };
 const createChat = async (content, flags, rolls, runtime, privacy) => {

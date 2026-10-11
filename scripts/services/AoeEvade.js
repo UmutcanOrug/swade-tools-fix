@@ -1,8 +1,9 @@
 import { registerAoeAuthorityHandler, requestAoeAuthority, validateAoeAuthorityContext } from './AoeAuthority.js';
+import { getAoeTargetResult, withAoeTargetResult } from './AoeTargetResults.js';
 
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char =>
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
-const resultOf = (message, uuid) => message?.flags?.world?.aoeEvadeResults?.[uuid];
+const resultOf = (message, uuid) => getAoeTargetResult(message?.flags?.world?.aoeEvadeResults, uuid);
 const completed = result => ({...result, allowed: result.evaded !== true, pending: false});
 const pending = reason => ({allowed: false, evaded: false, pending: true, reason});
 const registeredDocuments = new WeakSet();
@@ -35,7 +36,7 @@ const resolveAsGm = async (context, runtime) => {
     if (!actor.system?.attributes?.agility?.die?.sides) {
         const result = {pending: true, evaded: null, total: null,
             reason: 'This target has no Agility die. The GM can choose Hit or Evaded on its Evade card.'};
-        await message.update({'flags.world.aoeEvadeResults': {...message.flags.world.aoeEvadeResults, [target.uuid]: result}});
+        await message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(message.flags.world.aoeEvadeResults, target.uuid, result)});
         await refresh(message, runtime);
         const ChatMessageClass = runtime.ChatMessageClass ?? globalThis.ChatMessage;
         if (ChatMessageClass?.create) await ChatMessageClass.create({user: (runtime.gameRef ?? globalThis.game).user.id,
@@ -64,7 +65,7 @@ const resolveAsGm = async (context, runtime) => {
     if (!latest || latest.message !== message || latest.state.autoEvade !== true) return pending('This AoE attack changed before Evade completed.');
     const result = {evaded: total >= 4 && !criticalFailure && !naturalOneFailure,
         total, modifier, improvedDodge: dodge, criticalFailure, naturalOneFailure};
-    await message.update({'flags.world.aoeEvadeResults': {...message.flags.world.aoeEvadeResults, [target.uuid]: result}});
+    await message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(message.flags.world.aoeEvadeResults, target.uuid, result)});
     await refresh(message, runtime);
     const ChatMessageClass = runtime.ChatMessageClass ?? globalThis.ChatMessage;
     if (ChatMessageClass?.create) {
@@ -85,7 +86,8 @@ export const resolveAoeEvade = async (message, targetUuid, runtime = {}) => {
     if (existing && typeof existing.evaded === 'boolean') return completed(existing);
     registerAoeEvadeAuthority();
     const result = await requestAoeAuthority('evade', {messageId: message.id, targetUuid}, runtime);
-    if (result.pending) (runtime.notifications ?? globalThis.ui?.notifications)?.warn(result.reason || 'Evade is waiting for the GM.');
+    if (!result.allowed && result.evaded !== true) (runtime.notifications ?? globalThis.ui?.notifications)?.warn(
+        result.reason || 'Evade could not be resolved. The GM should review this AoE attack.');
     return result;
 };
 
@@ -123,8 +125,8 @@ export const setAoeEvadeOutcome = async (defenseMessage, evaded, runtime = {}) =
     const previous = resultOf(context?.message, check.targetUuid);
     if (!context || !previous) return false;
     const result = {...previous, evaded, pending: false, gmOverride: true};
-    await context.message.update({'flags.world.aoeEvadeResults': {...context.message.flags.world.aoeEvadeResults,
-        [check.targetUuid]: result},
+    await context.message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(context.message.flags.world.aoeEvadeResults,
+        check.targetUuid, result),
     ...(context.state.damageWorkflowStarted && previous.evaded !== evaded
         ? {'flags.world.aoeAttack': {...context.state, reviewExistingDamage: true}} : {})});
     await defenseMessage.update({content: renderAoeEvadeCard(context.actor.name, result, check.attackId, check.targetUuid)});

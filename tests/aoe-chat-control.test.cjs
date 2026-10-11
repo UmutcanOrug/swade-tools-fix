@@ -6,6 +6,19 @@ const service = import(pathToFileURL(path.resolve(__dirname,
     '../scripts/services/AoeChatControl.js')).href);
 const {runAttack} = require('./aoe-attack.test.cjs');
 
+test('AoE target rows honor persisted safe and legacy-expanded Evade results', async () => {
+    const api = await service;
+    const target = {uuid: 'Scene.scene.Token.victim', name: 'Victim'};
+    for (const evadeResults of [
+        {'Scene%2Escene%2EToken%2Evictim': {evaded: true}},
+        {Scene: {scene: {Token: {victim: {evaded: true}}}}},
+    ]) {
+        const html = api.renderAoeAttackTargets([target], {baseTotal: 8, evadeResults});
+        assert.match(html, /Victim: Evaded/);
+        assert.doesNotMatch(html, /data-aoe-damage-target/);
+    }
+});
+
 async function fixture({gm = true, vehicle = false, total = 3,
     criticalFailure = false, naturalOneFailure = false} = {}) {
     const api = await service;

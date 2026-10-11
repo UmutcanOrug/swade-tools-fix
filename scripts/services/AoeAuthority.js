@@ -25,10 +25,10 @@ export const registerAoeAuthorityHandler = (action, handler) => {
     handlers.set(action, handler);
 };
 
-// Module sockets do not authenticate the client-supplied user ID. Therefore
-// this is a constrained game workflow, not an arbitrary privileged RPC: every
-// operation resolves its actor, item, configuration and target from a current
-// owned attack card. No client-provided actor data, rolls or code are accepted.
+// Foundry V13 supplies the authenticated socket sender as the listener's second
+// argument. Never trust a user ID in the client-controlled envelope. Every
+// operation also resolves its actor, item, configuration and target from a
+// current owned card; no client-provided actor data, rolls or code are accepted.
 export const validateAoeAuthorityContext = async (payload, requesterId, runtime = {}) => {
     const gameRef = runtime.gameRef ?? globalThis.game;
     const canvasRef = runtime.canvasRef ?? globalThis.canvas;
@@ -100,11 +100,13 @@ export const registerAoeAuthority = (runtime = {}) => {
     const gameRef = runtime.gameRef ?? globalThis.game;
     if (!gameRef?.socket?.on || registrations.has(gameRef)) return;
     const pendingRequests = new Map();
-    const listener = async envelope => {
+    const listener = async (envelope, senderId) => {
         if (envelope?.protocol !== PROTOCOL || typeof envelope.id !== 'string' || envelope.id.length > 160) return;
+        if (typeof senderId !== 'string' || !userOf(gameRef, senderId)) return;
         if (envelope.kind === 'response') {
             const entry = pendingRequests.get(envelope.id);
             if (!entry || envelope.to !== gameRef.user?.id || envelope.gmId !== entry.gmId ||
+                senderId !== entry.gmId ||
                 getPrimaryAoeGm(gameRef)?.id !== entry.gmId) return;
             pendingRequests.delete(envelope.id);
             clearTimeout(entry.timer);
@@ -113,9 +115,9 @@ export const registerAoeAuthority = (runtime = {}) => {
             return;
         }
         if (envelope.kind !== 'request' || envelope.gmId !== gameRef.user?.id || !isPrimaryAoeGm(gameRef)) return;
-        const result = await execute(envelope.action, envelope.payload, envelope.requesterId, runtime);
+        const result = await execute(envelope.action, envelope.payload, senderId, runtime);
         gameRef.socket.emit(CHANNEL, {protocol: PROTOCOL, kind: 'response', id: envelope.id,
-            gmId: gameRef.user.id, to: envelope.requesterId, result});
+            gmId: gameRef.user.id, to: senderId, result}, {recipients: [senderId]});
     };
     gameRef.socket.on(CHANNEL, listener);
     registrations.set(gameRef, {pendingRequests, listener});
@@ -138,6 +140,6 @@ export const requestAoeAuthority = async (action, payload, runtime = {}) => {
         }, Math.max(10, Math.min(60000, Number(runtime.timeoutMs) || 30000)));
         registration.pendingRequests.set(id, {resolve, timer, gmId: gm.id});
         gameRef.socket.emit(CHANNEL, {protocol: PROTOCOL, kind: 'request', id, gmId: gm.id,
-            requesterId: gameRef.user.id, action, payload});
+            requesterId: gameRef.user.id, action, payload}, {recipients: [gm.id]});
     });
 };

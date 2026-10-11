@@ -46,7 +46,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   noOperator = false, globalMods = {}, skillEffects = [], itemModifier = '', rollData = {}, secondaryWeapon = false,
   wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false,
   panelCanceled = false, panelReload = false, panelValues = null, bennySpendResult = true,
-  automatedAnimations = false, poolScope = {}, range = '10/20/40', targetTokens, serviceOverrides = {}} = {}) {
+  automatedAnimations = false, poolScope = {}, range = '10/20/40', targetTokens, serviceOverrides = {}, configureRuntime} = {}) {
   const profile = await loadServices();
   const events = [], notices = [], cards = [], nativeCalls = [], nativeCards = [];
   const animations = [], automaticAnimationEvents = [];
@@ -232,6 +232,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     setTimeout(callback, ms) { const id = ++nextId; if (ms <= 100) callback(); else timers.set(id,callback); return id; },
     clearTimeout: id => timers.delete(id),
   };
+  await configureRuntime?.(dependencies);
   await new AsyncFunction(...Object.keys(dependencies), source)(...Object.values(dependencies));
   return {weapon, owner, gunner, other, events, notices, cards, nativeCalls, nativeCards,
     animations, automaticAnimationEvents,
