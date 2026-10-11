@@ -1,3 +1,37 @@
+## SWADE Tools 2.1.19 — Compact AoE Results & Visible On Fire
+
+Back up the world and update between sessions. Reload all connected clients,
+including every GM. Automatic Evade and Enable Fire remain item opt-ins; an
+active GM is required for their automatic resolution.
+
+- Added **Flammability** to the native character **Tweaks → Traits** panel.
+  The default is **Flammable (6)**; existing remembered values are preserved.
+  The GM or actor owner can choose Not Flammable, Flammable, Very Flammable,
+  or Volatile and save with native Save Changes. Cancel does not change flags.
+- New attacks roll eligible targets' ignition checks automatically, without
+  separate Fire Check prompts or a GM click for every victim. Evade and fire
+  outcomes appear together under each target on the original compact AoE card.
+  Native per-target weapon damage cards and their application controls remain.
+- Collapsed **AoE Details** preserves the native defense/fire dice audit and
+  GM Hit/Evaded, Adjust Fire and Extinguish controls. Existing defense and fire
+  cards remain usable; completed checks are not repeated on Benny rerolls.
+- Burning now appears as **On Fire** on the character and as a native fire icon
+  on the token, without requiring another module. Existing SWADE Tools burning
+  effects are normalized by the elected GM without changing intensity or expiry.
+- When Sequencer and a supported JB2A flame asset are available, burning tokens
+  also show a local attached flame loop. It follows token visibility, is cleaned
+  up when the effect ends or the scene changes, and does not write animation
+  flags to the token. Missing animation assets do not affect fire rules or icons.
+- Fire still rolls damage immediately on ignition and at the start of the
+  victim's combat turn. A plain d6 adjusts continuation/intensity as before;
+  armor applies and the GM applies fire damage manually. No automatic wounds
+  or extra ammunition consumption were added.
+
+All 455 automated tests pass. Local browser verification covered four victims,
+one consolidated attack-results card, no additional Evade/Fire Check cards,
+native damage handoff, Tweaks persistence, GM-only controls and compact layout
+after Foundry V13's actual HTML sanitizer. No live world was accessed or changed.
+
 ## SWADE Tools 2.1.18 — Fire Check Persistence Fix
 
 Back up the world and update between sessions. Reload all connected clients,

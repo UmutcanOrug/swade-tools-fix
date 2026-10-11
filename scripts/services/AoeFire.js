@@ -1,5 +1,7 @@
 import { isPrimaryAoeGm, registerAoeAuthorityHandler, requestAoeAuthority } from './AoeAuthority.js';
 import { getAoeTargetResult, withAoeTargetResult } from './AoeTargetResults.js';
+import { getAoeActorFlammability } from './AoeActorConfig.js';
+import { getAoeOnFireEffectData } from './AoeFireVisuals.js';
 
 const SCOPE = 'swade-tools';
 const FLAG = 'aoeBurning';
@@ -25,6 +27,13 @@ const integer = value => Number.isSafeInteger(Number(value)) && Number(value) >=
 const activeGm = runtime => isPrimaryAoeGm(env(runtime).game);
 const resultOf = (message, targetUuid) => getAoeTargetResult(message?.flags?.world?.aoeFireResults, targetUuid);
 const sourceState = message => message?.flags?.world?.aoeAttack;
+const refreshSummary = async (message, runtime) => {
+    if (runtime.refreshAoeChatCard) return runtime.refreshAoeChatCard(message, runtime);
+    const {refreshAoeChatCard} = await import('./AoeChatControl.js');
+    return refreshAoeChatCard(message, runtime);
+};
+const rollData = value => typeof value?.toJSON === 'function' ? value.toJSON()
+    : {formula: value?.formula, total: value?.total};
 const messageId = message => message?.id ?? message?._id;
 const serial = (queue, key, task) => {
     const next = (queue.get(key) ?? Promise.resolve()).catch(() => {}).then(task);
@@ -50,9 +59,10 @@ export const getAoeFireSettings = (message, item) => {
 
 // A separate top-level flag survives attack-result/card refreshes. A repeated
 // request, damage click, or reroll of one hit can never produce a second catch roll.
-const saveResult = (message, targetUuid, value) => serial(messageWrites, message, async () => {
+const saveResult = (message, targetUuid, value, runtime = {}) => serial(messageWrites, message, async () => {
     const results = withAoeTargetResult(message.flags?.world?.aoeFireResults, targetUuid, value);
     await message.update({'flags.world.aoeFireResults': results});
+    if (!['pending', 'rolling'].includes(value.status)) await refreshSummary(message, runtime);
 });
 const eligibleHit = (message, targetUuid) => {
     const state = sourceState(message);
@@ -71,7 +81,10 @@ const createChat = async (content, flags, rolls, runtime, privacy) => {
 };
 const flammabilityAction = '<button type="button" data-aoe-fire-flammability hidden style="font-size:11px;height:23px;margin-top:3px">Flammability</button>';
 const fireActions = effect => `<div style="display:flex;gap:3px;margin-top:3px"><button type="button" data-aoe-fire-tick hidden style="font-size:11px;height:23px">Roll Fire Turn</button><button type="button" data-aoe-fire-adjust hidden style="font-size:11px;height:23px">Adjust Fire</button><button type="button" data-aoe-fire-extinguish hidden style="font-size:11px;height:23px">Extinguish</button></div>${flammabilityAction}`;
-const renderRoll = async roll => typeof roll?.render === 'function' ? roll.render() : '';
+const renderRoll = async roll => {
+    try { return typeof roll?.render === 'function' ? await roll.render() : ''; }
+    catch { return ''; } // Optional dice HTML must never prevent fire resolution.
+};
 const card = (name, body, details = '') => `<section class="swadetools-fire-card" style="font-size:12px;line-height:17px"><strong><i class="fas fa-fire" aria-hidden="true"></i> ${escapeHTML(name)}</strong>${body}${details ? `<details style="font-size:11px"><summary>Dice</summary>${details}</details>` : ''}</section>`;
 const roll = async (formula, runtime) => {
     const Roll = env(runtime).Roll;
@@ -93,13 +106,34 @@ const sameActor = (a, b) => a === b || Boolean(a?.uuid && a.uuid === b?.uuid);
 export const getAoeBurningEffect = actor => effectsOf(actor).find(effect =>
     stateOf(effect)?.version === 1 && !effect.disabled && !effect.isSuppressed);
 
+export const normalizeAoeBurningEffects = async (runtime = {}) => {
+    if (!activeGm(runtime)) return 0;
+    const game = env(runtime).game, canvas = runtime.canvasRef ?? globalThis.canvas;
+    const actors = [...Array.from(game.actors?.contents ?? game.actors?.values?.() ?? []),
+        ...Array.from(canvas?.tokens?.placeables ?? [], token => token.actor)];
+    const visited = new Set();
+    let count = 0;
+    for (const actor of actors) for (const effect of effectsOf(actor)) {
+        if (stateOf(effect)?.version !== 1 || visited.has(effect.uuid ?? effect) || !effect.update) continue;
+        visited.add(effect.uuid ?? effect);
+        const statuses = Array.from(effect.statuses ?? []);
+        if (effect.name === 'On Fire' && effect.img === 'icons/svg/fire.svg' && statuses.includes('swade-tools-on-fire')) continue;
+        await effect.update({name: 'On Fire', img: 'icons/svg/fire.svg',
+            statuses: [...new Set([...statuses, 'swade-tools-on-fire'])]});
+        count++;
+    }
+    return count;
+};
+
 export const applyAoeBurning = (actor, data, runtime = {}) => serial(actorMutations, actor, async () => {
     if (!activeGm(runtime) || !actor?.createEmbeddedDocuments || !integer(data?.intensity) ||
         !integer(data?.maxIntensity) || Number(data.maxIntensity) < Number(data.intensity)) return null;
     const existing = getAoeBurningEffect(actor);
     if (existing) {
         const state = stateOf(existing);
-        await existing.update({[`flags.${SCOPE}.${FLAG}`]: {...state,
+        await existing.update({name: 'On Fire', img: 'icons/svg/fire.svg',
+            statuses: [...new Set([...Array.from(existing.statuses ?? []), 'swade-tools-on-fire'])],
+            [`flags.${SCOPE}.${FLAG}`]: {...state,
             intensity: Math.max(Number(state.intensity), Number(data.intensity)),
             maxIntensity: Math.max(Number(state.maxIntensity), Number(data.maxIntensity))}});
         return existing;
@@ -111,8 +145,7 @@ export const applyAoeBurning = (actor, data, runtime = {}) => serial(actorMutati
     const state = {version: 1, intensity: Number(data.intensity), maxIntensity: Number(data.maxIntensity),
         sourceActorUuid: String(data.sourceActorUuid ?? ''), sourceItemUuid: String(data.sourceItemUuid ?? ''),
         tokenUuid: String(data.tokenUuid ?? ''), ...privacyOf(data), turnKeys: key ? [key] : []};
-    const created = await actor.createEmbeddedDocuments('ActiveEffect', [{name: 'Burning', img: 'icons/svg/fire.svg',
-        disabled: false, transfer: false, changes: [], flags: {[SCOPE]: {[FLAG]: state}}}]);
+    const created = await actor.createEmbeddedDocuments('ActiveEffect', [getAoeOnFireEffectData(state)]);
     return created?.[0] ?? null;
 });
 
@@ -137,12 +170,12 @@ const resolveIgnition = async (message, target, flammability, settings, runtime)
     const record = resultOf(message, targetUuid);
     if (record?.status !== 'pending') return {allowed: Boolean(record), status: record?.status};
     if (flammability === 'none') {
-        await saveResult(message, targetUuid, {status: 'nonflammable'});
+        await saveResult(message, targetUuid, {status: 'nonflammable', flammability, actorUuid: target.actor.uuid}, runtime);
         return {allowed: true, status: 'nonflammable'};
     }
     // Persist the claim before rolling/creating an effect. If a client is lost
     // midway, the GM can resolve manually; automatic retry must not duplicate damage.
-    await saveResult(message, targetUuid, {status: 'rolling'});
+    await saveResult(message, targetUuid, {status: 'rolling'}, runtime);
     const check = await roll('1d6', runtime);
     const caught = Number(check.total) >= FLAMMABILITY[flammability];
     let effect = null, damage = null;
@@ -151,17 +184,15 @@ const resolveIgnition = async (message, target, flammability, settings, runtime)
         effect = await applyAoeBurning(target.actor, {intensity: settings.initialIntensity,
             maxIntensity: settings.maxIntensity, sourceActorUuid: state.operatorActorUuid,
             sourceItemUuid: state.itemUuid, tokenUuid: target.uuid, ...privacyOf(message)}, runtime);
-        if (!effect) throw new Error('The Burning effect could not be created.');
+        if (!effect) throw new Error('The On Fire effect could not be created.');
         damage = await roll(`${settings.initialIntensity}d6x`, runtime);
     }
     await saveResult(message, targetUuid, {status: caught ? 'burning' : 'not-ignited',
-        check: Number(check.total), flammability, effectUuid: effect?.uuid ?? null});
-    const body = `<div>Ignition: ${Number(check.total)} — <strong>${caught ? 'Burning' : 'No ignition'}</strong></div>` +
-        (caught ? damageLine(settings.initialIntensity, damage) + manualDamage + fireActions(effect) : flammabilityAction);
-    await createChat(card(target.name ?? target.actor.name, body,
-        (await renderRoll(check)) + (damage ? await renderRoll(damage) : '')),
-    {aoeFire: {actorUuid: target.actor.uuid, effectUuid: effect?.uuid ?? null}},
-    damage ? [check, damage] : [check], runtime, message);
+        check: Number(check.total), threshold: FLAMMABILITY[flammability], flammability,
+        effectUuid: effect?.uuid ?? null, actorUuid: target.actor.uuid,
+        initialIntensity: settings.initialIntensity, damageTotal: damage ? Number(damage.total) : null,
+        checkRoll: rollData(check), damageRoll: damage ? rollData(damage) : null,
+        rollHtml: (await renderRoll(check)) + (damage ? await renderRoll(damage) : '')}, runtime);
     return {allowed: true, status: caught ? 'burning' : 'not-ignited'};
 };
 
@@ -189,17 +220,12 @@ export const recordAoeFireHitAsGm = async (context, runtime = {}) => {
     }
     busyHits.add(key);
     try {
-        await saveResult(message, uuid, {status: 'pending', settings});
-        const flammability = readFlag(target.actor, 'aoeFlammability');
-        if (Object.hasOwn(FLAMMABILITY, flammability)) {
-            return await resolveIgnition(message, target, flammability, settings, runtime);
-        }
-        await createChat(card(target.name ?? target.actor.name,
-            '<div>GM: choose target flammability.</div><button type="button" data-aoe-fire-check hidden style="font-size:12px;height:25px">Fire Check</button>'),
-        {aoeFireCheck: {attackMessageId: messageId(message), targetUuid: uuid},
-            aoeFire: {actorUuid: target.actor.uuid, effectUuid: null}}, [], runtime, message);
-        return {allowed: true, status: 'pending'};
+        await saveResult(message, uuid, {status: 'pending', settings}, runtime);
+        return await resolveIgnition(message, target, getAoeActorFlammability(target.actor), settings, runtime);
     } catch (error) {
+        const previous = resultOf(message, uuid);
+        if (previous?.status === 'rolling' || previous?.status === 'pending')
+            await saveResult(message, uuid, {...previous, status: 'error', reason: String(error?.message ?? 'Fire could not be resolved.')}, runtime);
         warn(runtime, error?.message ?? 'Fire could not be resolved. GM: review the target manually.');
         return {allowed: false, error: 'Fire could not be resolved. GM: review the target manually.'};
     } finally { busyHits.delete(key); }
@@ -298,10 +324,14 @@ export const registerAoeFire = (runtime = {}) => {
     registerAoeAuthorityHandler('fireHit', recordAoeFireHitAsGm);
     const hooks = runtime.Hooks ?? globalThis.Hooks;
     const document = runtime.document ?? globalThis.document;
+    void normalizeAoeBurningEffects(runtime).catch(error => warn(runtime, error.message));
     if (hooks && !registeredHooks.has(hooks)) {
         registeredHooks.add(hooks);
         hooks.on('updateCombat', (combat, change) => {
             void handleAoeFireCombatTurn(combat, change, runtime).catch(error => warn(runtime, error.message));
+        });
+        hooks.on('canvasReady', () => {
+            void normalizeAoeBurningEffects(runtime).catch(error => warn(runtime, error.message));
         });
         hooks.on('renderChatMessageHTML', (_message, html) => {
             // Foundry's HTML sanitizer removes the serialized hidden attribute.
@@ -326,7 +356,18 @@ export const registerAoeFire = (runtime = {}) => {
                 if (choice) await resolveAoeFireCheck(message, choice.flammability, choice.remember, runtime);
                 return;
             }
-            const data = readFlag(message, 'aoeFire');
+            const inline = Boolean(control.dataset?.aoeFireEffect);
+            if (inline) {
+                const targetUuid = control.dataset.aoeFireTarget;
+                const saved = resultOf(message, targetUuid);
+                if (!sourceState(message)?.targets?.some(target => target.uuid === targetUuid) ||
+                    saved?.effectUuid !== control.dataset.aoeFireEffect ||
+                    saved?.actorUuid !== control.dataset.aoeFireActor) return;
+                const target = await targetFrom(targetUuid, runtime);
+                if (target?.actor?.uuid !== saved.actorUuid) return;
+            }
+            const data = inline ? {effectUuid: control.dataset.aoeFireEffect,
+                actorUuid: control.dataset.aoeFireActor} : readFlag(message, 'aoeFire');
             if (control.hasAttribute('data-aoe-fire-flammability')) {
                 const actor = await env(runtime).fromUuid?.(data?.actorUuid);
                 if (!actor?.update) return;
@@ -345,7 +386,12 @@ export const registerAoeFire = (runtime = {}) => {
             if (!effect || stateOf(effect)?.version !== 1 || actorOf(effect)?.uuid !== data.actorUuid) return;
             if (control.hasAttribute('data-aoe-fire-extinguish')) {
                 await extinguishAoeBurning(effect, runtime);
-                await message.update({content: card(actorOf(effect).name, `<div>Fire extinguished by GM.</div>${flammabilityAction}`)});
+                if (inline) {
+                    const targetUuid = control.dataset.aoeFireTarget;
+                    const previous = resultOf(message, targetUuid);
+                    if (previous?.effectUuid === effect.uuid)
+                        await saveResult(message, targetUuid, {...previous, status: 'extinguished'}, runtime);
+                } else await message.update({content: card(actorOf(effect).name, `<div>Fire extinguished by GM.</div>${flammabilityAction}`)});
             } else if (control.hasAttribute('data-aoe-fire-tick')) {
                 const combat = env(runtime).game.combat;
                 const key = sameActor(currentActor(combat), actorOf(effect)) ? turnKey(combat) : null;

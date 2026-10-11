@@ -4,6 +4,8 @@ import { resolveAoeEvade } from './AoeEvade.js';
 import { recordAoeFireHit } from './AoeFire.js';
 import { collectAoeTemplateTargets } from './AoeGeometry.js';
 import { getAoeTargetResult } from './AoeTargetResults.js';
+import { renderAoeTargetSummary, renderAoeResolutionDetails } from './AoeResultSummary.js';
+export { renderAoeResolutionDetails };
 
 const registeredDocuments = new WeakSet();
 const busyMessages = new Set();
@@ -53,7 +55,7 @@ export const renderAoeAttackTargets = (targets, state) => {
         const row = damageAllowed && !evaded
             ? `<a data-aoe-damage-target="${uuid}" class="swadetools-rolldamage-style" title="Roll Damage">${content}</a>`
             : content;
-        return `<div class="swadetools-aoe-target swadetools-targetwrap swadetools-term-${term}" style="margin:3px 0;border:1px solid #737171;border-radius:3px;font-size:12px;line-height:17px;overflow-wrap:anywhere">${row}</div>`;
+        return `<div class="swadetools-aoe-target swadetools-targetwrap swadetools-term-${term}" style="display:block;margin:3px 0;border:1px solid #737171;border-radius:3px;font-size:12px;line-height:17px;overflow-wrap:anywhere">${row}${renderAoeTargetSummary(target, state)}</div>`;
     }).join('')}`;
 };
 
@@ -102,6 +104,7 @@ const replaceCardOutcome = (content, state) => {
         .replace(/(<div class="dice-total"[^>]*>)[\s\S]*?(<\/div>)/,
             `$1${outcome.total}$2`);
     result = updateRegion(result, 'data-grenade-targets', renderAoeAttackTargets(state.targets ?? [], state));
+    result = updateRegion(result, 'data-aoe-resolution', renderAoeResolutionDetails(state.targets ?? [], state));
     result = updateRegion(result, 'data-aoe-deviation', renderAoeDeviationControls(state),
         /<div\b[^>]*>(?=\s*<strong>Deviation:<\/strong>)/i);
     result = updateRegion(result, 'data-aoe-gm-modifier', state.gmModifier
@@ -129,7 +132,8 @@ export const refreshAoeChatCard = async (message, runtime = {}) => {
     const gameRef = runtime.gameRef ?? globalThis.game;
     if (!gameRef?.user?.isGM && message.isOwner === false) return false;
     await message.update({content: replaceCardOutcome(message.content, {...state,
-        evadeResults: message.flags?.world?.aoeEvadeResults ?? {}})});
+        evadeResults: message.flags?.world?.aoeEvadeResults ?? {},
+        fireResults: message.flags?.world?.aoeFireResults ?? {}})});
     return true;
 };
 
@@ -205,7 +209,8 @@ export const applyAoeGmModifier = async (message, value, runtime = {}) => {
         }
         await message.update({'flags.world.aoeAttack': state,
             content: replaceCardOutcome(message.content, {...state,
-                evadeResults: message.flags?.world?.aoeEvadeResults ?? {}})});
+                evadeResults: message.flags?.world?.aoeEvadeResults ?? {},
+                fireResults: message.flags?.world?.aoeFireResults ?? {}})});
         return true;
     } finally {
         busyMessages.delete(message.id);

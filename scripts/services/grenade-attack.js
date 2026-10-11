@@ -48,7 +48,7 @@ const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeR
   playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
   prepareWeaponDamageModifier, renderAoeAttackTargets, renderAoeDeviationControls, isAoeChatTransactionPending,
   placeWeaponAoeTemplatePoint, buildWeaponAoeTemplateData, collectAoeTemplateTargets,
-  resolveAoeEvade, recordAoeFireHit} = aoeServices;
+  resolveAoeEvade, recordAoeFireHit, renderAoeResolutionDetails} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -670,6 +670,7 @@ const getBlastTargetsHtml = (targets) => renderAoeAttackTargets(targets,
     shape: templateShape, origin: templateOrigin,
     autoEvade: selectedAoeSettings.autoEvade,
     evadeResults: throwMessage?.flags?.world?.aoeEvadeResults,
+    fireResults: throwMessage?.flags?.world?.aoeFireResults,
     deviationResolved: deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved === true});
 const updateBlastTargetText = async (targets) => {
   if (!throwMessage) return;
@@ -884,6 +885,9 @@ const renderGrenadeThrowContent = async () => {
       <div style="position:relative"><div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div><button type="button" data-aoe-gm-mod class="swadetools-rollbutton" title="Adjust AoE Attack" style="position:absolute;left:3px;bottom:3px;margin:0"${game.user.isGM ? "" : " hidden"}><i class="fa fa-plus" aria-hidden="true"></i></button></div>
     </div></div>
     <div data-grenade-targets style="margin:4px 0">${getBlastTargetsHtml(blastTargets)}</div>
+    <div data-aoe-resolution>${renderAoeResolutionDetails(blastTargets, {
+      evadeResults: throwMessage?.flags?.world?.aoeEvadeResults,
+      fireResults: throwMessage?.flags?.world?.aoeFireResults})}</div>
     <div data-aoe-deviation>${renderAoeDeviationControls(getGrenadeChatState())}</div>
     <div data-aoe-review>${gmReview}</div>
     ${getGrenadeBennyControlsHtml()}

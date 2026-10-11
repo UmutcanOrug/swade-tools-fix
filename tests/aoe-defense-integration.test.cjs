@@ -30,15 +30,20 @@ const mergeDocument = (target, change) => {
 };
 
 async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fire = true,
-    flags = {}, flammability, itemType = 'weapon', quantity = 2} = {}) {
+    flags = {}, flammability, itemType = 'weapon', quantity = 2, fireDice = faces.map(() => 4), targetNames = []} = {}) {
     const [evade, fireApi, results] = await Promise.all([
         moduleOf('AoeEvade.js'), moduleOf('AoeFire.js'), moduleOf('AoeTargetResults.js')]);
-    const calls = [], documents = new Map(), updates = [];
+    const calls = [], fireCalls = [], documents = new Map(), updates = [];
     const targets = faces.map((face, index) => {
         const id = `victim-${index + 1}`, actorUuid = `Scene.scene.Token.${id}.Actor.actor-${id}`;
-        const actor = {uuid: actorUuid, name: `Victim ${index + 1}`, isWildcard: true, items: [],
+        const actor = {uuid: actorUuid, name: targetNames[index] ?? `Victim ${index + 1}`, isWildcard: true, items: [],
             flags: {'swade-tools': flammability ? {aoeFlammability: flammability} : {}},
-            system: {attributes: {agility: {die: {sides: 8}}}}};
+            system: {attributes: {agility: {die: {sides: 8}}}}, effects: new Map(),
+            async createEmbeddedDocuments(type, entries) {
+                assert.equal(type, 'ActiveEffect');
+                const effect = {...entries[0], parent: this, id: 'fire', uuid: `${this.uuid}.ActiveEffect.fire`};
+                this.effects.set(effect.id, effect); documents.set(effect.uuid, effect); return [effect];
+            }};
         const token = {id, name: actor.name, actor, x: 350 + index * 100, y: 20, w: 50, h: 50,
             center: {x: 375 + index * 100, y: 45}, document: {id, uuid: `Scene.scene.Token.${id}`, actor, name: actor.name}};
         documents.set(actor.uuid, actor); documents.set(token.document.uuid, token.document);
@@ -84,11 +89,21 @@ async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fi
                     calls.push({actorUuid: this.actor.uuid, attribute, modifiers: this.modifiers, total});
                     return {total, formula: '{1d8x,1d6x}kh-2',
                         dice: face.map(result => ({results: [{result}], total: result})),
-                        toJSON() {return {formula: this.formula, total: this.total};}};
+                        toJSON() {return {formula: this.formula, total: this.total};},
+                        async render() {return `<div class="dice-roll">Evade ${this.total}</div>`;}};
                 }
             }
             runtime = {gameRef: game, canvasRef: canvas, fromUuid: async uuid => documents.get(uuid),
                 ChatMessageClass: ChatMessage, CharRollClass: NativeAgilityRoll,
+                RollClass: class {
+                    constructor(formula) {this.formula = formula;}
+                    async evaluate() {
+                        assert.ok(fireDice.length, `No test fire die for ${this.formula}`);
+                        this.total = fireDice.shift(); fireCalls.push({formula: this.formula, total: this.total}); return this;
+                    }
+                    toJSON() {return {formula: this.formula, total: this.total};}
+                    async render() {return `<div class="dice-roll">${this.formula}: ${this.total}</div>`;}
+                },
                 notifications: ui.notifications, Hooks};
             evade.registerAoeEvadeAuthority();
             fireApi.registerAoeFire(runtime);
@@ -99,21 +114,24 @@ async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fi
             scope.aoeServices.resolveAoeEvade = (message, uuid) => evade.resolveAoeEvade(message, uuid, runtime);
             scope.aoeServices.recordAoeFireHit = (message, uuid) => fireApi.recordAoeFireHit(message, uuid, runtime);
         }});
-    return {...attack, runtime, api: {evade, fire: fireApi, results}, calls, documents, updates,
+    return {...attack, runtime, api: {evade, fire: fireApi, results}, calls, fireCalls, documents, updates,
         attacks: attack.cards.filter(card => card.flags?.world?.aoeAttack),
         evadeCards: attack.cards.filter(card => card.flags?.world?.aoeEvadeCheck),
         fireCards: attack.cards.filter(card => card.flags?.['swade-tools']?.aoeFireCheck)};
 }
 
+module.exports = {fullAttack};
+if (require.main === module) {
 test('recursive flag expansion reproduces why a literal target UUID is not a persistent map key', () => {
     const expanded = expandDotted({'flags.world.aoeEvadeResults': {'Scene.scene.Token.victim-1': {evaded: false}}});
     assert.equal(expanded.flags.world.aoeEvadeResults['Scene.scene.Token.victim-1'], undefined);
     assert.deepEqual(expanded.flags.world.aoeEvadeResults.Scene.scene.Token['victim-1'], {evaded: false});
 });
 
-test('full cone attack automatically resolves actual Evade service then produces native damage and Fire Check', async () => {
+test('full cone resolves Evade, native damage and automatic default ignition on one attack card', async () => {
     const s = await fullAttack();
-    assert.equal(s.attacks.length, 1); assert.equal(s.evadeCards.length, 1); assert.equal(s.fireCards.length, 1);
+    assert.equal(s.attacks.length, 1); assert.equal(s.evadeCards.length, 0); assert.equal(s.fireCards.length, 0);
+    assert.equal(s.cards.length, 1, 'Defense and fire may not add separate chat messages');
     assert.equal(s.nativeCards.length, 1); assert.equal(s.nativeCards[0].targets, 'victim-1');
     const attack = s.attacks[0], uuid = s.victims[0].document.uuid;
     assert.equal(attack.flags.world.aoeAttack.autoEvade, true);
@@ -121,21 +139,24 @@ test('full cone attack automatically resolves actual Evade service then produces
     assert.equal(s.calls.length, 1); assert.equal(s.calls[0].total, 2);
     assert.deepEqual(s.calls[0].modifiers, [{value: -2, label: 'Evade'}]);
     assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeEvadeResults, uuid).evaded, false);
-    assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuid).status, 'pending');
-    assert.equal(s.fireCards[0].flags['swade-tools'].aoeFireCheck.attackMessageId, attack.id);
-    assert.match(s.fireCards[0].content, /Fire Check/);
+    const fire = s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuid);
+    assert.equal(fire.status, 'not-ignited'); assert.equal(fire.check, 4); assert.equal(fire.threshold, 6);
+    assert.match(attack.content, /Evade: 2 — Hit/);
+    assert.match(attack.content, /Fire: 4\/6 — No ignition/);
+    assert.match(attack.content, /<summary>AoE Details<\/summary>/);
     assert.equal(Object.hasOwn(attack.flags.world.aoeEvadeResults, uuid), false);
     assert.equal(Object.hasOwn(attack.flags.world.aoeFireResults, uuid), false);
     assert.equal(s.events.filter(event => event === 'ammo').length, 1);
     const repeated = await s.api.evade.resolveAoeEvade(attack, uuid, s.runtime);
     assert.equal(repeated.allowed, true); assert.equal(s.calls.length, 1);
-    assert.equal(await s.api.fire.resolveAoeFireCheck(s.fireCards[0], 'none', false, s.runtime), true);
-    assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuid).status, 'nonflammable');
+    await s.api.fire.recordAoeFireHit(attack, uuid, s.runtime);
+    assert.equal(s.fireCalls.length, 1, 'Retry must not reroll ignition');
 });
 
 test('full cone attack with successful Evade persists Evaded and never rolls damage or offers Fire Check', async () => {
     const s = await fullAttack({faces: [[6, 3]]});
-    assert.equal(s.evadeCards.length, 1); assert.equal(s.nativeCards.length, 0); assert.equal(s.fireCards.length, 0);
+    assert.equal(s.evadeCards.length, 0); assert.equal(s.nativeCards.length, 0); assert.equal(s.fireCards.length, 0);
+    assert.equal(s.fireCalls.length, 0);
     const attack = s.attacks[0], uuid = s.victims[0].document.uuid;
     assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeEvadeResults, uuid).evaded, true);
     assert.match(attack.content, /Victim 1: Evaded/);
@@ -144,19 +165,24 @@ test('full cone attack with successful Evade persists Evaded and never rolls dam
 });
 
 test('full cone processes independent victims without losing the earlier encoded result through flag merges', async () => {
-    const s = await fullAttack({faces: [[6, 3], [4, 2], [3, 2]]});
+    const s = await fullAttack({faces: [[6, 3], [4, 2], [3, 2]], fireDice: [2, 6, 11]});
     const attack = s.attacks[0], uuids = s.victims.map(token => token.document.uuid);
-    assert.equal(s.calls.length, 3); assert.equal(s.evadeCards.length, 3);
-    assert.equal(s.nativeCards.length, 2); assert.equal(s.fireCards.length, 2);
+    assert.equal(s.calls.length, 3); assert.equal(s.evadeCards.length, 0);
+    assert.equal(s.nativeCards.length, 2); assert.equal(s.fireCards.length, 0);
+    assert.equal(s.cards.length, 1);
     assert.deepEqual(s.nativeCards.map(card => card.targets), ['victim-2', 'victim-3']);
     assert.deepEqual(uuids.map(uuid => s.api.results.getAoeTargetResult(attack.flags.world.aoeEvadeResults, uuid).evaded),
         [true, false, false]);
     assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuids[0]), undefined);
-    for (const uuid of uuids.slice(1)) assert.equal(
-        s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuid).status, 'pending');
+    assert.equal(s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuids[1]).status, 'not-ignited');
+    const ignited = s.api.results.getAoeTargetResult(attack.flags.world.aoeFireResults, uuids[2]);
+    assert.equal(ignited.status, 'burning'); assert.equal(ignited.damageTotal, 11);
+    assert.equal(s.victims[2].actor.effects.get('fire').name, 'On Fire');
+    assert.deepEqual(s.victims[2].actor.effects.get('fire').statuses, ['swade-tools-on-fire']);
     assert.match(attack.content, /Victim 1: Evaded/);
     assert.match(attack.content, /Victim 2: Hit/);
     assert.match(attack.content, /Victim 3: Hit/);
+    assert.match(attack.content, /Fire: 6\/6 — On Fire · Damage 11 \(3d6\)/);
     assert.equal(s.events.filter(event => event === 'ammo').length, 1);
 });
 
@@ -169,3 +195,4 @@ test('actual services respect opt-ins and a failed cone cannot enter automatic d
     assert.equal(failed.nativeCards.length, 0); assert.equal(failed.fireCards.length, 0);
     assert.equal(failed.attacks[0].flags.world.aoeAttack.success, false);
 });
+}

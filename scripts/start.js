@@ -18,10 +18,13 @@ import { registerAoeChatControls } from './services/AoeChatControl.js';
 import { registerAoeAuthority } from './services/AoeAuthority.js';
 import { registerAoeEvadeAuthority, registerAoeEvadeControls } from './services/AoeEvade.js';
 import { registerAoeFire } from './services/AoeFire.js';
+import { registerAoeActorControls } from './services/AoeActorConfig.js';
+import { registerAoeFireVisuals } from './services/AoeFireVisuals.js';
 
 registerAoeItemControls();
 registerShotgunItemControls();
 registerAoeChatControls();
+registerAoeActorControls();
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)
@@ -63,6 +66,7 @@ Hooks.on('ready',async()=>{
     registerAoeAuthority();
     registerAoeEvadeControls();
     registerAoeFire();
+    registerAoeFireVisuals();
 
 
     /// only socket to fix permission for gb.setFlagCombatant (remove it => or rework)

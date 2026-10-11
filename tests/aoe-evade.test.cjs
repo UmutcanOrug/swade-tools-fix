@@ -38,7 +38,10 @@ async function fixture({wild = true, total = 5, faces = [7, 2], modifier = -2,
         constructor(actor) { calls.push(['actor', actor]); }
         addModifier(...args) { calls.push(['modifier', ...args]); }
         async rollAtt(attribute) { calls.push(['roll', attribute]);
-            return {total, dice: faces.map(face => ({results: [{result: face}], total: face}))}; }
+            const data = {class: 'Roll', formula: '1d6x', total,
+                dice: faces.map(face => ({results: [{result: face}], total: face}))};
+            return {...data, toJSON() { return structuredClone(data); },
+                async render() { return `<div class="dice-roll"><div class="dice-total">${total}</div></div>`; }}; }
     }
     class ChatMessage {
         static getSpeaker(data) { return data; }
@@ -53,13 +56,17 @@ async function fixture({wild = true, total = 5, faces = [7, 2], modifier = -2,
         player, gm, documents, calls, chat, warnings, updates, results};
 }
 
+const legacyDefense = s => ({flags: {world: {aoeEvadeCheck:
+    {attackId: s.message.id, targetUuid: s.target.uuid}}},
+async update(change) { Object.assign(this, change); }});
+
 test('AoE with automatic Evade disabled needs no Foundry runtime or GM', async () => {
     const {resolveAoeEvade} = await service;
     assert.deepEqual(await resolveAoeEvade({flags: {world: {aoeAttack: {autoEvade: false}}}}, 'uuid'),
         {allowed: true, evaded: false, pending: false});
 });
 
-test('automatic Evade uses native Agility once per target and persists a compact result', async () => {
+test('automatic Evade uses native Agility once per target and keeps its roll audit on the attack without new cards', async () => {
     const s = await fixture();
     const first = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
     const second = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
@@ -68,14 +75,36 @@ test('automatic Evade uses native Agility once per target and persists a compact
     assert.deepEqual(first, second);
     assert.deepEqual(s.calls.filter(call => call[0] === 'roll'), [['roll', 'agility']]);
     assert.deepEqual(s.calls.filter(call => call[0] === 'modifier'), [['modifier', -2, 'Evade']]);
-    assert.equal(s.chat.length, 1);
-    assert.match(s.chat[0].content, /Victim &lt;one&gt;/);
-    assert.match(s.chat[0].content, /5 — Evaded/);
-    assert.doesNotMatch(s.chat[0].content, /<h[1-6]|<table/);
-    assert.equal(s.chat[0].flags.world.aoeEvadeCheck.attackId, s.message.id);
-    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, true);
+    assert.equal(s.chat.length, 0);
+    const saved = s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid);
+    assert.equal(saved.evaded, true);
+    assert.deepEqual(saved.rollData, {class: 'Roll', formula: '1d6x', total: 5,
+        dice: [{results: [{result: 7}], total: 7}, {results: [{result: 2}], total: 2}]});
+    assert.match(saved.rollHtml, /class="dice-total">5/);
+    assert.equal(s.calls.filter(call => call[0] === 'refresh').length, 1);
     assert.equal(s.state.autoEvade, true);
     assert.equal(s.updates.some(update => 'flags.world.aoeAttack' in update), false);
+});
+
+test('an unavailable dice renderer leaves the native Evade audit and defense outcome intact', async t => {
+    const s = await fixture();
+    t.mock.method(console, 'warn', () => {});
+    const NativeMock = s.runtime.CharRollClass;
+    s.runtime.CharRollClass = class extends NativeMock {
+        async rollAtt(attribute) {
+            const roll = await super.rollAtt(attribute);
+            roll.render = async () => { throw new Error('Dice renderer unavailable'); };
+            return roll;
+        }
+    };
+    const outcome = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+    assert.equal(outcome.evaded, true);
+    assert.equal(outcome.pending, false);
+    const result = s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid);
+    assert.equal(result.rollData.total, 5);
+    assert.equal(result.rollHtml, undefined);
+    assert.equal(s.chat.length, 0);
+    assert.equal(s.calls.filter(call => call[0] === 'refresh').length, 1);
 });
 
 test('failed Evade allows damage and Improved Dodge is added once rather than ordinary Dodge', async () => {
@@ -165,7 +194,7 @@ test('a resolved deviation permits Evade even when the original blast attack mis
     s.state.baseTotal = 3;
     s.state.deviationResolved = true;
     assert.equal((await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime)).allowed, true);
-    assert.equal(s.chat.length, 1);
+    assert.equal(s.chat.length, 0);
 });
 
 test('GM authority resolves stored-scene documents while the GM views a different scene', async () => {
@@ -191,27 +220,23 @@ test('a failed cone cannot gain a damage or defense workflow from a stale deviat
     assert.equal(s.calls.length, 0);
 });
 
-test('targets without Agility receive one compact GM adjudication card rather than an unresolvable block', async () => {
+test('targets without Agility keep a pending GM decision on the original attack without an extra card', async () => {
     const s = await fixture();
     delete s.actor.system.attributes.agility;
     assert.equal((await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime)).pending, true);
     assert.equal((await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime)).pending, true);
-    assert.equal(s.chat.length, 1);
-    assert.match(s.chat[0].content, /GM Decision/);
-    assert.match(s.chat[0].content, /no Agility die/);
-    assert.doesNotMatch(s.chat[0].content, /hidden style="display:/);
-    const defense = {...s.chat[0], async update(change) { Object.assign(this, change); }};
-    assert.equal(await s.api.setAoeEvadeOutcome(defense, false, s.runtime), true);
-    assert.match(defense.content, /GM adjudication \(no Agility die\)/);
-    assert.match(defense.content, /Hit \(GM\)/);
-    assert.doesNotMatch(defense.content, /undefined|NaN/);
+    assert.equal(s.chat.length, 0);
+    assert.match(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).reason,
+        /no Agility die.*AoE attack card/);
+    assert.equal(s.calls.filter(call => call[0] === 'refresh').length, 1);
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, s.target.uuid, false, s.runtime), true);
     const result = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
     assert.equal(result.allowed, true);
     assert.equal(result.pending, false);
     assert.equal(s.calls.filter(call => call[0] === 'roll').length, 0);
 });
 
-test('concurrent Evade requests share a single GM roll and chat card', async () => {
+test('concurrent Evade requests share a single GM roll and result without extra chat cards', async () => {
     const s = await fixture();
     let resolveRoll;
     s.runtime.CharRollClass = class {
@@ -224,7 +249,7 @@ test('concurrent Evade requests share a single GM roll and chat card', async () 
     assert.equal(s.calls.filter(call => call[0] === 'roll').length, 1);
     resolveRoll({total: 4, dice: [{total: 6}, {total: 2}]});
     assert.deepEqual(await first, await second);
-    assert.equal(s.chat.length, 1);
+    assert.equal(s.chat.length, 0);
 });
 
 test('a Benny superseding the card during the Evade roll prevents persisted defense or damage', async () => {
@@ -252,13 +277,13 @@ test('different targets on the same attack serialize their persisted result maps
     await Promise.all([s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime),
         s.api.resolveAoeEvade(s.message, second.uuid, s.runtime)]);
     assert.equal(Object.keys(s.message.flags.world.aoeEvadeResults).length, 2);
-    assert.equal(s.chat.length, 2);
+    assert.equal(s.chat.length, 0);
 });
 
 test('GM can adjudicate Hit/Evaded without rerolling or silently reversing existing damage', async () => {
     const s = await fixture();
     await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
-    const defense = {...s.chat[0], async update(change) { Object.assign(this, change); }};
+    const defense = legacyDefense(s);
     s.state.damageWorkflowStarted = true;
     assert.equal(await s.api.setAoeEvadeOutcome(defense, false, s.runtime), true);
     assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, false);
@@ -268,11 +293,45 @@ test('GM can adjudicate Hit/Evaded without rerolling or silently reversing exist
     assert.equal(await s.api.setAoeEvadeOutcome(defense, true, s.runtime), false);
 });
 
+test('inline GM adjudication preserves the native roll, never rerolls, and rejects player or unrelated targets', async () => {
+    const s = await fixture();
+    await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+    const previous = structuredClone(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid));
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, s.target.uuid, false, s.runtime), true);
+    const updated = s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid);
+    assert.equal(updated.evaded, false);
+    assert.equal(updated.gmOverride, true);
+    assert.deepEqual(updated.rollData, previous.rollData);
+    assert.equal(updated.rollHtml, previous.rollHtml);
+    assert.equal(s.message.flags.world.aoeAttack.reviewExistingDamage, undefined);
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, 'Scene.scene.Token.unrelated', true, s.runtime), false);
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, s.target.uuid, 'evaded', s.runtime), false);
+    s.gameRef.user = s.player;
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, s.target.uuid, true, s.runtime), false);
+    assert.equal(s.calls.filter(call => call[0] === 'roll').length, 1);
+    assert.equal(s.chat.length, 0);
+    assert.ok(s.updates.every(update => Object.keys(update).every(key => key.startsWith('flags.world.'))));
+});
+
+test('legacy standalone Evade cards remain readable and adjudicable after new attacks stop creating them', async () => {
+    const s = await fixture();
+    delete s.actor.system.attributes.agility;
+    await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+    const defense = legacyDefense(s);
+    assert.equal(await s.api.setAoeEvadeOutcome(defense, false, s.runtime), true);
+    assert.match(defense.content, /GM adjudication \(no Agility die\)/);
+    assert.match(defense.content, /Hit \(GM\)/);
+    assert.doesNotMatch(defense.content, /undefined|NaN/);
+    assert.equal(await s.api.setAoeEvadeOutcome(defense, true, s.runtime), true);
+    assert.match(defense.content, /Evaded \(GM\)/);
+    assert.equal(s.chat.length, 0);
+});
+
 test('pending Evade adjudication follows a valid Benny successor without changing superseded defense data', async () => {
     const s = await fixture();
     delete s.actor.system.attributes.agility;
     await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
-    const defense = {...s.chat[0], async update(change) { Object.assign(this, change); }};
+    const defense = legacyDefense(s);
     const next = {id: `${s.message.id}-reroll`, user: s.player,
         flags: {world: {aoeAttack: structuredClone(s.state),
             aoePreviousMessage: s.message.id, aoeEvadeResults: structuredClone(s.message.flags.world.aoeEvadeResults)}},
@@ -286,6 +345,10 @@ test('pending Evade adjudication follows a valid Benny successor without changin
     assert.equal(s.results.getAoeTargetResult(next.flags.world.aoeEvadeResults, s.target.uuid).evaded, false);
     assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, null);
     assert.equal(defense.flags.world.aoeEvadeCheck.attackId, s.message.id);
+    // Inline controls on an old attack follow the same validated successor.
+    assert.equal(await s.api.setAoeAttackEvadeOutcome(s.message, s.target.uuid, true, s.runtime), true);
+    assert.equal(s.results.getAoeTargetResult(next.flags.world.aoeEvadeResults, s.target.uuid).evaded, true);
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, null);
     for (const mutate of [
         () => { next.flags.world.aoeAttack.itemUuid = 'Actor.other.Item.other'; },
         () => { next.flags.world.aoeAttack.itemUuid = s.item.uuid; next.flags.world.aoePreviousMessage = 'unrelated'; },
@@ -392,4 +455,28 @@ test('Evade render hook hides GM controls for players after persisted HTML strip
     s.gameRef.user = s.player;
     callbacks.get('renderChatMessageHTML')({}, html);
     assert.equal(wrapper.hidden, true);
+});
+
+test('delegated inline Evade buttons update the attack while legacy controls still use their original defense message', async () => {
+    const s = await fixture();
+    await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+    let click;
+    const documentRef = {addEventListener(name, callback) { assert.equal(name, 'click'); click = callback; }};
+    const hooks = {on() {}};
+    s.api.registerAoeEvadeControls({...s.runtime, documentRef, hooks});
+    let prevented = 0;
+    const inline = {dataset: {aoeEvadeOverride: 'hit', aoeEvadeTarget: s.target.uuid},
+        closest() { return {dataset: {messageId: s.message.id}}; }};
+    await click({target: {closest() { return inline; }}, preventDefault() { prevented++; }});
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, false);
+    const defense = {...legacyDefense(s), id: 'legacy-defense'};
+    s.gameRef.messages.set(defense.id, defense);
+    const legacy = {dataset: {aoeEvadeOverride: 'evaded'},
+        closest() { return {dataset: {messageId: defense.id}}; }};
+    await click({target: {closest() { return legacy; }}, preventDefault() { prevented++; }});
+    assert.equal(s.results.getAoeTargetResult(s.message.flags.world.aoeEvadeResults, s.target.uuid).evaded, true);
+    assert.match(defense.content, /5 — Evaded/);
+    assert.equal(prevented, 2);
+    assert.equal(s.calls.filter(call => call[0] === 'roll').length, 1);
+    assert.equal(s.chat.length, 0);
 });

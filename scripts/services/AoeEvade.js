@@ -27,6 +27,24 @@ const refresh = async (message, runtime) => {
     return module.refreshAoeChatCard?.(message, runtime);
 };
 
+const rollAudit = async roll => {
+    const audit = {};
+    // Keep the native roll on the attack's result record rather than posting a
+    // separate defense message for every victim. Rendering is optional: an
+    // unavailable dice renderer must never prevent a valid defense result.
+    try {
+        if (typeof roll?.toJSON === 'function') audit.rollData = JSON.parse(JSON.stringify(roll.toJSON()));
+    } catch (error) {
+        console.warn('SWADE Tools: Could not serialize the Evade roll.', error);
+    }
+    try {
+        if (typeof roll?.render === 'function') audit.rollHtml = await roll.render();
+    } catch (error) {
+        console.warn('SWADE Tools: Could not render the Evade roll.', error);
+    }
+    return audit;
+};
+
 const resolveAsGm = async (context, runtime) => {
     const {message, target, actor, state} = context;
     if (state.autoEvade !== true) return {allowed: true, evaded: false, pending: false};
@@ -35,15 +53,9 @@ const resolveAsGm = async (context, runtime) => {
     if (existing?.pending) return pending(existing.reason);
     if (!actor.system?.attributes?.agility?.die?.sides) {
         const result = {pending: true, evaded: null, total: null,
-            reason: 'This target has no Agility die. The GM can choose Hit or Evaded on its Evade card.'};
+            reason: 'This target has no Agility die. The GM can choose Hit or Evaded on the AoE attack card.'};
         await message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(message.flags.world.aoeEvadeResults, target.uuid, result)});
         await refresh(message, runtime);
-        const ChatMessageClass = runtime.ChatMessageClass ?? globalThis.ChatMessage;
-        if (ChatMessageClass?.create) await ChatMessageClass.create({user: (runtime.gameRef ?? globalThis.game).user.id,
-            speaker: ChatMessageClass.getSpeaker?.({actor, token: target}),
-            ...(message.whisper?.length ? {whisper: Array.from(message.whisper), blind: Boolean(message.blind)} : {}),
-            flags: {world: {aoeEvadeCheck: {attackId: message.id, targetUuid: target.uuid}}},
-            content: renderAoeEvadeCard(actor.name, result, message.id, target.uuid)});
         return pending(result.reason);
     }
     const modifier = Number.isFinite(Number(state.evadeModifier)) ? Math.max(-20, Math.min(20, Number(state.evadeModifier))) : -2;
@@ -59,22 +71,15 @@ const resolveAsGm = async (context, runtime) => {
     const criticalFailure = isWild && firstFace(dice[0]) === 1 && firstFace(dice[1]) === 1;
     const total = Number(roll.total);
     if (!Number.isFinite(total)) return pending('The Evade roll did not return a valid result.');
+    const audit = await rollAudit(roll);
     // Re-check after awaiting the roll: a Benny or GM correction may have
     // superseded the originating attack while the dice animation was running.
     const latest = await validateAoeAuthorityContext({messageId: message.id, targetUuid: target.uuid}, context.requester.id, runtime);
     if (!latest || latest.message !== message || latest.state.autoEvade !== true) return pending('This AoE attack changed before Evade completed.');
     const result = {evaded: total >= 4 && !criticalFailure && !naturalOneFailure,
-        total, modifier, improvedDodge: dodge, criticalFailure, naturalOneFailure};
+        total, modifier, improvedDodge: dodge, criticalFailure, naturalOneFailure, ...audit};
     await message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(message.flags.world.aoeEvadeResults, target.uuid, result)});
     await refresh(message, runtime);
-    const ChatMessageClass = runtime.ChatMessageClass ?? globalThis.ChatMessage;
-    if (ChatMessageClass?.create) {
-        await ChatMessageClass.create({user: (runtime.gameRef ?? globalThis.game).user.id,
-            speaker: ChatMessageClass.getSpeaker?.({actor, token: target}), rolls: [roll],
-            ...(message.whisper?.length ? {whisper: Array.from(message.whisper), blind: Boolean(message.blind)} : {}),
-            flags: {world: {aoeEvadeCheck: {attackId: message.id, targetUuid: target.uuid}}},
-            content: renderAoeEvadeCard(actor.name, result, message.id, target.uuid)});
-    }
     return completed(result);
 };
 
@@ -109,28 +114,41 @@ const currentAttackId = (originalId, gameRef) => {
     return null;
 };
 
-// GM adjudication covers targets unable to see the attack or with no escape
-// route. It never moves tokens, spends Bennies or silently reverses damage.
-export const setAoeEvadeOutcome = async (defenseMessage, evaded, runtime = {}) => {
+const updateAoeEvadeOutcome = async (attackMessage, targetUuid, evaded, runtime) => {
     const gameRef = runtime.gameRef ?? globalThis.game;
-    if (!gameRef?.user?.isGM || typeof evaded !== 'boolean') return false;
-    const check = defenseMessage?.flags?.world?.aoeEvadeCheck;
-    if (!check) return false;
+    if (!gameRef?.user?.isGM || typeof evaded !== 'boolean' || typeof targetUuid !== 'string') return null;
     // A missing-Agility decision can still be pending when a Benny creates a
     // successor card. Follow only the bidirectional persisted same-attack
     // chain; never mutate the superseded card's original defense audit data.
-    const attackId = currentAttackId(check.attackId, gameRef);
-    if (!attackId) return false;
-    const context = await validateAoeAuthorityContext({messageId: attackId, targetUuid: check.targetUuid}, gameRef.user.id, runtime);
-    const previous = resultOf(context?.message, check.targetUuid);
-    if (!context || !previous) return false;
+    const attackId = currentAttackId(attackMessage?.id, gameRef);
+    if (!attackId) return null;
+    const context = await validateAoeAuthorityContext({messageId: attackId, targetUuid}, gameRef.user.id, runtime);
+    const previous = resultOf(context?.message, targetUuid);
+    if (!context || context.state.autoEvade !== true || !previous) return null;
     const result = {...previous, evaded, pending: false, gmOverride: true};
     await context.message.update({'flags.world.aoeEvadeResults': withAoeTargetResult(context.message.flags.world.aoeEvadeResults,
-        check.targetUuid, result),
+        targetUuid, result),
     ...(context.state.damageWorkflowStarted && previous.evaded !== evaded
         ? {'flags.world.aoeAttack': {...context.state, reviewExistingDamage: true}} : {})});
-    await defenseMessage.update({content: renderAoeEvadeCard(context.actor.name, result, check.attackId, check.targetUuid)});
     await refresh(context.message, runtime);
+    return {context, result};
+};
+
+// GM adjudication covers targets unable to see the attack or with no escape
+// route. It never moves tokens, spends Bennies or silently reverses damage.
+export const setAoeAttackEvadeOutcome = async (attackMessage, targetUuid, evaded, runtime = {}) =>
+    Boolean(await updateAoeEvadeOutcome(attackMessage, targetUuid, evaded, runtime));
+
+// Retain controls on defense messages created before the integrated AoE card.
+export const setAoeEvadeOutcome = async (defenseMessage, evaded, runtime = {}) => {
+    const gameRef = runtime.gameRef ?? globalThis.game;
+    const check = defenseMessage?.flags?.world?.aoeEvadeCheck;
+    if (!check) return false;
+    const attack = gameRef?.messages?.get?.(check.attackId);
+    const update = await updateAoeEvadeOutcome(attack, check.targetUuid, evaded, runtime);
+    if (!update) return false;
+    await defenseMessage.update({content: renderAoeEvadeCard(update.context.actor.name, update.result,
+        check.attackId, check.targetUuid)});
     return true;
 };
 
@@ -152,6 +170,9 @@ export const registerAoeEvadeControls = (runtime = {}) => {
         event.preventDefault();
         const messageId = control.closest('[data-message-id]')?.dataset.messageId;
         const message = gameRef?.messages?.get?.(messageId);
-        await setAoeEvadeOutcome(message, control.dataset.aoeEvadeOverride === 'evaded', runtime);
+        const evaded = control.dataset.aoeEvadeOverride === 'evaded';
+        if (control.dataset.aoeEvadeTarget) {
+            await setAoeAttackEvadeOutcome(message, control.dataset.aoeEvadeTarget, evaded, runtime);
+        } else await setAoeEvadeOutcome(message, evaded, runtime);
     });
 };

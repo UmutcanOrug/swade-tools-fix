@@ -25,7 +25,10 @@ async function fixture({dice = [], flammability, gmId = 'a-gm', autoEvade = fals
                 ...data[0], parent: this,
                 async update(change) {
                     calls.push(['effect-update', change]);
-                    for (const [key, value] of Object.entries(change)) this.flags['swade-tools'][key.split('.').at(-1)] = value;
+                    for (const [key, value] of Object.entries(change)) {
+                        if (key.startsWith('flags.swade-tools.')) this.flags['swade-tools'][key.split('.').at(-1)] = value;
+                        else this[key] = value;
+                    }
                 },
                 async delete() {calls.push(['effect-delete', this.uuid]); this.deleted = true; this.parent.effects.delete(this.id); documents.delete(this.uuid);}};
             this.effects.set(effect.id, effect); documents.set(effect.uuid, effect);
@@ -40,12 +43,16 @@ async function fixture({dice = [], flammability, gmId = 'a-gm', autoEvade = fals
         ...(evaded !== undefined ? {aoeEvadeResults: {[target.uuid]: {evaded}}} : {})}},
         async update(change) {
             calls.push(['attack-update', change]);
-            for (const [key, value] of Object.entries(change)) this.flags.world[key.split('.').at(-1)] = value;
+            for (const [key, value] of Object.entries(change)) {
+                if (key.startsWith('flags.world.')) this.flags.world[key.split('.').at(-1)] = value;
+                else this[key] = value;
+            }
         }};
     game.messages.set(message.id, message);
     documents.set(target.uuid, target); documents.set(actor.uuid, actor); documents.set(item.uuid, item);
     const runtime = {gameRef: game, fromUuid: async uuid => documents.get(uuid),
         notifications: {warn: text => warnings.push(text)},
+        refreshAoeChatCard: async message => calls.push(['refresh-attack', message.id]),
         RollClass: class {
             constructor(formula) {this.formula = formula;}
             async evaluate() {
@@ -54,6 +61,7 @@ async function fixture({dice = [], flammability, gmId = 'a-gm', autoEvade = fals
                 this.total = dice.shift(); return this;
             }
             async render() {return `<div class="dice-roll">${this.formula}: ${this.total}</div>`;}
+            toJSON() {return {class: 'Roll', formula: this.formula, total: this.total, evaluated: true};}
         },
         ChatMessageClass: {async create(data) {
             const card = {id: `card-${cards.length}`, ...data,
@@ -70,6 +78,16 @@ const addEffect = s => s.api.applyAoeBurning(s.actor, {intensity: 3, maxIntensit
     tokenUuid: s.target.uuid, sourceActorUuid: 'Actor.source', sourceItemUuid: s.item.uuid}, s.runtime);
 const combat = (s, round = 1, turn = 0, actor = s.actor) => ({id: 'combat', uuid: 'Combat.combat', started: true,
     active: true, round, turn, combatant: {id: actor === s.actor ? 'victim-combatant' : 'other-combatant', actor}});
+const legacyFireCheck = s => {
+    s.message.flags.world.aoeFireResults = s.resultApi.withAoeTargetResult(s.message.flags.world.aoeFireResults,
+        s.target.uuid, {status: 'pending', settings: {enabled: true, initialIntensity: 3, maxIntensity: 3}});
+    const card = {id: `legacy-card-${s.cards.length}`,
+        content: '<section><div>GM: choose target flammability.</div><button data-aoe-fire-check hidden>Fire Check</button></section>',
+        flags: {'swade-tools': {aoeFireCheck: {attackMessageId: s.message.id, targetUuid: s.target.uuid},
+            aoeFire: {actorUuid: s.actor.uuid, effectUuid: null}}},
+        async update(change) {Object.assign(this, change);}};
+    s.cards.push(card); s.game.messages.set(card.id, card); return card;
+};
 
 // Foundry 13 expandObject recursively expands dotted keys even inside the
 // nested value of a flags.world update. Reproduce that document boundary,
@@ -130,18 +148,57 @@ test('failed cones cannot use a forged deviation flag to ignite victims', async 
     assert.equal(s.calls.length, 0);
 });
 
-test('unknown flammability creates one compact GM decision; it does not assume every target burns', async () => {
-    const s = await fixture();
-    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'pending');
-    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'pending');
-    assert.equal(s.cards.length, 1); assert.equal(s.actor.effects.size, 0); assert.deepEqual(rolls(s), []);
-    assert.match(s.cards[0].content, /data-aoe-fire-check hidden/);
-    assert.ok(s.cards[0].content.length < 550);
+test('unconfigured flammability defaults to Flammable and automatically saves its check on the attack with no prompt or card', async () => {
+    const s = await fixture({dice: [5]});
+    s.runtime.DialogClass = {prompt() {assert.fail('Automatic ignition must not prompt the GM');}};
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+    assert.equal(s.cards.length, 0); assert.equal(s.actor.effects.size, 0); assert.deepEqual(rolls(s), ['1d6']);
+    const result = fireResult(s);
+    assert.equal(result.flammability, 'flammable'); assert.equal(result.threshold, 6); assert.equal(result.check, 5);
+    assert.deepEqual(result.checkRoll, {class: 'Roll', formula: '1d6', total: 5, evaluated: true});
+    assert.equal(result.damageRoll, null); assert.equal(result.damageTotal, null);
+    assert.match(result.rollHtml, /1d6: 5/); assert.equal(result.actorUuid, s.actor.uuid);
+    assert.ok(s.calls.some(call => call[0] === 'refresh-attack'));
+    assert.equal(s.actor.flags['swade-tools'].aoeFlammability, undefined);
 });
 
-test('GM can choose nonflammable and remember the decision on the actual unlinked-token actor', async () => {
+test('four AoE victims receive independent automatic default-Flammable checks collected on one attack with no prompts or per-target cards', async () => {
+    const s = await fixture({dice: [6, 12, 2, 4, 6, 9]});
+    const contexts = [s.context];
+    s.runtime.DialogClass = {prompt() {assert.fail('Multi-target fire must not require per-target GM prompts');}};
+    for (let index = 2; index <= 4; index++) {
+        const actor = {...s.actor, uuid: `Scene.scene.Token.target-${index}.Actor.victim-${index}`,
+            name: `Victim ${index}`, effects: new Map(), flags: {'swade-tools': {}}};
+        const target = {...s.target, id: `target-${index}`, uuid: `Scene.scene.Token.target-${index}`, actor};
+        s.documents.set(actor.uuid, actor); s.documents.set(target.uuid, target);
+        s.state.targets.push({uuid: target.uuid}); contexts.push({...s.context, actor, target});
+    }
+    for (const context of contexts) assert.equal((await s.api.recordAoeFireHitAsGm(context, s.runtime)).allowed, true);
+    const results = contexts.map(context => fireResult(s, context.target.uuid));
+    assert.deepEqual(results.map(result => result.status), ['burning', 'not-ignited', 'not-ignited', 'burning']);
+    assert.deepEqual(results.map(result => result.check), [6, 2, 4, 6]);
+    assert.deepEqual(results.map(result => result.damageTotal), [12, null, null, 9]);
+    assert.ok(results.every(result => result.threshold === 6 && result.flammability === 'flammable'));
+    assert.deepEqual(results.map(result => result.actorUuid), contexts.map(context => context.actor.uuid));
+    assert.ok(results.every(result => result.checkRoll.class === 'Roll' && /1d6:/.test(result.rollHtml)));
+    assert.equal(Object.keys(s.message.flags.world.aoeFireResults).length, 4);
+    assert.equal(contexts.reduce((count, context) => count + context.actor.effects.size, 0), 2);
+    assert.deepEqual(rolls(s), ['1d6', '3d6x', '1d6', '1d6', '1d6', '3d6x']);
+    assert.equal(s.cards.length, 0); assert.equal(s.warnings.length, 0); assert.equal(s.dice.length, 0);
+});
+
+test('an explicit Not Flammable actor setting skips automatic ignition without a prompt or extra card', async () => {
+    const s = await fixture({flammability: 'none'});
+    assert.deepEqual(await s.api.recordAoeFireHitAsGm(s.context, s.runtime), {allowed: true, status: 'nonflammable'});
+    assert.equal(fireResult(s).actorUuid, s.actor.uuid);
+    assert.equal(fireResult(s).flammability, 'none');
+    assert.equal(s.cards.length, 0); assert.equal(s.actor.effects.size, 0); assert.deepEqual(rolls(s), []);
+});
+
+test('a legacy pending Fire Check still lets the GM choose nonflammable and remember the actual unlinked-token actor', async () => {
     const s = await fixture();
-    await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+    legacyFireCheck(s);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'none', true, s.runtime), true);
     assert.equal(s.actor.flags['swade-tools'].aoeFlammability, 'none');
     assert.equal(fireResult(s).status, 'nonflammable');
@@ -157,17 +214,27 @@ test('ordinary, very flammable, and volatile targets use 6, 4–6, and 2–6 pla
         assert.equal(result.status, caught ? 'burning' : 'not-ignited');
         assert.deepEqual(rolls(s), caught ? ['1d6', '3d6x'] : ['1d6']);
         assert.equal(s.actor.effects.size, caught ? 1 : 0);
-        if (caught) {assert.match(s.cards[0].content, /Armor applies/); assert.match(s.cards[0].content, /GM applies damage manually/);}
+        assert.equal(s.cards.length, 0);
+        const saved = fireResult(s);
+        assert.equal(saved.threshold, {flammable: 6, very: 4, volatile: 2}[flammability]);
+        assert.equal(saved.check, value); assert.equal(saved.damageTotal, caught ? 12 : null);
+        if (caught) {
+            assert.deepEqual(saved.damageRoll, {class: 'Roll', formula: '3d6x', total: 12, evaluated: true});
+            assert.match(saved.rollHtml, /1d6: [1-6].*3d6x: 12/);
+            assert.equal(s.api.getAoeBurningEffect(s.actor).name, 'On Fire');
+            assert.deepEqual(s.api.getAoeBurningEffect(s.actor).statuses, ['swade-tools-on-fire']);
+        }
     }
 });
 
-test('an unknown target can catch fire after a GM Fire Check, without changing item settings', async () => {
+test('a legacy pending target can still catch fire after GM adjudication without changing item settings or adding an ignition card', async () => {
     const s = await fixture({dice: [4, 15]});
-    await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+    legacyFireCheck(s);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'very', false, s.runtime), true);
     assert.equal(s.actor.flags['swade-tools'].aoeFlammability, undefined);
     assert.equal(s.item.flags['swade-tools'].aoeFireEnabled, true);
-    assert.equal(s.actor.effects.size, 1); assert.equal(s.cards.length, 2);
+    assert.equal(s.actor.effects.size, 1); assert.equal(s.cards.length, 1);
+    assert.equal(fireResult(s).damageTotal, 15); assert.equal(fireResult(s).threshold, 4);
 });
 
 test('repeated hits from the same card and reroll-chain cards cannot make duplicate fire rolls', async () => {
@@ -274,6 +341,46 @@ test('GM fire controls validate bounds and remove only this module’s effect', 
     assert.equal(await s.api.extinguishAoeBurning(unrelated, s.runtime), false);
 });
 
+test('only the primary GM normalizes legacy Burning icons once across linked and synthetic actors without touching duration or unrelated effects', async () => {
+    const s = await fixture();
+    const synthetic = await addEffect(s);
+    const linkedActor = {...s.actor, uuid: 'Actor.linked-victim', effects: new Map(), flags: {'swade-tools': {}}};
+    const linked = await s.api.applyAoeBurning(linkedActor, {intensity: 2, maxIntensity: 4}, s.runtime);
+    for (const effect of [synthetic, linked]) {
+        effect.name = 'Burning'; effect.img = 'legacy-fire.png'; effect.statuses = new Set(['existing-status']);
+        effect.duration = {rounds: null, seconds: null};
+    }
+    synthetic.disabled = true;
+    const previousStates = [synthetic, linked].map(effect => structuredClone(fireState(effect)));
+    let unrelatedUpdates = 0;
+    const unrelated = {id: 'foreign-effect', name: 'Foreign Fire', img: 'foreign.png', statuses: new Set(['burning']),
+        flags: {'other-module': {burning: true}}, async update() {unrelatedUpdates++;}};
+    linkedActor.effects.set(unrelated.id, unrelated);
+    s.game.actors = new Map([[linkedActor.uuid, linkedActor]]);
+    s.runtime.canvasRef = {tokens: {placeables: [{actor: linkedActor}, {actor: s.actor}, {actor: s.actor}]}};
+    for (const id of ['player', 'b-gm']) {
+        s.game.user = s.game.users.get(id);
+        assert.equal(await s.api.normalizeAoeBurningEffects(s.runtime), 0);
+        assert.equal(synthetic.name, 'Burning'); assert.equal(linked.name, 'Burning');
+    }
+    s.game.user = s.game.users.get('a-gm');
+    assert.equal(await s.api.normalizeAoeBurningEffects(s.runtime), 2);
+    assert.equal(await s.api.normalizeAoeBurningEffects(s.runtime), 0);
+    for (const [index, effect] of [synthetic, linked].entries()) {
+        assert.equal(effect.name, 'On Fire'); assert.equal(effect.img, 'icons/svg/fire.svg');
+        assert.deepEqual(effect.statuses, ['existing-status', 'swade-tools-on-fire']);
+        assert.deepEqual(effect.duration, {rounds: null, seconds: null});
+        assert.deepEqual(fireState(effect), previousStates[index]);
+    }
+    assert.equal(synthetic.disabled, true, 'Migration adds a marker but does not activate disabled fire');
+    assert.equal(unrelatedUpdates, 0); assert.equal(unrelated.name, 'Foreign Fire');
+    assert.deepEqual([...unrelated.statuses], ['burning']);
+    const updates = s.calls.filter(([name]) => name === 'effect-update');
+    assert.equal(updates.length, 2, 'Linked and synthetic duplicates migrate once each');
+    assert.ok(updates.every(([, change]) => Object.keys(change).sort().join(',') === 'img,name,statuses'));
+    assert.equal(s.cards.length, 0); assert.deepEqual(rolls(s), []);
+});
+
 test('failed damage roll keeps the persisted turn claim to prevent a duplicate retry', async () => {
     const s = await fixture(); const effect = await addEffect(s);
     assert.equal(await s.api.rollAoeFireTurn(effect, 'failed-turn', s.runtime), false);
@@ -283,7 +390,7 @@ test('failed damage roll keeps the persisted turn claim to prevent a duplicate r
 });
 
 test('invalid flammability choices and foreign/deleted target references cannot roll fire', async () => {
-    const s = await fixture(); await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+    const s = await fixture(); legacyFireCheck(s);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'everybody', true, s.runtime), false);
     s.documents.delete(s.target.uuid);
     assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'volatile', true, s.runtime), false);
@@ -295,7 +402,7 @@ test('registration is idempotent and every client installs only passive hooks un
     const runtime = {...s.runtime, Hooks: {on: (...args) => hooks.push(args)},
         document: {addEventListener: (...args) => listeners.push(args)}};
     s.api.registerAoeFire(runtime); s.api.registerAoeFire(runtime);
-    assert.deepEqual(hooks.map(call => call[0]), ['updateCombat', 'renderChatMessageHTML']);
+    assert.deepEqual(hooks.map(call => call[0]), ['updateCombat', 'canvasReady', 'renderChatMessageHTML']);
     assert.equal(listeners.length, 1); assert.deepEqual(rolls(s), []);
 });
 
@@ -338,17 +445,19 @@ test('parallel ignition requests for one actor cannot create stacked Burning eff
     assert.equal(fireState(result[0]).intensity, 3); assert.equal(fireState(result[0]).maxIntensity, 4);
 });
 
-test('private and blind attacks keep Fire Check, ignition, and subsequent fire turns private', async () => {
+test('private and blind attacks retain native ignition rolls on their private source and keep subsequent fire turns private', async () => {
     const s = await fixture({dice: [6, 12, 8, 3]});
     s.message.whisper = ['a-gm']; s.message.blind = true;
     await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
-    assert.deepEqual(s.cards[0].whisper, ['a-gm']); assert.equal(s.cards[0].blind, true);
-    await s.api.resolveAoeFireCheck(s.cards[0], 'flammable', false, s.runtime);
-    assert.deepEqual(s.cards[1].whisper, ['a-gm']); assert.equal(s.cards[1].blind, true);
+    assert.equal(s.cards.length, 0);
+    assert.deepEqual(s.message.whisper, ['a-gm']); assert.equal(s.message.blind, true);
+    assert.deepEqual(fireResult(s).checkRoll, {class: 'Roll', formula: '1d6', total: 6, evaluated: true});
+    assert.deepEqual(fireResult(s).damageRoll, {class: 'Roll', formula: '3d6x', total: 12, evaluated: true});
     const effect = s.api.getAoeBurningEffect(s.actor);
     assert.deepEqual(fireState(effect).whisper, ['a-gm']); assert.equal(fireState(effect).blind, true);
     await s.api.rollAoeFireTurn(effect, 'private-turn', s.runtime);
-    assert.deepEqual(s.cards[2].whisper, ['a-gm']); assert.equal(s.cards[2].blind, true);
+    assert.equal(s.cards.length, 1);
+    assert.deepEqual(s.cards[0].whisper, ['a-gm']); assert.equal(s.cards[0].blind, true);
 });
 
 test('missing elected GM reports a pending fire check instead of silently discarding it', async () => {
@@ -358,8 +467,8 @@ test('missing elected GM reports a pending fire check instead of silently discar
     assert.deepEqual(rolls(s), []);
 });
 
-test('Fire Check and future-Flammability controls use themed DialogV2 content without nested forms', async () => {
-    const s = await fixture(); await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+test('legacy Fire Check and future-Flammability controls keep themed DialogV2 content without nested forms', async () => {
+    const s = await fixture(); legacyFireCheck(s);
     let click;
     const prompts = [];
     const runtime = {...s.runtime, document: {addEventListener: (_name, callback) => {click = callback;}},
@@ -382,6 +491,77 @@ test('Fire Check and future-Flammability controls use themed DialogV2 content wi
     assert.deepEqual(rolls(s), []);
 });
 
+const installFireClickHandler = s => {
+    let click;
+    s.api.registerAoeFire({...s.runtime,
+        document: {addEventListener(_name, callback) {click = callback;}}});
+    return (attribute, dataset = {}, messageId = s.message.id) => click({
+        target: {closest() {return {dataset,
+            closest() {return {dataset: {messageId}};}, hasAttribute(name) {return name === attribute;}};}},
+        preventDefault() {}, stopPropagation() {}});
+};
+
+test('inline Extinguish requires the persisted attack, result, actual target actor, and effect binding', async () => {
+    const mutations = [
+        s => {s.state.targets = [];},
+        (s, data) => {data.aoeFireTarget = 'Scene.scene.Token.foreign';},
+        (s, data) => {data.aoeFireEffect = 'Actor.foreign.ActiveEffect.fire';},
+        (s, data) => {data.aoeFireActor = 'Actor.foreign';},
+        s => {fireResult(s).effectUuid = 'Actor.stale.ActiveEffect.fire';},
+        s => {fireResult(s).actorUuid = 'Actor.stale';},
+        s => {s.target.actor = {...s.actor, uuid: 'Actor.replacement'};},
+        s => {s.documents.delete(s.target.uuid);},
+        s => {s.game.user = s.game.users.get('player');},
+        s => {s.game.user = s.game.users.get('b-gm');}
+    ];
+    for (const mutate of mutations) {
+        const s = await fixture({dice: [6, 12]});
+        await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+        const effect = s.api.getAoeBurningEffect(s.actor);
+        const data = {aoeFireEffect: effect.uuid, aoeFireActor: s.actor.uuid, aoeFireTarget: s.target.uuid};
+        mutate(s, data);
+        const click = installFireClickHandler(s);
+        await click('data-aoe-fire-extinguish', data);
+        assert.equal(effect.deleted, undefined, 'Stale or forged button must not delete the existing fire');
+        assert.equal(s.actor.effects.size, 1); assert.equal(s.cards.length, 0);
+        assert.deepEqual(rolls(s), ['1d6', '3d6x']);
+    }
+    const s = await fixture({dice: [6, 12]});
+    await s.api.recordAoeFireHitAsGm(s.context, s.runtime);
+    const effect = s.api.getAoeBurningEffect(s.actor);
+    await installFireClickHandler(s)('data-aoe-fire-extinguish', {
+        aoeFireEffect: effect.uuid, aoeFireActor: s.actor.uuid, aoeFireTarget: s.target.uuid});
+    assert.equal(effect.deleted, true); assert.equal(s.actor.effects.size, 0);
+    assert.equal(fireResult(s).status, 'extinguished'); assert.equal(s.cards.length, 0);
+});
+
+test('legacy native fire-turn card controls still tick once and extinguish their own effect without inline bindings', async () => {
+    const s = await fixture({dice: [9, 3, 10, 2]});
+    const effect = await addEffect(s);
+    await s.api.rollAoeFireTurn(effect, 'initial-turn', s.runtime);
+    const oldCard = s.cards[0];
+    const click = installFireClickHandler(s);
+    await click('data-aoe-fire-tick', {}, oldCard.id);
+    await click('data-aoe-fire-tick', {}, oldCard.id);
+    assert.deepEqual(rolls(s), ['3d6x', '1d6', '3d6x', '1d6']);
+    assert.equal(s.cards.length, 2); assert.match(s.warnings.at(-1), /already resolved/);
+    await click('data-aoe-fire-extinguish', {}, oldCard.id);
+    assert.equal(effect.deleted, true); assert.equal(s.actor.effects.size, 0);
+    assert.match(oldCard.content, /Fire extinguished by GM/);
+    assert.equal(s.cards.length, 2);
+});
+
+test('optional dice rendering failures do not discard an automatic ignition roll or create extra cards', async () => {
+    const s = await fixture({dice: [6, 12]});
+    const NativeMock = s.runtime.RollClass;
+    s.runtime.RollClass = class extends NativeMock {async render() {throw new Error('Optional renderer unavailable');}};
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'burning');
+    assert.equal(fireResult(s).damageTotal, 12); assert.equal(fireResult(s).check, 6);
+    assert.equal(fireResult(s).checkRoll.total, 6); assert.equal(fireResult(s).damageRoll.total, 12);
+    assert.equal(fireResult(s).rollHtml, ''); assert.equal(s.actor.effects.size, 1);
+    assert.equal(s.cards.length, 0); assert.equal(s.warnings.length, 0);
+});
+
 test('Foundry-expanded legacy Evade results allow ignition and saved fire results remain readable without rerolling', async () => {
     const s = await fixture({autoEvade: true, evaded: false, flammability: 'flammable', dice: [6, 12]});
     s.message.flags.world.aoeEvadeResults = expandFoundryUpdate(s.message.flags.world.aoeEvadeResults);
@@ -394,8 +574,8 @@ test('Foundry-expanded legacy Evade results allow ignition and saved fire result
     assert.deepEqual(rolls(s), ['1d6', '3d6x']); assert.equal(s.actor.effects.size, 1);
 });
 
-test('real fire authority plus Foundry persistence creates and resolves one GM Fire Check for a settled Evade hit', async () => {
-    const s = await fixture({autoEvade: true, evaded: false, dice: [2, 11]});
+test('real fire authority plus Foundry persistence automatically resolves ignition for a settled Evade hit without extra cards', async () => {
+    const s = await fixture({autoEvade: true, evaded: false, dice: [6, 11]});
     const owner = {uuid: 'Actor.source', type: 'character'};
     s.state.weaponActorUuid = owner.uuid;
     s.message.user = s.game.user;
@@ -407,11 +587,9 @@ test('real fire authority plus Foundry persistence creates and resolves one GM F
     s.message.flags.world.aoeEvadeResults = expandFoundryUpdate(s.message.flags.world.aoeEvadeResults);
     useFoundryPersistence(s);
     s.api.registerAoeFire(s.runtime);
-    assert.equal((await s.api.recordAoeFireHit(s.message, s.target.uuid, s.runtime)).status, 'pending');
-    assert.equal(s.cards.length, 1); assert.match(s.cards[0].content, /Fire Check/);
-    assert.equal(await s.api.resolveAoeFireCheck(s.cards[0], 'volatile', false, s.runtime), true);
     assert.equal((await s.api.recordAoeFireHit(s.message, s.target.uuid, s.runtime)).status, 'burning');
-    assert.equal(s.cards.length, 2); assert.equal(s.actor.effects.size, 1);
+    assert.equal((await s.api.recordAoeFireHit(s.message, s.target.uuid, s.runtime)).status, 'burning');
+    assert.equal(s.cards.length, 0); assert.equal(s.actor.effects.size, 1);
     assert.deepEqual(rolls(s), ['1d6', '3d6x']); assert.equal(s.warnings.length, 0);
     assert.equal(fireResult(s).status, 'burning');
 });
