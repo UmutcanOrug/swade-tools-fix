@@ -40,9 +40,17 @@ const makeActor = (extra = {}) => ({
 });
 const fixture = (actor = makeActor(), extra = {}) => {
     const form = new Element('form'), first = new Element('input'), traits = new Element('section');
-    const auras = new Element('section'); traits.dataset.tab = 'traits'; auras.dataset.tab = 'auras';
-    form[0] = first; form.append(first, traits, auras);
-    return {form, first, traits, auras, actor, sheet: {document: actor, isEditable: true, ...extra},
+    const nav = new Element('nav'), traitsLink = new Element('a'), aurasLink = new Element('a');
+    const footer = new Element('footer'), auras = new Element('section');
+    nav.className = 'sheet-tabs tabs';
+    traitsLink.dataset = {action: 'tab', group: 'sheet', tab: 'traits'};
+    aurasLink.dataset = {action: 'tab', group: 'sheet', tab: 'auras'};
+    traitsLink.textContent = 'Traits'; aurasLink.textContent = 'Auramancer';
+    nav.append(traitsLink, aurasLink);
+    traits.className = 'tab active'; traits.dataset = {group: 'sheet', tab: 'traits'};
+    auras.className = 'tab'; auras.dataset = {group: 'sheet', tab: 'auras'};
+    form[0] = first; form.append(first, nav, traits, auras, footer);
+    return {form, first, nav, traitsLink, aurasLink, footer, traits, auras, actor, sheet: {document: actor, isEditable: true, ...extra},
         runtime: {document: {createElement: tag => new Element(tag)}}};
 };
 
@@ -93,6 +101,54 @@ test('legacy wrapper, part-only render, and app element fallback use the same na
         s.sheet.element = s.form;
         bindAoeActorTweaksControl(s.sheet, wrap(s), s.runtime);
         assert.equal(s.traits.querySelector('select').value, 'very');
+    }
+});
+
+test('native navigation before Traits is never mistaken for the scrollable content panel', async () => {
+    const {bindAoeActorTweaksControl} = await load();
+    const s = fixture(), category = new Element('section');
+    s.traits.append(category);
+    // This ordering mirrors Foundry's tab-navigation.hbs followed by SWADE's
+    // tab-traits.hbs. The broad selector previously selected this anchor.
+    assert.equal(s.form.querySelector('[data-tab="traits"]'), s.traitsLink);
+    bindAoeActorTweaksControl(s.sheet, s.form, s.runtime);
+    const group = s.form.querySelector('[data-swade-tools-aoe-flammability]');
+    assert.equal(group.parentElement, s.traits);
+    assert.equal(s.traits.children[0], group);
+    assert.equal(s.traits.children[1], category);
+    assert.equal(s.nav.querySelectorAll('[data-swade-tools-aoe-flammability]').length, 0);
+    assert.equal(s.traitsLink.textContent, 'Traits');
+    assert.equal(s.aurasLink.textContent, 'Auramancer');
+    assert.equal(s.footer.children.length, 0);
+});
+
+test('Flammability shares the native Traits scrolling and tab visibility instead of an independent fixed area', async () => {
+    const {bindAoeActorTweaksControl} = await load();
+    const s = fixture();
+    s.traits.setAttribute('data-application-part', 'traits');
+    s.traits.style = {overflowY: 'auto', position: 'relative'};
+    s.traits.scrollTop = 120;
+    bindAoeActorTweaksControl(s.sheet, s.form, s.runtime);
+    const group = s.traits.querySelector('[data-swade-tools-aoe-flammability]');
+    assert.equal(group.parentElement, s.traits);
+    assert.equal(group.style, undefined);
+    assert.deepEqual(s.traits.style, {overflowY: 'auto', position: 'relative'});
+    assert.equal(s.traits.scrollTop, 120);
+    assert.equal(s.traits.attributes['data-application-part'], 'traits');
+    s.traits.className = 'tab'; s.auras.className = 'tab active';
+    bindAoeActorTweaksControl(s.sheet, s.form, s.runtime);
+    assert.equal(group.parentElement, s.traits);
+    assert.equal(s.traits.className, 'tab');
+    assert.equal(s.auras.children.length, 0);
+    assert.equal(s.form.querySelectorAll('[data-swade-tools-aoe-flammability]').length, 1);
+});
+
+test('a navigation-only partial render cannot create a control in its Traits link', async () => {
+    const {bindAoeActorTweaksControl} = await load();
+    for (const part of [s => s.nav, s => s.traitsLink]) {
+        const s = fixture();
+        bindAoeActorTweaksControl(s.sheet, part(s), s.runtime);
+        assert.equal(s.form.querySelectorAll('[data-swade-tools-aoe-flammability]').length, 0);
     }
 });
 

@@ -6,6 +6,7 @@ import { prepareNativeShotgunDamageForTarget, applyNativeShotgunProfile } from '
 import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js';
 import { withSuppressedAoeAutomation } from '../services/AoeAnimationService.js';
 import { settlePowerAoeCorrection } from '../services/PowerAoeCast.js';
+import { getAoeFireDamageTarget } from '../services/AoeFireDamage.js';
 
 export default class RollControl {
     
@@ -204,7 +205,8 @@ export default class RollControl {
         
         if (this.rolltype!==undefined){ ///roll comes from swade tools
             this.html.append('<div class="swadetools-relative"><div class="swadetools-rollbuttonwrap"></div></div>');
-            if (!this.isCritical() || gb.settingKeyName('Dumb Luck') || gb.systemSetting('dumbLuck')){
+            if (!(this.rolltype==='damage' && this.chat.flags?.['swade-tools']?.aoeFireDamage) &&
+                (!this.isCritical() || gb.settingKeyName('Dumb Luck') || gb.systemSetting('dumbLuck'))){
                 this.addBennyButton();
                 this.addFreeRerollButton();
             }
@@ -240,6 +242,8 @@ export default class RollControl {
     }
 
     async doActions(){
+
+        if (this.chat.flags?.['swade-tools']?.aoeFireDamage && this.chat.isContentVisible === false) return;
 
      
 
@@ -466,7 +470,8 @@ export default class RollControl {
     }
 
    async findTargets(){
-        if (this.chat.flags["swade-tools"]?.itemroll || this.rolltype=='soak'){ /// show only for items (weapons, powers) and soak
+        if (this.chat.flags["swade-tools"]?.itemroll || this.rolltype=='soak' ||
+            this.chat.flags['swade-tools']?.aoeFireDamage){
 
             let rolltype=this.rolltype;
             let rof=this.chat.flags["swade-tools"].userof;
@@ -476,7 +481,11 @@ export default class RollControl {
             const areaFlags=this.chat.flags['swade-tools'];
             const powerArea=areaFlags.powerAoe;
             const weaponArea=areaFlags.aoeArea;
-            if (powerArea || weaponArea){
+            if (areaFlags.aoeFireDamage){
+                const target=getAoeFireDamageTarget(this.chat);
+                this.targets=target ? [target] : [];
+                if (!target) this.html.append('<div class="swadetools-fire-unavailable">Fire target unavailable. Open the original scene to apply damage.</div>');
+            } else if (powerArea || weaponArea){
                 const area=powerArea ?? weaponArea;
                 const ids=powerArea ? area.targetIds ?? [] : (area.targets ?? [])
                     .filter(uuid=>String(uuid).startsWith(`Scene.${area.sceneId}.Token.`))
@@ -769,6 +778,11 @@ export default class RollControl {
     
 
     getActor(orToken=false,useVehicle=false){
+
+            if (this.chat.flags['swade-tools']?.aoeFireDamage){
+                const token=getAoeFireDamageTarget(this.chat);
+                return orToken ? token : token?.actor ?? null;
+            }
 
             const area=this.chat.flags['swade-tools']?.powerAoe;
             if (area){
@@ -1364,7 +1378,9 @@ export default class RollControl {
         if (newWounds===null){
       
         let itemid=this.chat.flags["swade-tools"].itemroll;
-        let item=this.getItemOwner().items.get(itemid);
+        let item=this.chat.flags['swade-tools']?.aoeFireDamage
+            ? {system:{ap:0,isHeavyWeapon:false,actions:{additional:{}}}}
+            : this.getItemOwner().items.get(itemid);
       
 
 
@@ -1486,7 +1502,7 @@ export default class RollControl {
                 if (char.hasAbilitySetting('Unstoppable')){
 
                     let attackerIsJoker=false;
-                    if (this.chat.flags?.["swade-tools"]?.useactor){
+                    if (!this.chat.flags['swade-tools']?.aoeFireDamage && this.chat.flags?.["swade-tools"]?.useactor){
                         if (gb.actorIsJoker(game.actors.get(this.chat.flags["swade-tools"].useactor))){
                             attackerIsJoker=true;
                         }
@@ -1587,6 +1603,14 @@ export default class RollControl {
 
         this.soakFunction=async (targetid)=>{
             let target=canvas.tokens.get(targetid);
+            if (this.chat.flags['swade-tools']?.aoeFireDamage){
+                const original=getAoeFireDamageTarget(this.chat);
+                if (!original || original.id!==targetid){
+                    ui.notifications.warn('Fire target unavailable. Open the original scene to apply damage.');
+                    return false;
+                }
+                target=original;
+            }
             let tactor=target.actor;
             
             if (isvehicle){
@@ -1620,6 +1644,11 @@ export default class RollControl {
                 charRoll.addFlavor(gb.trans('DoSoak'))
                 
                 charRoll.addFlag('usetarget',target.id);
+                if (this.chat.flags['swade-tools']?.aoeFireDamage){
+                    charRoll.addFlag('aoeFireDamage',this.chat.flags['swade-tools'].aoeFireDamage);
+                    charRoll.addFlag('aoeFireSoakActorUuid',tactor.uuid);
+                    charRoll.addFlag('useactor',tactor.id);
+                }
                 charRoll.addFlag('wounds',raisecount);
                 charRoll.addFlag('unstoppable_wounds',unstoppable);
                 if (isvehicle){
@@ -1638,6 +1667,14 @@ export default class RollControl {
 
         this.targetFunction=async (targetid,raisecount)=>{
             let target=canvas.tokens.get(targetid);
+            if (this.chat.flags['swade-tools']?.aoeFireDamage){
+                const original=getAoeFireDamageTarget(this.chat);
+                if (!original || original.id!==targetid){
+                    ui.notifications.warn('Fire target unavailable. Open the original scene to apply damage.');
+                    return false;
+                }
+                target=original;
+            }
            // let target=canvas.tokens.get(argsArray[0]).actor
       //  let raisecount=argsArray[1];
 
@@ -1682,7 +1719,8 @@ export default class RollControl {
                     } */
 
                     
-                    let useditem=this.getItemOwner().items.get(this.chat.flags["swade-tools"].itemroll);
+                    let useditem=this.chat.flags['swade-tools']?.aoeFireDamage ? {system:{isHeavyWeapon:false}}
+                        : this.getItemOwner().items.get(this.chat.flags["swade-tools"].itemroll);
 
                     if (gb.systemSetting('injuryTable') && (gb.systemSetting('grittyDamage') || (gb.setting('bloodAndGoreRifts') && useditem.system.isHeavyWeapon && !gb.isHeavyArmor(target.actor,area)))){
                         let table=await fromUuid(gb.systemSetting('injuryTable'));
@@ -1747,6 +1785,17 @@ export default class RollControl {
     findActor(){
 
         let actor;
+        if (this.chat.flags['swade-tools']?.aoeFireDamage){
+            const target=getAoeFireDamageTarget(this.chat);
+            actor=this.rolltype==='soak' && target?.actor?.type==='vehicle'
+                ? gb.getDriver(target.actor) : target?.actor;
+            const original=this.chat.flags['swade-tools'].aoeFireSoakActorUuid;
+            if (!actor || (original && actor.uuid!==original)){
+                ui.notifications.warn('Fire target unavailable. Open the original scene to apply damage.');
+                return false;
+            }
+            return actor;
+        }
         if (this.chat.flags['swade-tools']?.powerAoe){
             actor=this.getActor();
             if (!actor) ui.notifications.warn('The original power caster is no longer available.');

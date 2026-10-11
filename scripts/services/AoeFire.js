@@ -1,7 +1,8 @@
 import { isPrimaryAoeGm, registerAoeAuthorityHandler, requestAoeAuthority } from './AoeAuthority.js';
 import { getAoeTargetResult, withAoeTargetResult } from './AoeTargetResults.js';
 import { getAoeActorFlammability } from './AoeActorConfig.js';
-import { getAoeOnFireEffectData } from './AoeFireVisuals.js';
+import { getAoeOnFireEffectData, AOE_ON_FIRE_ICON } from './AoeFireVisuals.js';
+import { createAoeFireDamageCard } from './AoeFireDamage.js';
 
 const SCOPE = 'swade-tools';
 const FLAG = 'aoeBurning';
@@ -73,19 +74,13 @@ const eligibleHit = (message, targetUuid) => {
     if (state.autoEvade && getAoeTargetResult(message.flags?.world?.aoeEvadeResults, targetUuid)?.evaded !== false) return false;
     return true;
 };
-const createChat = async (content, flags, rolls, runtime, privacy) => {
-    const {game, ChatMessage} = env(runtime);
-    if (!ChatMessage?.create) throw new Error('Fire chat is unavailable.');
-    return ChatMessage.create({user: game.user.id, content, rolls: rolls ?? [],
-        ...(privacy ? privacyOf(privacy) : {}), flags: {[SCOPE]: flags}});
-};
 const flammabilityAction = '<button type="button" data-aoe-fire-flammability hidden style="font-size:11px;height:23px;margin-top:3px">Flammability</button>';
-const fireActions = effect => `<div style="display:flex;gap:3px;margin-top:3px"><button type="button" data-aoe-fire-tick hidden style="font-size:11px;height:23px">Roll Fire Turn</button><button type="button" data-aoe-fire-adjust hidden style="font-size:11px;height:23px">Adjust Fire</button><button type="button" data-aoe-fire-extinguish hidden style="font-size:11px;height:23px">Extinguish</button></div>${flammabilityAction}`;
+const fireActions = () => '<div data-aoe-fire-actions style="display:flex;gap:3px;margin-top:3px"><button type="button" data-aoe-fire-tick hidden style="font-size:11px;height:23px">Roll Fire Turn</button><button type="button" data-aoe-fire-adjust hidden style="font-size:11px;height:23px">Adjust Fire</button><button type="button" data-aoe-fire-extinguish hidden style="font-size:11px;height:23px">Extinguish</button></div>';
 const renderRoll = async roll => {
     try { return typeof roll?.render === 'function' ? await roll.render() : ''; }
     catch { return ''; } // Optional dice HTML must never prevent fire resolution.
 };
-const card = (name, body, details = '') => `<section class="swadetools-fire-card" style="font-size:12px;line-height:17px"><strong><i class="fas fa-fire" aria-hidden="true"></i> ${escapeHTML(name)}</strong>${body}${details ? `<details style="font-size:11px"><summary>Dice</summary>${details}</details>` : ''}</section>`;
+const card = (name, body, details = '') => `<section class="swadetools-fire-card" style="font-size:12px;line-height:17px"><strong><i class="fas fa-fire" style="color:#c64b14" aria-hidden="true"></i> ${escapeHTML(name)}</strong>${body}${details ? `<details style="font-size:11px"><summary>More Details</summary>${details}</details>` : ''}</section>`;
 const roll = async (formula, runtime) => {
     const Roll = env(runtime).Roll;
     if (!Roll) throw new Error('Fire dice are unavailable.');
@@ -93,8 +88,27 @@ const roll = async (formula, runtime) => {
     await value.evaluate();
     return value;
 };
-const damageLine = (intensity, damage) => `<div>Fire Damage: ${intensity}d6 <strong style="font-size:18px">${Number(damage.total)}</strong></div>`;
-const manualDamage = '<div style="font-size:10px">Armor applies. GM applies damage manually.</div>';
+export const renderAoeFireStatus = (previous, next, ignited = false) => {
+    const out = next < 1;
+    const color = out ? '#23752b' : next > previous ? '#b5261e' : '#b84400';
+    const text = out ? 'Fire Extinguishes' : ignited ? 'Target Catches Fire' : 'Fire Continues to Burn';
+    const detail = out ? '' : next > previous ? `Intensity grows to ${next}d6`
+        : next < previous ? `Intensity drops to ${next}d6` : `Intensity: ${next}d6`;
+    return `<div data-aoe-fire-status="${out ? 'extinguished' : 'burning'}" style="font-size:12px;line-height:17px;color:${color};font-weight:bold">${text}${detail ? `<span style="font-weight:normal"> — ${detail}</span>` : ''}</div>`;
+};
+const fireDamageFlavor = intensity => `<div class="swade chat-card swadetools-pseudocard"><header class="card-header flexrow"><img src="${AOE_ON_FIRE_ICON}" alt="Fire" width="30" height="30"><h3 class="item-name" style="font-size:16px">Fire Damage</h3></header></div><div style="font-size:12px">Fire Damage: ${intensity}d6 [AP: 0]</div>`;
+const fireDamageDetails = async (check, effect, label = 'Fire Check') =>
+    `<details class="swadetools-fire-details" style="font-size:11px;margin:3px 0"><summary>More Details</summary><div>${label}: 1d6 = ${Number(check.total)}</div><div>Armor applies normally. Click the target to apply damage (GM).</div>${effect ? fireActions() : ''}</details>`;
+const fireTargetUuid = (actor, state) => state.tokenUuid || actor?.token?.uuid ||
+    String(actor?.uuid ?? '').match(/^Scene\.[^.]+\.Token\.[^.]+/)?.[0];
+const publishFireDamage = async ({actor, targetUuid, damage, check, intensity, next, effect, privacy, ignited}, runtime) =>
+    createAoeFireDamageCard({actor, targetUuid, damage, flavor: fireDamageFlavor(intensity),
+        content: renderAoeFireStatus(intensity, next, ignited) +
+            await fireDamageDetails(check, effect, ignited ? 'Ignition Check' : 'Fire Check'),
+        privacy, fireFlags: {actorUuid: actor.uuid, effectUuid: effect?.uuid ?? null,
+            checkRoll: rollData(check), intensity, nextIntensity: next}}, runtime);
+const replaceFireCardStatus = (content, status) => String(content ?? '').replace(
+    /<div\b[^>]*data-aoe-fire-status[^>]*>[\s\S]*?<\/div>/i, status);
 const turnKey = combat => {
     const combatant = combat?.combatant ?? combat?.turns?.[combat?.turn];
     if (!combatant || !(Number(combat.round) >= 1) || combat.started === false) return null;
@@ -117,8 +131,8 @@ export const normalizeAoeBurningEffects = async (runtime = {}) => {
         if (stateOf(effect)?.version !== 1 || visited.has(effect.uuid ?? effect) || !effect.update) continue;
         visited.add(effect.uuid ?? effect);
         const statuses = Array.from(effect.statuses ?? []);
-        if (effect.name === 'On Fire' && effect.img === 'icons/svg/fire.svg' && statuses.includes('swade-tools-on-fire')) continue;
-        await effect.update({name: 'On Fire', img: 'icons/svg/fire.svg',
+        if (effect.name === 'On Fire' && effect.img === AOE_ON_FIRE_ICON && statuses.includes('swade-tools-on-fire')) continue;
+        await effect.update({name: 'On Fire', img: AOE_ON_FIRE_ICON,
             statuses: [...new Set([...statuses, 'swade-tools-on-fire'])]});
         count++;
     }
@@ -131,7 +145,7 @@ export const applyAoeBurning = (actor, data, runtime = {}) => serial(actorMutati
     const existing = getAoeBurningEffect(actor);
     if (existing) {
         const state = stateOf(existing);
-        await existing.update({name: 'On Fire', img: 'icons/svg/fire.svg',
+        await existing.update({name: 'On Fire', img: AOE_ON_FIRE_ICON,
             statuses: [...new Set([...Array.from(existing.statuses ?? []), 'swade-tools-on-fire'])],
             [`flags.${SCOPE}.${FLAG}`]: {...state,
             intensity: Math.max(Number(state.intensity), Number(data.intensity)),
@@ -193,6 +207,14 @@ const resolveIgnition = async (message, target, flammability, settings, runtime)
         initialIntensity: settings.initialIntensity, damageTotal: damage ? Number(damage.total) : null,
         checkRoll: rollData(check), damageRoll: damage ? rollData(damage) : null,
         rollHtml: (await renderRoll(check)) + (damage ? await renderRoll(damage) : '')}, runtime);
+    if (caught) {
+        const damageMessage = await publishFireDamage({actor: target.actor, targetUuid,
+            damage, check, intensity: settings.initialIntensity,
+            next: Number(stateOf(effect)?.intensity ?? settings.initialIntensity),
+            effect, privacy: message, ignited: true}, runtime);
+        const result = resultOf(message, targetUuid);
+        await saveResult(message, targetUuid, {...result, damageMessageId: messageId(damageMessage)}, runtime);
+    }
     return {allowed: true, status: caught ? 'burning' : 'not-ignited'};
 };
 
@@ -281,13 +303,9 @@ export const rollAoeFireTurn = async (effect, key, runtime = {}) => {
                 ? Math.min(state.maxIntensity, state.intensity + 1) : state.intensity;
             if (next < 1) await effect.delete();
             else await effect.update({[`flags.${SCOPE}.${FLAG}`]: {...state, intensity: next}});
-            const result = next < 1 ? 'Extinguished' : next > state.intensity ? `Fire grows to ${next}d6`
-                : next < state.intensity ? `Fire drops to ${next}d6` : `Fire continues at ${next}d6`;
             const actor = actorOf(effect);
-            await createChat(card(actor?.name ?? 'Burning', damageLine(state.intensity, damage) +
-                `<div>Fire Check: ${Number(check.total)} — <strong>${result}</strong></div>` + manualDamage +
-                (next >= 1 ? fireActions(effect) : flammabilityAction), (await renderRoll(damage)) + (await renderRoll(check))),
-            {aoeFire: {actorUuid: actor?.uuid, effectUuid: next >= 1 ? effect.uuid : null}}, [damage, check], runtime, state);
+            await publishFireDamage({actor, targetUuid: fireTargetUuid(actor, state), damage, check,
+                intensity: state.intensity, next, effect: next >= 1 ? effect : null, privacy: state}, runtime);
             return true;
         });
     } catch (error) {
@@ -391,6 +409,11 @@ export const registerAoeFire = (runtime = {}) => {
                     const previous = resultOf(message, targetUuid);
                     if (previous?.effectUuid === effect.uuid)
                         await saveResult(message, targetUuid, {...previous, status: 'extinguished'}, runtime);
+                } else if (readFlag(message, 'aoeFireDamage')?.version === 1) {
+                    await message.update({content: replaceFireCardStatus(message.content,
+                        renderAoeFireStatus(1, 0).replace('Fire Extinguishes', 'Fire Extinguishes — GM'))
+                        .replace(/<div\b[^>]*data-aoe-fire-actions[^>]*>[\s\S]*?<\/div>/i, ''),
+                    [`flags.${SCOPE}.aoeFire`]: {...data, effectUuid: null, nextIntensity: 0}});
                 } else await message.update({content: card(actorOf(effect).name, `<div>Fire extinguished by GM.</div>${flammabilityAction}`)});
             } else if (control.hasAttribute('data-aoe-fire-tick')) {
                 const combat = env(runtime).game.combat;
@@ -406,8 +429,14 @@ export const registerAoeFire = (runtime = {}) => {
                     `<div class="standard-form"><div class="form-group"><label>Fire Damage (d6)</label><input type="number" name="intensity" min="1" max="10" value="${state.intensity}"></div><div class="form-group"><label>Maximum (d6)</label><input type="number" name="maximum" min="1" max="10" value="${state.maxIntensity}"></div></div>`,
                     ok: {label: 'Save', callback: (_event, button) => ({intensity: button.form?.elements?.intensity?.value,
                         maximum: button.form?.elements?.maximum?.value})}, rejectClose: false});
-                if (choice && !await adjustAoeBurning(effect, choice.intensity, choice.maximum, runtime))
-                    warn(runtime, 'Use whole dice counts from 1 to 10; maximum cannot be below current intensity.');
+                if (choice) {
+                    if (!await adjustAoeBurning(effect, choice.intensity, choice.maximum, runtime))
+                        warn(runtime, 'Use whole dice counts from 1 to 10; maximum cannot be below current intensity.');
+                    else if (readFlag(message, 'aoeFireDamage')?.version === 1)
+                        await message.update({content: replaceFireCardStatus(message.content,
+                            renderAoeFireStatus(Number(choice.intensity), Number(choice.intensity))),
+                        [`flags.${SCOPE}.aoeFire`]: {...data, nextIntensity: Number(choice.intensity)}});
+                }
             }
         } catch (error) {warn(runtime, error?.message ?? 'Fire could not be resolved.');}
     });

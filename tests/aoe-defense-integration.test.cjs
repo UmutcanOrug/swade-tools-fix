@@ -30,7 +30,8 @@ const mergeDocument = (target, change) => {
 };
 
 async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fire = true,
-    flags = {}, flammability, itemType = 'weapon', quantity = 2, fireDice = faces.map(() => 4), targetNames = []} = {}) {
+    flags = {}, flammability, itemType = 'weapon', quantity = 2, fireDice = faces.map(() => 4), targetNames = [],
+    fireSwadeRollClass} = {}) {
     const [evade, fireApi, results] = await Promise.all([
         moduleOf('AoeEvade.js'), moduleOf('AoeFire.js'), moduleOf('AoeTargetResults.js')]);
     const calls = [], fireCalls = [], documents = new Map(), updates = [];
@@ -61,6 +62,10 @@ async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fi
             game.users = new Map([[game.user.id, game.user]]);
             canvas.scene.id = 'scene';
             game.scenes = new Map([[canvas.scene.id, canvas.scene]]);
+            // Native getSpeaker accepts actor-only environmental damage too;
+            // the basic attack fixture's speaker stub requires a source token.
+            ChatMessage.getSpeaker = ({actor, token}) => ({actor: actor.id ?? actor.uuid,
+                token: token?.id, alias: actor.name});
             for (const value of [scope.weaponActor, scope.operatorActor, scope.item]) {
                 if (value?.uuid) documents.set(value.uuid, value);
             }
@@ -95,6 +100,7 @@ async function fullAttack({faces = [[4, 2]], dice = [6, 4], autoEvade = true, fi
             }
             runtime = {gameRef: game, canvasRef: canvas, fromUuid: async uuid => documents.get(uuid),
                 ChatMessageClass: ChatMessage, CharRollClass: NativeAgilityRoll,
+                SwadeRollClass: fireSwadeRollClass,
                 RollClass: class {
                     constructor(formula) {this.formula = formula;}
                     async evaluate() {
@@ -169,7 +175,10 @@ test('full cone processes independent victims without losing the earlier encoded
     const attack = s.attacks[0], uuids = s.victims.map(token => token.document.uuid);
     assert.equal(s.calls.length, 3); assert.equal(s.evadeCards.length, 0);
     assert.equal(s.nativeCards.length, 2); assert.equal(s.fireCards.length, 0);
-    assert.equal(s.cards.length, 1);
+    assert.equal(s.cards.length, 2, 'Only the actual ignition adds a native fire damage card, not an extra check card');
+    const fireDamage = s.cards.find(card => card.flags?.['swade-tools']?.aoeFireDamage);
+    assert.equal(fireDamage.rolls[0].total, 11);
+    assert.equal(fireDamage.flags['swade-tools'].aoeFireDamage.targetUuid, uuids[2]);
     assert.deepEqual(s.nativeCards.map(card => card.targets), ['victim-2', 'victim-3']);
     assert.deepEqual(uuids.map(uuid => s.api.results.getAoeTargetResult(attack.flags.world.aoeEvadeResults, uuid).evaded),
         [true, false, false]);

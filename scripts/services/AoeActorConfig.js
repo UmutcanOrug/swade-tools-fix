@@ -29,8 +29,12 @@ export const bindAoeActorTweaksControl = (sheet, html, runtime = {}) => {
     const root = asElement(html ?? sheet?.element);
     const documentRef = runtime.document ?? globalThis.document;
     if (actor?.documentName !== 'Actor' || actor.type === 'group' || !documentRef?.createElement) return;
-    const host = root?.matches?.('[data-tab="traits"]') ? root
-        : root?.querySelector?.('[data-tab="traits"]');
+    // Native navigation links share data-tab with their content panels. The
+    // Traits section itself is SWADE's scrollable render part; never prepend
+    // form fields into the preceding navigation link or static tab bar.
+    const traitsPanel = 'section[data-tab="traits"]';
+    const host = root?.matches?.(traitsPanel) ? root
+        : root?.querySelector?.(traitsPanel);
     if (!host) return;
 
     let group = host.querySelector('[data-swade-tools-aoe-flammability]');

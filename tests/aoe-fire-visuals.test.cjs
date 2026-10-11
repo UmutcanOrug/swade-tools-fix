@@ -40,11 +40,34 @@ function fixture() {
 const plays = setup => setup.events.filter(event => event[0] === 'play');
 const ends = setup => setup.events.filter(event => event[0] === 'end');
 
+function enableNative(setup) {
+    const graphics = [], callbacks = new Set();
+    class Graphics {
+        constructor() {this.calls = []; graphics.push(this);}
+        clear() {this.calls.push(['clear']); return this;}
+        beginFill(...args) {this.calls.push(['fill', ...args]); return this;}
+        moveTo(...args) {this.calls.push(['move', ...args]); return this;}
+        bezierCurveTo(...args) {this.calls.push(['curve', ...args]); return this;}
+        quadraticCurveTo(...args) {this.calls.push(['quadratic', ...args]); return this;}
+        endFill() {return this;}
+        destroy() {this.destroyed = true;}
+    }
+    setup.runtime.PIXIRef = {Graphics};
+    setup.runtime.canvasRef.app = {ticker: {deltaMS: 60,
+        add(callback) {callbacks.add(callback);}, remove(callback) {callbacks.delete(callback);}}};
+    setup.token.w = setup.token.h = 100;
+    setup.token.children = [];
+    setup.token.addChild = function(child) {this.children.push(child); child.parent = this; return child;};
+    setup.token.removeChild = function(child) {this.children.splice(this.children.indexOf(child), 1); child.parent = null;};
+    return {graphics, callbacks, tick() {for (const callback of [...callbacks]) callback();}};
+}
+
 test('On Fire payload has a standard visible status without an invented expiration', async () => {
     const api = await service, state = {version: 1, intensity: 3, maxIntensity: 3};
     const data = api.getAoeOnFireEffectData(state);
     assert.equal(data.name, 'On Fire');
-    assert.equal(data.img, 'icons/svg/fire.svg');
+    assert.equal(data.img, api.AOE_ON_FIRE_ICON);
+    assert.equal(data.img, 'modules/swade-tools/assets/on-fire.svg');
     assert.deepEqual(data.statuses, [api.AOE_ON_FIRE_STATUS]);
     assert.equal(data.flags['swade-tools'].aoeBurning, state);
     assert.deepEqual(data.changes, []);
@@ -68,7 +91,7 @@ test('missing Sequencer or JB2A leaves On Fire data unchanged without throwing',
     const {syncAoeFireVisual} = await service, setup = fixture();
     setup.runtime.gameRef.modules.clear();
     assert.deepEqual(await syncAoeFireVisual(setup.effect, setup.runtime),
-        {ok: false, reason: 'missing-optional-assets'});
+        {ok: true, count: 0});
     assert.equal(plays(setup).length, 0);
     assert.equal(setup.effect.flags['swade-tools'].aoeBurning.intensity, 3);
 });
@@ -306,4 +329,120 @@ test('bursts of token movement hooks coalesce to one bounded canvas refresh', as
     await Promise.all([first, second, third]);
     assert.equal(plays(setup).length, 1);
     assert.equal(setup.assetChecks.length, 1);
+});
+
+test('missing optional modules still draw animated colored flames without document writes', async () => {
+    const {syncAoeFireVisual, clearAoeFireVisuals} = await service, setup = fixture();
+    const native = enableNative(setup), flags = structuredClone(setup.effect.flags);
+    setup.runtime.gameRef.modules.clear();
+    assert.deepEqual(await syncAoeFireVisual(setup.effect, setup.runtime), {ok: true, count: 1});
+    assert.equal(plays(setup).length, 0);
+    assert.equal(native.graphics.length, 1); assert.equal(native.callbacks.size, 1);
+    const flame = native.graphics[0], initial = flame.calls.length;
+    assert.equal(flame.parent, setup.token); assert.equal(flame.eventMode, 'none');
+    assert.equal(flame.interactive, false);
+    assert.ok(flame.calls.some(call => call[0] === 'fill' && call[1] === 0xe84b12));
+    native.tick(); assert.ok(flame.calls.length > initial);
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(native.graphics.length, 1); assert.equal(native.callbacks.size, 1);
+    assert.deepEqual(setup.effect.flags, flags);
+    await clearAoeFireVisuals(setup.runtime);
+    assert.equal(native.callbacks.size, 0); assert.equal(setup.token.children.length, 0);
+    assert.equal(flame.destroyed, true); assert.equal(ends(setup).length, 0);
+});
+
+test('native flame hides immediately when visibility changes and is removed on reconciliation', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.sequencerRef.Database.entryExists = () => false;
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    setup.token.document.hidden = true;
+    native.tick(); assert.equal(native.graphics[0].visible, false);
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(native.callbacks.size, 0); assert.equal(native.graphics[0].destroyed, true);
+    setup.token.document.hidden = false;
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(native.callbacks.size, 1); assert.equal(native.graphics.length, 2);
+    setup.effect.disabled = true;
+    native.tick(); assert.equal(native.graphics[1].visible, false);
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(native.callbacks.size, 0);
+});
+
+test('Sequencer silently resolving without creating an effect activates fallback once', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.sequencerRef.EffectManager.getEffects = () => [];
+    assert.deepEqual(await syncAoeFireVisual(setup.effect, setup.runtime), {ok: true, count: 1});
+    assert.equal(plays(setup).length, 1); assert.equal(ends(setup).length, 1);
+    assert.equal(native.callbacks.size, 1); assert.equal(native.graphics.length, 1);
+    assert.equal(setup.warnings.length, 1);
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(plays(setup).length, 1); assert.equal(native.graphics.length, 1);
+});
+
+test('Sequencer thrown media failures preserve gameplay and create native flames', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.onPlay = async () => {throw Error('media failed');};
+    assert.deepEqual(await syncAoeFireVisual(setup.effect, setup.runtime), {ok: true, count: 1});
+    assert.equal(native.callbacks.size, 1); assert.equal(setup.actor.effects[0], setup.effect);
+    assert.equal(setup.effect.flags['swade-tools'].aoeBurning.intensity, 3);
+    await syncAoeFireVisual(setup.effect, {...setup.runtime, deleted: true});
+    assert.equal(native.callbacks.size, 0); assert.equal(native.graphics[0].destroyed, true);
+});
+
+test('successful Sequencer playback remains preferred over native fallback', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.sequencerRef.EffectManager.getEffects = () => [{id: 'existing-flame'}];
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(plays(setup).length, 1); assert.equal(native.graphics.length, 0);
+});
+
+test('late JB2A database registration upgrades native fallback and removes its ticker', async () => {
+    const {registerAoeFireVisuals} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.canvasRef.ready = false;
+    setup.runtime.sequencerRef.Database.entryExists = () => false;
+    registerAoeFireVisuals(setup.runtime);
+    setup.runtime.canvasRef.ready = true;
+    await setup.call('createActiveEffect', setup.effect);
+    assert.equal(native.callbacks.size, 1); assert.equal(plays(setup).length, 0);
+    setup.runtime.sequencerRef.Database.entryExists = () => true;
+    setup.runtime.sequencerRef.EffectManager.getEffects = () => [{id: 'loaded'}];
+    await setup.call('registerSequencerDatabaseEntries', 'jb2a');
+    assert.equal(native.callbacks.size, 0); assert.equal(native.graphics[0].destroyed, true);
+    assert.equal(plays(setup).length, 1);
+    await setup.call('canvasTearDown'); assert.equal(ends(setup).length, 1);
+});
+
+test('a deleted effect while Sequencer playback fails cannot resurrect fallback flames', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    let fail;
+    setup.onPlay = () => new Promise((resolve, reject) => {fail = reject;});
+    const starting = syncAoeFireVisual(setup.effect, setup.runtime);
+    await syncAoeFireVisual(setup.effect, {...setup.runtime, deleted: true});
+    // The deleted document's getter can still report active; the visual claim
+    // must remember its removal instead of recreating from that stale object.
+    fail(Error('late missing media')); await starting;
+    assert.equal(native.graphics.length, 0); assert.equal(native.callbacks.size, 0);
+});
+
+test('native fallback throttles expensive redraws to at most twenty per second', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.gameRef.modules.clear();
+    setup.runtime.canvasRef.app.ticker.deltaMS = 10;
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    const initial = native.graphics[0].calls.length;
+    for (let index = 0; index < 4; index++) native.tick();
+    assert.equal(native.graphics[0].calls.length, initial);
+    native.tick(); assert.ok(native.graphics[0].calls.length > initial);
+});
+
+test('Foundry token clear and redraw recreates a destroyed native child without leaking tickers', async () => {
+    const {syncAoeFireVisual} = await service, setup = fixture(), native = enableNative(setup);
+    setup.runtime.gameRef.modules.clear();
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    const old = native.graphics[0];
+    setup.token.removeChild(old); old.destroy({children: true});
+    await syncAoeFireVisual(setup.effect, setup.runtime);
+    assert.equal(native.graphics.length, 2); assert.equal(native.callbacks.size, 1);
+    assert.equal(native.graphics[1].parent, setup.token);
+    assert.equal(setup.token.children.length, 1);
 });

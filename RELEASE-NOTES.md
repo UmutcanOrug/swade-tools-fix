@@ -1,3 +1,45 @@
+## SWADE Tools 2.1.20 — Native Fire Damage, Tweaks Layout & Reliable Flames
+
+Back up the world and update between sessions. Reload all connected clients,
+including every GM. Existing item opt-ins and actor flammability values remain.
+
+- Fixed Flammability appearing over the Tweaks navigation and not scrolling.
+  SWADE's navigation link and content panel share the same data-tab value;
+  the control now targets the actual scrollable Traits section only.
+- New ignition and combat-turn fire damage use normal compact SWADE Tools
+  damage cards with the standard GM Apply Damage and Soak controls. The exact
+  already-evaluated fire roll is reused: no second damage roll, extra ammo,
+  inventory item, source weapon AP or attacker bonuses are introduced.
+- Fire damage is AP 0 and retains native armor, Heavy Armor, Hardy,
+  Unstoppable, Wound Cap and Soak handling. Its target is frozen to the original
+  scene/token/actor UUID and revalidated on application. Open that original
+  scene to apply; current user targets never replace the intended victim.
+  Environmental damage rerolls are disabled; native Soak rerolls remain.
+- Fire status is visible on the main card: orange **Fire Continues to Burn**,
+  red intensity growth, and green **Fire Extinguishes**. Intensity reduction
+  explicitly still says the fire continues. Special GM controls and the plain
+  fire-check result are inside a closed **More Details** section. Flammability
+  remains in character Tweaks instead of adding another button to new cards.
+- Only actual ignition damage adds a native damage card. Evade and unsuccessful
+  ignition checks stay together on the compact AoE attack card; no additional
+  Evade or Fire Check confirmation messages are posted. Existing historical
+  manual fire cards are not retroactively rerolled or applied.
+- Replaced the white On Fire icon with an included orange/yellow flame that
+  remains visible on light and dark backgrounds. Existing module burning
+  effects are normalized to this icon by the elected GM.
+- Sequencer playback is now checked for an actually created effect, including
+  silent failures. Late JB2A registration is reconciled. If optional playback
+  is unavailable, a lightweight built-in animated flame follows the token;
+  it needs no asset pack, respects visibility and is removed with the effect.
+  Scene teardown, token redraw and delayed media cleanup are covered.
+
+All 484 automated tests pass. Local Chrome checks exercised production native
+damage controls and a real Apply click against the exact victim, collapsed
+details, colored status, four-target results and Foundry V13's HTML sanitizer.
+Animated fallback was verified with Foundry's installed PIXI 7.4.3. GM attack
+correction and manual grenade deviation checks also pass. No live world was
+accessed or modified.
+
 ## SWADE Tools 2.1.19 — Compact AoE Results & Visible On Fire
 
 Back up the world and update between sessions. Reload all connected clients,
