@@ -232,6 +232,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   return {weapon, owner, gunner, other, events, notices, cards, nativeCalls, nativeCards,
     animations, automaticAnimationEvents,
     crosshairCalls, setupDialogs, quantityUpdates, scene, platform, queue, panelCalls, panelContexts, victims, emit,
+    game,
     async emitHook(name,...args) {
       for (const handler of [...hooks.values()]) if (handler.name === name) await handler.callback(...args);
     }};
@@ -359,27 +360,82 @@ test('Benny history is collapsed but GM Raise review remains visible and compact
   assert.equal(s.nativeCards.length,2);assert.equal(s.weapon.system.currentShots,3);
 });
 
-test('deviation refresh preserves styled target rows and never labels a failed intended blast as Hit', async () => {
+test('GM deviation refresh resolves failed blast rows and Benny cannot reposition or damage it again', async () => {
   const s=await runAttack({dice:[2,3,6,4]});
   const initial=visibleCardHtml(s.cards[0].content);
   assert.ok(!initial.includes(': Hit'));
   assert.match(initial,/Target one: Miss/);
   assert.ok(!initial.includes('data-aoe-damage-target'));
-  assert.match(initial,/Deviation:<\/strong> GM: move the red template to resolve/);
+  assert.match(initial,/data-aoe-resolve-deviation/);
   s.victims[0].name='Moved Target';
-  const template=s.scene.templates.get('template');template.x=100;template.y=100;
-  await s.emitHook('updateMeasuredTemplate',template,{x:100,y:100});
+  const template=s.scene.templates.get('template');template.x=150;template.y=100;
+  s.game.users=new Map([['gm',{isGM:true}]]);
+  await s.emitHook('updateMeasuredTemplate',template,{x:150,y:100},{},'gm');
   const deviated=visibleCardHtml(s.cards[0].content);
-  assert.match(deviated,/Moved Target: Miss/);
+  assert.match(deviated,/Moved Target: Blast/);
   assert.ok(!deviated.includes('Target one')&&!deviated.includes(': Hit'));
+  assert.ok(!deviated.includes('data-aoe-resolve-deviation'));
+  assert.equal(s.cards[0].flags.world.aoeAttack.deviationResolved,true);
+  assert.deepEqual(s.cards[0].flags.world.aoeAttack.resolvedPoint,{x:150,y:100});
+  assert.equal(s.cards[0].flags.world.aoeAttack.damageWorkflowStarted,true);
   assert.equal((deviated.match(/class="swadetools-aoe-target /g)??[]).length,2);
   assert.equal(s.nativeCards.length,2);
   await rerollCurrentCard(s);
   const rerolled=visibleCardHtml(currentCard(s).content);
   assert.match(rerolled,/Moved Target: Hit/);
   assert.match(rerolled,/data-aoe-gm-review/);
-  assert.ok(!rerolled.includes('Deviation:'));
+  assert.match(rerolled,/Deviation:<\/strong> resolved by GM/);
+  assert.ok(!rerolled.includes('data-aoe-resolve-deviation'));
+  assert.equal(template.x,150); assert.equal(template.y,100);
+  assert.equal(currentCard(s).flags.world.aoeAttack.deviationResolved,true);
+  assert.deepEqual(currentCard(s).flags.world.aoeAttack.resolvedPoint,{x:150,y:100});
   assert.equal(s.nativeCards.length,2);
+});
+
+test('player template movement cannot resolve a failed blast or roll its damage', async () => {
+  const s=await runAttack({dice:[2,3]});
+  s.game.users=new Map([['player',{isGM:false}],['gm',{isGM:true}]]);
+  const template=s.scene.templates.get('template'); template.x=150;
+  await s.emitHook('updateMeasuredTemplate',template,{x:150},{},'player');
+  assert.equal(currentCard(s).flags.world.aoeAttack.deviationResolved,false);
+  assert.equal(s.nativeCards.length,0);
+  assert.match(visibleCardHtml(currentCard(s).content),/Target one: Miss/);
+  await s.emitHook('updateMeasuredTemplate',template,{x:150},{},'unknown-user');
+  assert.equal(s.nativeCards.length,0);
+  assert.equal(currentCard(s).flags.world.aoeAttack.deviationResolved,false);
+});
+
+test('persistent GM chat deviation survives skill Benny without another template move or damage roll', async () => {
+  const s=await runAttack({dice:[2,3,9,4]});
+  const template=s.scene.templates.get('template');template.x=350;template.y=300;
+  const state=currentCard(s).flags.world.aoeAttack;
+  state.deviationResolved=true;state.resolvedPoint={x:350,y:300};state.damageWorkflowStarted=true;
+  state.targets=[{id:'one',uuid:s.victims[0].document.uuid,name:'Target one'}];
+  // The persistent service owns the actual damage; the origin client's hook must not duplicate it.
+  await s.emitHook('updateMeasuredTemplate',template,{x:350,y:300,'flags.world.aoeGmCorrection':true},{},'gm');
+  await rerollCurrentCard(s);
+  assert.equal(template.x,350);assert.equal(template.y,300);
+  assert.equal(s.nativeCards.length,0);
+  assert.equal(s.events.filter(event=>event==='template').length,1);
+  const rerolled=currentCard(s);
+  assert.equal(rerolled.flags.world.aoeAttack.deviationResolved,true);
+  assert.equal(rerolled.flags.world.aoeAttack.damageWorkflowStarted,true);
+  assert.deepEqual(rerolled.flags.world.aoeAttack.resolvedPoint,{x:350,y:300});
+  assert.deepEqual(rerolled.flags.world.aoeAttack.targets.map(target=>target.id),['one']);
+  assert.match(visibleCardHtml(rerolled.content),/data-aoe-gm-review/);
+  assert.ok(!visibleCardHtml(rerolled.content).includes('data-aoe-resolve-deviation'));
+});
+
+test('a pending GM blast transaction blocks the live Benny handler before any spend or reroll', async () => {
+  const s=await runAttack({dice:[2,3,9,4]});
+  const card=currentCard(s),bennies=s.gunner.system.bennies.value;
+  card.flags.world.aoeResolving={id:'other-gm',expiresAt:Date.now()+60000};
+  await rerollCurrentCard(s);
+  assert.equal(s.cards.length,1);
+  assert.equal(s.gunner.system.bennies.value,bennies);
+  assert.deepEqual(s.queue,[9,4]);
+  assert.equal(s.nativeCards.length,0);
+  assert.ok(s.notices.some(notice=>/GM is resolving/.test(notice.text)));
 });
 
 test('current vehicle operator and legacy driver both resolve without vehicle Athletics', async () => {

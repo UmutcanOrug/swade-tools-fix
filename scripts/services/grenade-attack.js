@@ -42,7 +42,7 @@ const aoeServices = macroScope.aoeServices ?? {
 };
 const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
   playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
-  prepareWeaponDamageModifier, renderAoeAttackTargets} = aoeServices;
+  prepareWeaponDamageModifier, renderAoeAttackTargets, renderAoeDeviationControls, isAoeChatTransactionPending} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -529,6 +529,9 @@ const syncGrenadeAthleticsResult = () => {
   total += gmModifier;
   totalModifier += gmModifier;
   const savedTargets = throwMessage?.flags?.world?.aoeAttack?.targets;
+  const savedDeviation = throwMessage?.flags?.world?.aoeAttack;
+  deviationResolved ||= savedDeviation?.deviationResolved === true;
+  resolvedPoint = savedDeviation?.resolvedPoint ?? resolvedPoint;
   if (savedTargets) {
     blastTargets = savedTargets.map((saved) => canvas.tokens.placeables.find(
       (candidate) => candidate.document?.uuid === saved.uuid
@@ -641,7 +644,8 @@ const [templateDocument] = await canvas.scene.createEmbeddedDocuments(
 
 let throwMessage = null;
 const getBlastTargetsHtml = (targets) => renderAoeAttackTargets(targets,
-  {baseTotal: total, criticalFailure, naturalOneFailure});
+  {baseTotal: total, criticalFailure, naturalOneFailure,
+    deviationResolved: deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved === true});
 const updateBlastTargetText = async (targets) => {
   if (!throwMessage) return;
   const wrapper = globalThis.document.createElement("div");
@@ -683,6 +687,8 @@ let blastTargets = collectTokensInBlast(
 let deviationDamageTargets = null;
 let runGrenadeDamageForTargets = null;
 let damageWorkflowStarted = false;
+let deviationResolved = false;
+let resolvedPoint = null;
 let suppressDeviationUpdate = false;
 let cleanupDeviationTargeting = () => {};
 
@@ -705,14 +711,24 @@ const armGrenadeDeviation = () => {
 
   updateTemplateHookId = Hooks.on(
     "updateMeasuredTemplate",
-    async (document, changes) => {
+    async (document, changes, _options, userId) => {
       if (document.id !== templateDocument.id || suppressDeviationUpdate || success) return;
-      if (changes["flags.world.aoeGmCorrection"] || changes.flags?.world?.aoeGmCorrection) return;
+      if (_options?.aoeGmCorrection || changes["flags.world.aoeGmCorrection"] || changes.flags?.world?.aoeGmCorrection ||
+          changes["flags.world.deviationResolved"] || changes.flags?.world?.deviationResolved) return;
+      if (throwMessage && isAoeChatTransactionPending(throwMessage)) return;
+      // Players may move their own templates, but deviation is a GM ruling.
+      if (userId && game.users?.get?.(userId)?.isGM !== true) return;
+      if (deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved) {
+        cleanupDeviationTargeting();
+        return;
+      }
       if (throwMessage?.flags?.world?.aoeAttack?.success) {
         cleanupDeviationTargeting();
         return;
       }
       if (!("x" in changes) && !("y" in changes)) return;
+      deviationResolved = true;
+      resolvedPoint = {x: Number(document.x), y: Number(document.y)};
       blastTargets = collectTokensInBlast(
         Number(document.x),
         Number(document.y),
@@ -723,6 +739,7 @@ const armGrenadeDeviation = () => {
       if (typeof runGrenadeDamageForTargets === "function") {
         await runGrenadeDamageForTargets(deviationDamageTargets);
       }
+      if (throwMessage) await updateGrenadeThrowMessage();
       cleanupDeviationTargeting();
     }
   );
@@ -850,7 +867,7 @@ const renderGrenadeThrowContent = async () => {
       <div style="position:relative"><div class="dice-total" style="font-size:20px;line-height:26px;color:${resultColor}">${total}</div><button type="button" data-aoe-gm-mod class="swadetools-rollbutton" title="Adjust AoE Attack" style="position:absolute;left:3px;bottom:3px;margin:0"${game.user.isGM ? "" : " hidden"}><i class="fa fa-plus" aria-hidden="true"></i></button></div>
     </div></div>
     <div data-grenade-targets style="margin:4px 0">${getBlastTargetsHtml(blastTargets)}</div>
-    <div data-aoe-deviation>${success ? "" : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>'}</div>
+    <div data-aoe-deviation>${renderAoeDeviationControls(getGrenadeChatState())}</div>
     <div data-aoe-review>${gmReview}</div>
     ${getGrenadeBennyControlsHtml()}
     <details class="swadetools-aoe-details" style="font-size:11px;margin-top:4px">
@@ -891,6 +908,8 @@ const getGrenadeChatState = (targets = blastTargets) => ({
   sourceTokenUuid: selectedToken.document.uuid,
   templateId: templateDocument.id,
   originalPoint: {x: target.x, y: target.y},
+  deviationResolved: deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved === true,
+  resolvedPoint: resolvedPoint ?? throwMessage?.flags?.world?.aoeAttack?.resolvedPoint ?? null,
   targets: targets.map((entry) => ({id: entry.id,
     uuid: entry.document.uuid, name: entry.name || entry.actor?.name || "Unknown"})),
   baseTotal: athleticsAttempt.total,
@@ -1319,6 +1338,10 @@ if (success) {
 // Optional chat-card rerolls never re-enter the one-shot throw above.
 const rerollGrenadeAthletics = async (source, messageId) => {
   if (poolAttack || !grenadeThrowReady || athleticsRerollInProgress || !throwMessage || messageId !== throwMessage.id) return;
+  if (isAoeChatTransactionPending(throwMessage)) {
+    ui.notifications.warn("The GM is resolving this blast. Wait before using a Benny.");
+    return;
+  }
   syncGrenadeAthleticsResult();
   damageWorkflowStarted ||= throwMessage.flags?.world?.aoeAttack?.damageWorkflowStarted === true;
   const spender = source === "gm" ? game.user : actingActor;
@@ -1338,7 +1361,10 @@ const rerollGrenadeAthletics = async (source, messageId) => {
   }
 
   athleticsRerollInProgress = true;
+  const bennyMessage = throwMessage;
   try {
+    await bennyMessage.update({"flags.world.aoeBennyInProgress": {expiresAt: Date.now() + 60000}});
+    if (isAoeChatTransactionPending(bennyMessage)) return;
     const previousMessage = throwMessage;
     const previousContent = throwMessage.content;
     await updateGrenadeThrowMessage();
@@ -1377,7 +1403,7 @@ const rerollGrenadeAthletics = async (source, messageId) => {
       // Updating the existing template is not another throw. In particular,
       // animation and grenade quantity are never touched by this callback.
       cleanupDeviationTargeting();
-      if (templateStillExists) {
+      if (templateStillExists && !deviationResolved) {
         const color = success ? "#ff6b35" : "#d62828";
         const changes = {
           fillColor: color,
@@ -1400,7 +1426,7 @@ const rerollGrenadeAthletics = async (source, messageId) => {
           `${grenade.name} rerolled blast`
         );
         if (!success) armGrenadeDeviation();
-      } else {
+      } else if (!templateStillExists) {
         athleticsReviewNote += " The blast template was removed, so its position was not updated.";
       }
 
@@ -1418,13 +1444,14 @@ const rerollGrenadeAthletics = async (source, messageId) => {
     throwMessage = await createGrenadeThrowMessage(previousMessage);
     rerollGrenadeAthletics.activeMessageId = throwMessage.id;
     await supersedeGrenadeThrowMessage(previousMessage, previousContent);
-    if (athleticsAttempt !== previousAttempt && success && templateStillExists && typeof runGrenadeDamageForTargets === "function") {
+    if (athleticsAttempt !== previousAttempt && success && !deviationResolved && templateStillExists && typeof runGrenadeDamageForTargets === "function") {
       // The damage workflow has its own one-shot guard. A failed throw can
       // now roll its pending damage, but existing damage is never duplicated.
       await runGrenadeDamageForTargets(blastTargets);
     }
   } finally {
     athleticsRerollInProgress = false;
+    await bennyMessage.update({"flags.world.aoeBennyInProgress": false});
     await updateGrenadeThrowMessage();
   }
 };

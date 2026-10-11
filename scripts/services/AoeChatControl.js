@@ -11,6 +11,12 @@ const contextOf = runtime => ({gameRef: runtime.gameRef ?? globalThis.game,
     fromUuid: runtime.fromUuid ?? globalThis.fromUuid});
 const notify = (runtime, text) => (runtime.notifications ?? globalThis.ui?.notifications)?.warn(text);
 const sceneIdOf = uuid => String(uuid ?? '').match(/^Scene\.([^.]+)\./)?.[1];
+export const isAoeChatTransactionPending = (message, key = 'aoeResolving') => {
+    const flag = message?.flags?.world?.[key];
+    if (!flag) return false;
+    const expiry = Number(flag.expiresAt);
+    return !Number.isFinite(expiry) || Date.now() < expiry;
+};
 
 export const getAoeAttackOutcome = state => {
     const baseTotal = Number(state?.baseTotal);
@@ -28,17 +34,26 @@ export const getAoeAttackOutcome = state => {
 // clicking this row never reads or changes the current user's target rings.
 export const renderAoeAttackTargets = (targets, state) => {
     const outcome = getAoeAttackOutcome(state);
-    const title = outcome.success ? 'Targets: click to roll damage.' : 'Targets:';
+    const blast = state?.deviationResolved === true && !outcome.success;
+    const damageAllowed = outcome.success || blast;
+    const title = damageAllowed ? 'Targets: click to roll damage.' : 'Targets:';
     return `<div class="swadetools-target-title" style="font-size:11px;margin-bottom:2px">${title}${targets.length ? '' : ' None'}</div>${targets.map(target => {
         const name = escapeHTML(target.name || target.actor?.name || 'Unknown');
         const uuid = escapeHTML(target.uuid || target.document?.uuid || '');
-        const term = outcome.raise ? 'raise' : outcome.success ? 'hit' : 'miss';
-        const content = `<i class="fas fa-${outcome.success ? 'bullseye' : 'times-circle'}" aria-hidden="true"></i><div class="swadetools-targetname">${name}: ${outcome.status}</div>`;
-        const row = outcome.success
+        const term = blast ? 'blast' : outcome.raise ? 'raise' : outcome.success ? 'hit' : 'miss';
+        const content = `<i class="fas fa-${damageAllowed ? 'bullseye' : 'times-circle'}" aria-hidden="true"></i><div class="swadetools-targetname">${name}: ${blast ? 'Blast' : outcome.status}</div>`;
+        const row = damageAllowed
             ? `<a data-aoe-damage-target="${uuid}" class="swadetools-rolldamage-style" title="Roll Damage">${content}</a>`
             : content;
         return `<div class="swadetools-aoe-target swadetools-targetwrap swadetools-term-${term}" style="margin:3px 0;border:1px solid #737171;border-radius:3px;font-size:12px;line-height:17px;overflow-wrap:anywhere">${row}</div>`;
     }).join('')}`;
+};
+
+export const renderAoeDeviationControls = state => {
+    if (state?.deviationResolved) return '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> resolved by GM.</div>';
+    if (getAoeAttackOutcome(state).success) return '';
+    if (state?.damageWorkflowStarted) return '<div style="font-size:11px;margin:4px 0">GM: review existing damage and blast location.</div>';
+    return '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> pending GM placement.</div><button type="button" data-aoe-resolve-deviation hidden style="height:24px;line-height:20px;font-size:12px;margin:0" title="Place the actual blast and roll its target damage">Resolve Deviation</button>';
 };
 
 // ChatMessage.content is sanitized HTML: comments are not persistent markers.
@@ -78,8 +93,7 @@ const replaceCardOutcome = (content, state) => {
         .replace(/(<div class="dice-total"[^>]*>)[\s\S]*?(<\/div>)/,
             `$1${outcome.total}$2`);
     result = updateRegion(result, 'data-grenade-targets', renderAoeAttackTargets(state.targets ?? [], state));
-    result = updateRegion(result, 'data-aoe-deviation', outcome.success ? ''
-        : '<div style="font-size:11px;margin:4px 0"><strong>Deviation:</strong> GM: move the red template to resolve.</div>',
+    result = updateRegion(result, 'data-aoe-deviation', renderAoeDeviationControls(state),
         /<div\b[^>]*>(?=\s*<strong>Deviation:<\/strong>)/i);
     result = updateRegion(result, 'data-aoe-gm-modifier', state.gmModifier
         ? `<div class="swadetools-aoe-gm-mod" style="font-size:11px">GM Modifier: ${state.gmModifier >= 0 ? '+' : ''}${state.gmModifier}</div>` : '',
@@ -130,7 +144,7 @@ export const applyAoeGmModifier = async (message, value, runtime = {}) => {
         return false;
     }
     const current = validateMessage(message, runtime);
-    if (!current || busyMessages.has(message.id)) return false;
+    if (!current || busyMessages.has(message.id) || isAoeChatTransactionPending(message) || isAoeChatTransactionPending(message, 'aoeBennyInProgress')) return false;
     const input = String(value ?? '').trim();
     let gmModifier = input ? Number(input) : 0;
     if (!Number.isFinite(gmModifier)) {
@@ -158,16 +172,16 @@ export const applyAoeGmModifier = async (message, value, runtime = {}) => {
         const sameScene = String(canvasRef?.scene?.id ?? '') === String(state.sceneId);
         const template = sameScene ? canvasRef.scene.templates?.get(state.templateId) : null;
         if (template) {
-            const color = outcome.success ? '#ff6b35' : '#d62828';
+            const color = outcome.success || state.deviationResolved ? '#ff6b35' : '#d62828';
             const changes = {fillColor: color, borderColor: color,
                 'flags.world.throwSucceeded': outcome.success,
-                'flags.world.pendingDeviation': !outcome.success,
+                'flags.world.pendingDeviation': !outcome.success && !state.deviationResolved,
                 'flags.world.aoeGmCorrection': true};
-            if (outcome.success && !getAoeAttackOutcome(current).success && state.originalPoint) {
+            if (outcome.success && !getAoeAttackOutcome(current).success && !state.deviationResolved && state.originalPoint) {
                 changes.x = state.originalPoint.x;
                 changes.y = state.originalPoint.y;
             }
-            await template.update(changes);
+            await template.update(changes, {aoeGmCorrection: true});
             state.targets = collectCircleTargets(canvasRef, template, state.targets);
         }
         await message.update({'flags.world.aoeAttack': state,
@@ -178,56 +192,75 @@ export const applyAoeGmModifier = async (message, value, runtime = {}) => {
     }
 };
 
-export const rollAoeChatTargetDamage = async (message, targetUuid, runtime = {}) => {
-    const state = validateMessage(message, runtime);
-    const {gameRef, canvasRef, fromUuid} = contextOf(runtime);
-    if (!state || !getAoeAttackOutcome(state).success || busyMessages.has(message.id)) return false;
-    const targetState = state.targets?.find(target => target.uuid === targetUuid);
-    if (!targetState || sceneIdOf(targetUuid) !== state.sceneId ||
-        String(canvasRef?.scene?.id ?? '') !== state.sceneId) {
-        notify(runtime, 'Open the original AoE attack scene before rolling its target damage.');
-        return false;
-    }
-    const [owner, operator, item, targetDocument] = await Promise.all([
+const prepareAoeDamageContext = async (state, runtime) => {
+    const {gameRef, fromUuid} = contextOf(runtime);
+    const [owner, operator, item] = await Promise.all([
         fromUuid(state.weaponActorUuid), fromUuid(state.operatorActorUuid),
-        fromUuid(state.damageItemUuid), fromUuid(targetUuid),
+        fromUuid(state.damageItemUuid),
     ]);
-    const target = targetDocument?.object ?? targetDocument;
-    if (!owner || !operator || !item || !target?.actor || !targetDocument?.id ||
+    if (!owner || !operator || !item ||
         (item.actor?.uuid ?? item.parent?.uuid) !== owner.uuid) {
-        notify(runtime, 'The AoE weapon, operator or target is no longer available.');
-        return false;
+        notify(runtime, 'The AoE weapon or operator is no longer available.');
+        return null;
     }
     if (!gameRef?.user?.isGM && (!owner.isOwner || !operator.isOwner || item.isOwner === false)) {
         notify(runtime, 'You do not own this AoE attack.');
-        return false;
+        return null;
     }
     const action = state.damageActionId ? item.system?.actions?.additional?.[state.damageActionId] : null;
     if (state.damageActionId && action?.type !== 'damage') {
         notify(runtime, 'The configured AoE damage action is no longer available.');
-        return false;
+        return null;
     }
     const prepared = prepareWeaponDamageModifier(state.damageModifier, operator,
         {RollClass: runtime.RollClass ?? globalThis.Roll});
-    if (!prepared.ok) { notify(runtime, prepared.reason); return false; }
+    if (!prepared.ok) { notify(runtime, prepared.reason); return null; }
+    return {owner, operator, item, action, prepared};
+};
+
+const rollPreparedAoeTargetDamage = async (state, targetUuid, context, runtime) => {
+    const {gameRef, canvasRef, fromUuid} = contextOf(runtime);
+    if (!state.targets?.some(target => target.uuid === targetUuid) ||
+        sceneIdOf(targetUuid) !== state.sceneId || String(canvasRef?.scene?.id ?? '') !== state.sceneId) return false;
+    const targetDocument = await fromUuid(targetUuid);
+    const target = targetDocument?.object ?? targetDocument;
+    if (!target?.actor || !targetDocument?.id) {
+        notify(runtime, 'The AoE target is no longer available.');
+        return false;
+    }
+    const {owner, operator, item, action, prepared} = context;
+    const ItemRollClass = runtime.ItemRollClass ?? (await import('../class/ItemRoll.js')).default;
+    const roll = new ItemRollClass(operator, item);
+    if (owner.type === 'vehicle') roll.usingVehicle(owner);
+    // Damage-only rolls never consume another shell, grenade or Power Point.
+    roll.manageshots = false;
+    roll.useTarget(targetDocument.id);
+    roll.addFlag('aoeArea', {sceneId: state.sceneId, targets: [targetUuid]});
+    roll.setWeaponDamageModifier(prepared.formula);
+    if (getAoeAttackOutcome(state).raise) roll.raiseDmg();
+    const suppress = runtime.withSuppressedAoeAutomation ?? withSuppressedAoeAutomation;
+    await suppress([item], async () => {
+        if (action) await roll.rollAction(state.damageActionId);
+        else await roll.rollBaseDamage();
+        await roll.display();
+    }, {gameRef, hooksRef: runtime.hooksRef ?? globalThis.Hooks});
+    return true;
+};
+
+export const rollAoeChatTargetDamage = async (message, targetUuid, runtime = {}) => {
+    const state = validateMessage(message, runtime);
+    const {gameRef, canvasRef} = contextOf(runtime);
+    if (!state || (!getAoeAttackOutcome(state).success && !state.deviationResolved) || busyMessages.has(message.id) ||
+        isAoeChatTransactionPending(message) || isAoeChatTransactionPending(message, 'aoeBennyInProgress')) return false;
+    if (!state.targets?.some(target => target.uuid === targetUuid) || sceneIdOf(targetUuid) !== state.sceneId ||
+        String(canvasRef?.scene?.id ?? '') !== state.sceneId) {
+        notify(runtime, 'Open the original AoE attack scene before rolling its target damage.');
+        return false;
+    }
     busyMessages.add(message.id);
     try {
-        const ItemRollClass = runtime.ItemRollClass ?? (await import('../class/ItemRoll.js')).default;
-        const roll = new ItemRollClass(operator, item);
-        if (owner.type === 'vehicle') roll.usingVehicle(owner);
-        // Explicitly disable native resource accounting on this damage-only
-        // roll as well as avoiding every attack/consume/cast method.
-        roll.manageshots = false;
-        roll.useTarget(targetDocument.id);
-        roll.addFlag('aoeArea', {sceneId: state.sceneId, targets: [targetUuid]});
-        roll.setWeaponDamageModifier(prepared.formula);
-        if (getAoeAttackOutcome(state).raise) roll.raiseDmg();
-        const suppress = runtime.withSuppressedAoeAutomation ?? withSuppressedAoeAutomation;
-        await suppress([item], async () => {
-            if (action) await roll.rollAction(state.damageActionId);
-            else await roll.rollBaseDamage();
-            await roll.display();
-        }, {gameRef, hooksRef: runtime.hooksRef ?? globalThis.Hooks});
+        const context = await prepareAoeDamageContext(state, runtime);
+        if (!context || !await rollPreparedAoeTargetDamage(state, targetUuid, context, runtime)) return false;
         // A later Benny must not automatically duplicate manually requested
         // damage. The existing damage cards remain under the GM's control.
         if (gameRef.user.isGM || message.isOwner !== false) {
@@ -240,6 +273,98 @@ export const rollAoeChatTargetDamage = async (message, targetUuid, runtime = {})
     }
 };
 
+// A missed explosive still detonates. The GM chooses its actual location;
+// that explicit resolution enables damage without changing a miss into a hit.
+export const resolveAoeChatDeviation = async (message, runtime = {}) => {
+    const {gameRef, canvasRef} = contextOf(runtime);
+    if (!gameRef?.user?.isGM) { notify(runtime, 'Only the GM can resolve AoE deviation.'); return false; }
+    const current = validateMessage(message, runtime);
+    if (!current || busyMessages.has(message.id) || isAoeChatTransactionPending(message) || isAoeChatTransactionPending(message, 'aoeBennyInProgress') ||
+        getAoeAttackOutcome(current).success || current.deviationResolved || current.damageWorkflowStarted) return false;
+    const sameScene = () => String(canvasRef?.scene?.id ?? '') === current.sceneId;
+    const template = sameScene() ? canvasRef.scene.templates?.get(current.templateId) : null;
+    if (!template || !(Number(template.distance) > 0)) {
+        notify(runtime, 'Open the original scene and keep the blast template before resolving deviation.');
+        return false;
+    }
+    if (canvasRef.ready === false || !Array.isArray(canvasRef.tokens?.placeables) ||
+        !(Number(canvasRef.scene.grid?.distance) > 0) ||
+        !(Number(canvasRef.grid?.size ?? canvasRef.scene.grid?.size) > 0)) {
+        notify(runtime, 'Wait for the original scene to finish loading before resolving deviation.');
+        return false;
+    }
+    const sequencerRef = runtime.sequencerRef ?? globalThis.Sequencer;
+    if (!sequencerRef?.Crosshair?.show || gameRef.modules?.get?.('sequencer')?.active === false) {
+        notify(runtime, 'AoE deviation placement requires Sequencer to be active.');
+        return false;
+    }
+    busyMessages.add(message.id);
+    const resolutionId = `${gameRef.user.id ?? 'gm'}:${Date.now()}:${Math.random()}`;
+    try {
+        const context = await prepareAoeDamageContext(current, runtime);
+        if (!context) return false;
+        const constRef = runtime.constRef ?? globalThis.CONST;
+        let cancelled = false;
+        const cancelEvent = sequencerRef.Crosshair.CALLBACKS?.CANCEL ?? 'cancel';
+        const point = await sequencerRef.Crosshair.show({
+            t: 'circle', distance: Number(template.distance),
+            distanceMin: Number(template.distance), distanceMax: Number(template.distance),
+            lockDrag: true, lockManualRotation: true, gridHighlight: true,
+            borderColor: '#ff6b35', fillColor: '#ff6b35', fillAlpha: 0.2,
+            snap: {position: (constRef?.GRID_SNAPPING_MODES?.CENTER ?? 1) |
+                (constRef?.GRID_SNAPPING_MODES?.VERTEX ?? 2), resolution: 1},
+            label: {text: `${context.item.name ?? 'AoE'} - Place Deviated Blast`},
+        }, {[cancelEvent]: () => { cancelled = true; }});
+        if (cancelled || !point || point.cancelled || point.canceled || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+        const latest = validateMessage(message, runtime);
+        if (!latest || !sameScene() || isAoeChatTransactionPending(message, 'aoeBennyInProgress') || getAoeAttackOutcome(latest).success || latest.deviationResolved || latest.damageWorkflowStarted ||
+            canvasRef.scene.templates?.get(current.templateId) !== template) {
+            notify(runtime, 'The AoE attack changed during placement. Review its current card before resolving deviation.');
+            return false;
+        }
+        // Persist a cross-client lock before moving or publishing clickable
+        // targets. Benny and manual target clicks respect this same flag.
+        await message.update({'flags.world.aoeResolving': {id: resolutionId, expiresAt: Date.now() + 300000}});
+        const stillCurrent = () => !message.flags?.world?.aoeSuperseded &&
+            !isAoeChatTransactionPending(message, 'aoeBennyInProgress') &&
+            message.flags?.world?.aoeResolving?.id === resolutionId && sameScene();
+        if (!stillCurrent()) return false;
+        await template.update({x: point.x, y: point.y, fillColor: '#ff6b35', borderColor: '#ff6b35',
+            'flags.world.pendingDeviation': false, 'flags.world.deviationResolved': true,
+            'flags.world.aoeGmCorrection': true}, {aoeGmCorrection: true});
+        // A template round trip can overlap a Benny from another client.
+        // Never continue from the pre-update message snapshot.
+        const active = validateMessage(message, runtime);
+        if (!active || !stillCurrent() || getAoeAttackOutcome(active).success || active.deviationResolved ||
+            active.damageWorkflowStarted || canvasRef.scene.templates?.get(current.templateId) !== template) {
+            notify(runtime, 'The AoE attack changed. No deviation damage was rolled; review its current card.');
+            return false;
+        }
+        const state = {...active, deviationResolved: true, resolvedPoint: {x: point.x, y: point.y},
+            targets: collectCircleTargets(canvasRef, template, active.targets)};
+        state.damageWorkflowStarted = state.targets.length > 0;
+        await message.update({'flags.world.aoeAttack': state, content: replaceCardOutcome(message.content, state)});
+        let completed = 0;
+        for (const target of state.targets) {
+            if (!stillCurrent()) break;
+            try {
+                if (await rollPreparedAoeTargetDamage(state, target.uuid, context, runtime)) completed++;
+            } catch (error) {
+                (runtime.logger ?? console).error('SWADE Tools | Deviated blast damage failed', error);
+            }
+        }
+        if (completed !== state.targets.length) notify(runtime, `${completed}/${state.targets.length} blast damage rolls completed. Click a target to retry missing damage.`);
+        else if (!state.targets.length) notify(runtime, 'The resolved blast contains no visible targets.');
+        return true;
+    } finally {
+        try {
+            if (message.flags?.world?.aoeResolving?.id === resolutionId) {
+                await message.update({'flags.world.aoeResolving': null});
+            }
+        } finally { busyMessages.delete(message.id); }
+    }
+};
+
 export const registerAoeChatControls = (runtime = {}) => {
     const documentRef = runtime.documentRef ?? globalThis.document;
     const hooksRef = runtime.hooksRef ?? globalThis.Hooks;
@@ -248,13 +373,13 @@ export const registerAoeChatControls = (runtime = {}) => {
     hooksRef?.on?.('renderChatMessageHTML', (_message, html) => {
         const gameRef = runtime.gameRef ?? globalThis.game;
         const root = html?.querySelectorAll ? html : html?.[0];
-        for (const button of root?.querySelectorAll?.('[data-aoe-gm-mod]') ?? []) {
+        for (const button of root?.querySelectorAll?.('[data-aoe-gm-mod], [data-aoe-resolve-deviation]') ?? []) {
             button.hidden = !gameRef?.user?.isGM;
         }
     });
     documentRef.addEventListener('click', async event => {
         const gameRef = runtime.gameRef ?? globalThis.game;
-        const button = event.target?.closest?.('[data-aoe-gm-mod], [data-aoe-damage-target]');
+        const button = event.target?.closest?.('[data-aoe-gm-mod], [data-aoe-damage-target], [data-aoe-resolve-deviation]');
         if (!button || button.disabled) return;
         const messageId = button.closest?.('[data-message-id]')?.dataset?.messageId;
         const message = gameRef?.messages?.get(messageId);
@@ -273,6 +398,8 @@ export const registerAoeChatControls = (runtime = {}) => {
                     ok: {label: 'Apply Modifier', callback: (_event, control) => control.form.elements.modifier.value},
                     rejectClose: false, modal: false});
                 if (value !== null && value !== undefined) await applyAoeGmModifier(message, value, runtime);
+            } else if (button.hasAttribute('data-aoe-resolve-deviation')) {
+                await resolveAoeChatDeviation(message, runtime);
             } else {
                 await rollAoeChatTargetDamage(message, button.dataset.aoeDamageTarget, runtime);
             }

@@ -1,3 +1,38 @@
+## SWADE Tools 2.1.16 — GM Chat Deviation Resolution
+
+All new interface text is English. Back up the world and update between sessions.
+Reload every connected client. Includes the 2.1.15 GM correction fix and Power
+**Template Origin → Place Freely** setting described below.
+
+- The player still chooses the intended blast area and rolls the attack normally.
+  A failed attack holds damage, leaving skill Benny rerolls and GM **+** available.
+- Failed grenade / weapon AoE cards now offer a GM-only **Resolve Deviation**
+  button. The GM clicks it, places the actual blast area, and left-clicks to
+  confirm. Right-click cancels without moving the template or rolling damage.
+  Deviation direction and distance are GM rulings, not automatic scatter dice.
+- Confirmation moves the existing template, recalculates visible area targets
+  and rolls one native SWADE Tools damage card per target. A failed attack stays
+  failed; affected targets read **Blast**, not Hit/Raise. The GM applies wounds.
+- No extra ammunition/item is consumed, no attack is repeated, no target rings
+  change and the original animation is not replayed. Empty areas never inherit
+  the player's selected targets. Critical/natural-one failures do not gain Raise
+  damage just because their actual blast location was resolved.
+- GM chat placement works from a separate client, without depending on the
+  original firing player's live macro. Native template-drag resolution remains
+  GM-only while that original macro session is active.
+- Resolved blast location and targets survive fresh Benny cards. Later Benny or
+  GM corrections never move a resolved blast back or automatically repeat its
+  damage; changed results show a compact GM review reminder.
+- Cross-client transaction guards prevent simultaneous Benny, GM correction or
+  target clicks from duplicating the automatic damage workflow. Obsolete cards,
+  cancelled placement, unavailable context and scene changes abort safely.
+
+Validated with 327 automated tests, independent-client race regressions, the
+installed Foundry V13 server HTML sanitizer, and a local compact-card preview.
+No live Foundry game was accessed or modified.
+
+---
+
 ## SWADE Tools 2.1.15 — Reliable AoE GM Corrections & Free Power Origins
 
 All new interface text is English. Back up the world and update between sessions.
