@@ -3,6 +3,8 @@ export const AOE_ENABLED_FLAG = 'aoeEnabled';
 export const AOE_ITEM_TYPES = new Set(['weapon', 'consumable', 'gear', 'power']);
 export const POWER_AOE_SHAPES = Object.freeze(['small', 'medium', 'large', 'scone', 'cone', 'stream']);
 export const POWER_AOE_ORIGINS = Object.freeze(['caster', 'free']);
+export const AOE_TEMPLATE_SHAPES = POWER_AOE_SHAPES;
+export const AOE_TEMPLATE_ORIGINS = Object.freeze(['token', 'free']);
 
 export const canEnableAoe = item => Boolean(
     item && AOE_ITEM_TYPES.has(item.type)
@@ -106,6 +108,18 @@ export const getAoeConsumptionMode = item => {
     return handThrown || item?.system?.reloadType === 'self' ? 'item' : 'ammo';
 };
 
+const positiveIntegerFlag = (item, key, fallback, maximum) => {
+    const value = Number(readFlag(item, key));
+    return Number.isSafeInteger(value) && value >= 1 && value <= maximum ? value : fallback;
+};
+const getWeaponShape = item => {
+    const saved = readFlag(item, 'aoeTemplateShape');
+    if (AOE_TEMPLATE_SHAPES.includes(saved)) return saved;
+    const legacy = readFlag(item, 'aoeBlastSize');
+    if (['small', 'medium', 'large'].includes(legacy)) return legacy;
+    return AOE_TEMPLATE_SHAPES.find(shape => item?.system?.templates?.[shape] === true) ?? 'medium';
+};
+
 export const getAoeItemSettings = item => ({
     // Use the same native Trait as normal SWADE Tools attacks. Old aoeSkill
     // flags must not silently override a later change to the weapon's Trait.
@@ -113,6 +127,19 @@ export const getAoeItemSettings = item => ({
     blastSize: ['small', 'medium', 'large'].includes(readFlag(item, 'aoeBlastSize'))
         ? readFlag(item, 'aoeBlastSize')
         : ['small', 'medium', 'large'].find(size => item?.system?.templates?.[size]) ?? 'medium',
+    shape: getWeaponShape(item),
+    origin: AOE_TEMPLATE_ORIGINS.includes(readFlag(item, 'aoeTemplateOrigin'))
+        ? readFlag(item, 'aoeTemplateOrigin') : 'token',
+    autoEvade: readFlag(item, 'aoeAutoEvade') === true,
+    evadeModifier: Number.isFinite(Number(readFlag(item, 'aoeEvadeModifier')))
+        ? Math.min(20, Math.max(-20, Number(readFlag(item, 'aoeEvadeModifier')))) : -2,
+    fire: {
+        enabled: readFlag(item, 'aoeFireEnabled') === true,
+        initialIntensity: positiveIntegerFlag(item, 'aoeFireIntensity', 3, 5),
+        maxIntensity: Math.max(positiveIntegerFlag(item, 'aoeFireIntensity', 3, 5),
+            positiveIntegerFlag(item, 'aoeFireMaxIntensity', 3, 10)),
+        ignitionThreshold: 6
+    },
     consumeMode: getAoeConsumptionMode(item),
     consume: getAoeConsumptionMode(item) !== 'none',
     damageAction: String(readFlag(item, 'aoeDamageAction') ?? ''),
@@ -124,8 +151,27 @@ export const saveAoeItemSettings = async (item, settings) => {
     if (!canEnableAoe(item) || !item.isOwner) {
         throw new Error('You do not own an eligible AoE item.');
     }
-    if (!['small', 'medium', 'large'].includes(settings?.blastSize)) {
+    const previous = getAoeItemSettings(item);
+    if (settings?.shape === undefined && settings?.blastSize !== undefined &&
+        !['small', 'medium', 'large'].includes(settings.blastSize)) {
         throw new Error('Choose a valid blast template size.');
+    }
+    const shape = settings?.shape ?? settings?.blastSize ?? previous.shape;
+    if (!AOE_TEMPLATE_SHAPES.includes(shape)) {
+        throw new Error('Choose a valid blast template size.');
+    }
+    const origin = settings?.origin ?? previous.origin;
+    if (!AOE_TEMPLATE_ORIGINS.includes(origin)) throw new Error('Choose a valid template origin.');
+    const evadeModifier = Number(settings?.evadeModifier ?? previous.evadeModifier);
+    if (!Number.isFinite(evadeModifier) || Math.abs(evadeModifier) > 20) {
+        throw new Error('Evade Modifier must be a number between -20 and 20.');
+    }
+    const fire = {...previous.fire, ...settings?.fire};
+    fire.initialIntensity = Number(fire.initialIntensity);
+    fire.maxIntensity = Number(fire.maxIntensity);
+    if (!Number.isSafeInteger(fire.initialIntensity) || fire.initialIntensity < 1 || fire.initialIntensity > 5 ||
+        !Number.isSafeInteger(fire.maxIntensity) || fire.maxIntensity < fire.initialIntensity || fire.maxIntensity > 10) {
+        throw new Error('Fire damage must be whole d6 counts: initial 1–5, maximum at least initial and no more than 10.');
     }
     const ammoCost = Number(settings?.ammoCost ?? 1);
     if (!Number.isSafeInteger(ammoCost) || ammoCost < 1) {
@@ -141,7 +187,9 @@ export const saveAoeItemSettings = async (item, settings) => {
     }
     const saved = {
         skill: String(item?.system?.actions?.trait ?? '').trim(),
-        blastSize: settings.blastSize,
+        blastSize: ['small', 'medium', 'large'].includes(shape) ? shape : previous.blastSize,
+        shape, origin, autoEvade: settings.autoEvade ?? previous.autoEvade, evadeModifier,
+        fire: {...fire, enabled: fire.enabled === true},
         consumeMode,
         consume: consumeMode !== 'none',
         damageAction,
@@ -149,6 +197,13 @@ export const saveAoeItemSettings = async (item, settings) => {
     };
     await item.update({
         'flags.swade-tools.aoeBlastSize': saved.blastSize,
+        'flags.swade-tools.aoeTemplateShape': saved.shape,
+        'flags.swade-tools.aoeTemplateOrigin': saved.origin,
+        'flags.swade-tools.aoeAutoEvade': saved.autoEvade === true,
+        'flags.swade-tools.aoeEvadeModifier': saved.evadeModifier,
+        'flags.swade-tools.aoeFireEnabled': saved.fire.enabled,
+        'flags.swade-tools.aoeFireIntensity': saved.fire.initialIntensity,
+        'flags.swade-tools.aoeFireMaxIntensity': saved.fire.maxIntensity,
         'flags.swade-tools.aoeConsume': saved.consume,
         'flags.swade-tools.aoeConsumeMode': saved.consumeMode,
         'flags.swade-tools.aoeDamageAction': saved.damageAction,

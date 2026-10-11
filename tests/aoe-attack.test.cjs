@@ -30,6 +30,10 @@ const loadServices = async () => ({
   ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
   ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
   ...await import(pathToFileURL(path.join(services, 'AoeChatControl.js'))),
+  ...await import(pathToFileURL(path.join(services, 'AoeGeometry.js'))),
+  ...await import(pathToFileURL(path.join(services, 'PowerAoeTemplate.js'))),
+  ...await import(pathToFileURL(path.join(services, 'AoeEvade.js'))),
+  ...await import(pathToFileURL(path.join(services, 'AoeFire.js'))),
 });
 
 // Execute the full bundled attack. Only the Foundry UI/documents and dice are
@@ -42,7 +46,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
   noOperator = false, globalMods = {}, skillEffects = [], itemModifier = '', rollData = {}, secondaryWeapon = false,
   wildcard = true, itemType = 'weapon', charges, destroyOnEmpty = false,
   panelCanceled = false, panelReload = false, panelValues = null, bennySpendResult = true,
-  automatedAnimations = false, poolScope = {}} = {}) {
+  automatedAnimations = false, poolScope = {}, range = '10/20/40', targetTokens, serviceOverrides = {}} = {}) {
   const profile = await loadServices();
   const events = [], notices = [], cards = [], nativeCalls = [], nativeCards = [];
   const animations = [], automaticAnimationEvents = [];
@@ -73,7 +77,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     isOwner: true, actor: owner, parent: owner,
     flags: {'swade-tools': {aoeEnabled: true, ...flags}},
     system: {quantity, currentShots, shots: 4, reloadType: 'single', category, charges, destroyOnEmpty,
-      actions: {trait, traitMod:itemModifier, additional}, damage, range: '10/20/40', templates: {medium: true}, ap: 1},
+      actions: {trait, traitMod:itemModifier, additional}, damage, range, templates: {medium: true}, ap: 1},
     getFlag(_scope, key) { return this.flags['swade-tools'][key]; },
     canExpendResources(cost) { return this.system.currentShots >= cost; },
     async consume(cost) {
@@ -91,7 +95,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     name:'Other Grenade',system:{...weapon.system,damage:'9d6'}});
   const token = {id: 'source', actor: owner, x: 0, y: 0, w: 100, h: 100,
     center: {x: 50, y: 50}, document: {id: 'source', uuid: 'Scene.scene.Token.source'}};
-  const victims = ['one','two'].map(id => ({id, name: `Target ${id}`, isVisible: true,
+  const victims = targetTokens ?? ['one','two'].map(id => ({id, name: `Target ${id}`, isVisible: true,
     actor: {name: id}, center: {x: 100, y: 100}, document: {uuid: `Scene.scene.Token.${id}`}}));
   const scene = {grid: {distance: 1, size: 100, units: 'in.'}, templates: new Map(),
     async createEmbeddedDocuments(_type, data) {
@@ -204,7 +208,7 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
         describe: (item, actualOwner, opts) => profile.aoeResource.describe(item, actualOwner, {...opts, ammoManagement}),
         validate: (item, actualOwner, opts) => profile.aoeResource.validate(item, actualOwner, {...opts, ammoManagement}),
         spend: (item, actualOwner, opts) => profile.aoeResource.spend(item, actualOwner, {...opts, ammoManagement}),
-      }}, ...poolScope},
+      }, ...serviceOverrides}, ...poolScope},
     game, Roll: MockRoll, Hooks, Sequencer, globalThis: platform, CONFIG: {},
     canvas: {scene, grid: {size: 100}, tokens: {controlled: [token], placeables: victims}},
     ui: {notifications: Object.fromEntries(['warn','error','info'].map(kind => [kind, text => notices.push({kind, text})]))},

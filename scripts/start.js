@@ -15,6 +15,9 @@ import CharUp from './class/CharUp.js';
 import { registerAoeItemControls } from './services/AoeItemConfig.js';
 import { registerShotgunItemControls } from './services/ShotgunItemConfig.js';
 import { registerAoeChatControls } from './services/AoeChatControl.js';
+import { registerAoeAuthority } from './services/AoeAuthority.js';
+import { registerAoeEvadeAuthority, registerAoeEvadeControls } from './services/AoeEvade.js';
+import { registerAoeFire } from './services/AoeFire.js';
 
 registerAoeItemControls();
 registerShotgunItemControls();
@@ -55,6 +58,11 @@ var foundryIsReady=false;
 
 
 Hooks.on('ready',async()=>{
+
+    registerAoeEvadeAuthority();
+    registerAoeAuthority();
+    registerAoeEvadeControls();
+    registerAoeFire();
 
 
     /// only socket to fix permission for gb.setFlagCombatant (remove it => or rework)

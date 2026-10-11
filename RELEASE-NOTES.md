@@ -1,3 +1,59 @@
+## SWADE Tools 2.1.17 — Cone Weapons, Optional Evade & Burning
+
+All new interface text is English. Back up the world and update between sessions.
+Reload every connected client, including the GM. Existing items retain their
+previous blast behavior; Automatic Evade and Enable Fire are opt-in.
+
+### Flamethrower setup
+
+On the weapon's Properties tab, enable AoE and open its gear button. Set
+**Template Shape → Cone Template**, **Template Origin → Firing Token**, and
+enable **Automatic Evade** and **Enable Fire** as desired. Keep Shooting (or your
+custom skill) in the native Trait field. Set native damage, Heavy Weapon, ammo
+and minimum Strength on the item normally; a standard flamethrower uses 3d6.
+Initial Fire Damage and Maximum Fire Damage are separate d6 counts, default 3.
+
+- Weapons now support Cone, Small Cone and Stream, with token-anchored aiming
+  or free placement. Free templates rotate with the mouse wheel; Shift uses
+  larger steps. Confirmation aborts if the firing token moved during preview.
+- Partially covered weapon targets count, using native SWADE rounded-cone
+  geometry. Token-origin cones exclude their source. The native range label
+  `Cone Template` does not acquire invented Short/Medium/Long penalties.
+- Failed cones and streams have no target effect: no damage and no blast
+  deviation button. Benny or GM attack corrections remain available. Successful
+  attacks use the existing independent native SWADE Tools target damage cards.
+- Automatic Evade is available to every AoE weapon, defaults to Agility -2,
+  includes native attribute penalties and Improved Dodge, and is resolved once
+  per affected target. Evaded targets cannot receive attack damage or ignition.
+  Compact defense cards allow GM Hit/Evaded adjudication; the GM moves evading
+  tokens manually. Missing Agility requires GM adjudication, not an invented die.
+- An active GM is required for automated Evade and fire. One elected GM runs
+  them, including when viewing a different scene. Missing GM/context holds the
+  defense safely rather than silently treating the target as hit.
+- Enable Fire requests the GM's flammability decision on an affected target:
+  Not Flammable, Flammable (6), Very Flammable (4–6), or Volatile (2–6). Remember
+  the actor's setting for future hits if desired; compact Flammability controls
+  can change it later. Ignition uses a plain d6 and causes immediate fire damage.
+- A persistent Burning effect rolls current fire damage at the start of the
+  victim's combat turn, then a plain d6: 6 raises intensity to the configured
+  maximum; 1 lowers it or extinguishes fire below 1d6. Other results continue.
+  Fire damage can Ace. Compact cards provide Adjust Fire and Extinguish controls.
+- Fire damage totals are reported, not automatically applied as wounds. Armor
+  applies normally and the GM applies the damage manually. No inventory hazard
+  items are created. Existing effects and normal weapon workflows are unchanged.
+- Defense/ignition results survive Benny replacement cards; ammo and fire checks
+  are not repeated. Turn replay, multiple GM clients and simultaneous targets
+  have duplicate guards. Whisper/blind visibility is preserved for defense/fire.
+- Existing RoF AoE weapons continue to work, and directional RoF placement keeps
+  its signed direction without requiring numeric blast-weapon ranges.
+
+Validated with 398 automated tests, local independent-client/geometry checks,
+the installed Foundry V13 server HTML sanitizer, and 320 px chat-card previews.
+The live Foundry game was not accessed or modified. Evade reference:
+[Pinnacle's SWADE conversion guide](https://s3-us-west-2.amazonaws.com/peg-swade/SWEX_to_SWADE.pdf).
+
+---
+
 ## SWADE Tools 2.1.16 — GM Chat Deviation Resolution
 
 All new interface text is English. Back up the world and update between sessions.

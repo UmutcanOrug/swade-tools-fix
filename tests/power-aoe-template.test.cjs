@@ -115,6 +115,67 @@ test('Power template presets scale circles and streams but keep SWADE rounded-co
     }
 });
 
+test('weapon cone placement uses native previews and source origin without creating documents or guessing range', async () => {
+    const {placeWeaponAoeTemplatePoint} = await service;
+    const f = fixture({shape: 'cone', range: 'Cone Template', point: {x: 1000, y: 50}});
+    f.input.item.type = 'weapon';
+    const result = await placeWeaponAoeTemplatePoint({...f.input, origin: 'token'}, f.runtime);
+    assert.deepEqual({x: result.x, y: result.y, direction: result.direction}, {x: 1000, y: 50, direction: 0});
+    assert.deepEqual(result.geometry, {t: 'cone', x: 50, y: 50, direction: 0, distance: 9, width: 3, angle: 0});
+    assert.deepEqual(result.targetIds, ['inside']);
+    assert.equal(f.calls.some(call => call[0] === 'create'), false);
+    assert.equal(f.previews[0].document.flags['swade-tools'].powerAoeTemplate, undefined);
+    assert.equal(f.previews[0].document.flags['swade-tools'].weaponAoeTemplate, true);
+    assert.equal(f.previews[0].destroyed, true);
+    assert.equal(f.runtime.canvasRef.templates.preview.children.length, 0);
+    const config = f.calls.find(call => call[0] === 'crosshair')[1];
+    assert.equal(config.location.limitMaxRange, undefined); assert.equal(config.location.showRange, false);
+});
+
+test('free weapon cones retain wheel rotation and clean up on cancellation without a persistent template', async () => {
+    const {placeWeaponAoeTemplatePoint} = await service;
+    const f = fixture({shape: 'scone', point: {x: 300, y: 400},
+        onShow({wheelTarget}) { wheelTarget.rotate(1); wheelTarget.rotate(1, true); }});
+    f.input.item.type = 'weapon';
+    const result = await placeWeaponAoeTemplatePoint({...f.input, origin: 'free'}, f.runtime);
+    assert.equal(result.x, 300); assert.equal(result.y, 400); assert.equal(result.direction, 20);
+    assert.equal(result.geometry.x, 300); assert.equal(result.geometry.y, 400);
+    assert.equal(f.wheelListeners.size, 0); assert.equal(f.previews[0].destroyed, true);
+    assert.equal(f.calls.some(call => call[0] === 'create'), false);
+    const canceled = fixture({shape: 'cone', cancel: true}); canceled.input.item.type = 'weapon';
+    assert.equal(await placeWeaponAoeTemplatePoint({...canceled.input, origin: 'free'}, canceled.runtime), null);
+    assert.equal(canceled.wheelListeners.size, 0); assert.equal(canceled.previews[0].destroyed, true);
+    assert.equal(canceled.calls.some(call => call[0] === 'create'), false);
+});
+
+test('weapon preview rejects invalid ownership, shape and origin before placement', async () => {
+    const {placeWeaponAoeTemplatePoint} = await service;
+    const f = fixture({shape: 'cone'}); f.input.item.type = 'weapon';
+    await assert.rejects(placeWeaponAoeTemplatePoint({...f.input, origin: 'invalid'}, f.runtime), /origin/);
+    await assert.rejects(placeWeaponAoeTemplatePoint({...f.input, shape: 'medium'}, f.runtime), /directional/);
+    f.input.item.isOwner = false;
+    await assert.rejects(placeWeaponAoeTemplatePoint(f.input, f.runtime), /do not own/);
+    assert.equal(f.calls.some(call => call[0] === 'crosshair'), false);
+});
+
+test('moving the source during AoE placement rejects confirmation before any persistent document or resource use', async () => {
+    const {placeWeaponAoeTemplatePoint, placePowerAoeTemplate} = await service;
+    for (const [weapon, shape, origin] of [[true, 'cone', 'token'], [true, 'cone', 'free'],
+        [false, 'cone', 'caster'], [false, 'medium', 'caster']]) {
+        const f = fixture({shape, onShow({canvasRef}) {
+            canvasRef.tokens.controlled[0].center = {x: 150, y: 50};
+        }});
+        if (weapon) f.input.item.type = 'weapon';
+        await assert.rejects(weapon
+            ? placeWeaponAoeTemplatePoint({...f.input, origin}, f.runtime)
+            : placePowerAoeTemplate(f.input, f.runtime), /token moved/);
+        assert.equal(f.calls.some(call => call[0] === 'create'), false);
+        assert.equal(f.wheelListeners.size, 0);
+        assert.equal(f.runtime.canvasRef.templates.preview.children.length, 0);
+        assert.ok(f.previews.every(preview => preview.destroyed));
+    }
+});
+
 test('circular Power area captures only visible actor-backed token centers and never touches target rings', async () => {
     const {placePowerAoeTemplate} = await service;
     const f = fixture();

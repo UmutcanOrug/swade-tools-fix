@@ -1,5 +1,6 @@
 /** Place a native SWADE Power area without changing the user's target selection. */
 import { getPowerAoeSettings } from './AoeItemFlags.js';
+import { collectAoeTemplateTargets } from './AoeGeometry.js';
 
 const SHAPES = Object.freeze({
     small: {t: 'circle', distance: 1},
@@ -135,7 +136,8 @@ const destroyPreview = (preview, baseTemplateClass, configRef) => {
  * Return null when placement is cancelled. Invalid context and document failures throw English errors.
  * The caller owns casting/PP and chat cards; this service never rolls, spends resources, or targets tokens.
  */
-export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime = {}) => {
+const placeNativeAoeTemplate = async ({actor, item, token, shape, origin: explicitOrigin,
+    weapon = false, createDocument = true}, runtime = {}) => {
     const canvasRef = runtime.canvasRef ?? globalThis.canvas;
     const gameRef = runtime.gameRef ?? globalThis.game;
     const sequencerRef = runtime.sequencerRef ?? globalThis.Sequencer;
@@ -143,7 +145,9 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
     const constRef = runtime.constRef ?? globalThis.CONST;
     const baseTemplateClass = runtime.baseTemplateClass ?? globalThis.foundry?.canvas?.placeables?.MeasuredTemplate;
     const notifications = runtime.notifications ?? globalThis.ui?.notifications;
-    if (!actor || item?.type !== 'power') throw new Error('Choose a Power owned by the casting actor.');
+    if (!actor || !(weapon ? ['weapon', 'consumable', 'gear'].includes(item?.type) : item?.type === 'power')) {
+        throw new Error(weapon ? 'Choose an AoE item owned by the firing actor.' : 'Choose a Power owned by the casting actor.');
+    }
     if (!gameRef?.user?.isGM && (!actor.isOwner || item.isOwner === false)) throw new Error('You do not own this Power.');
     if (item.actor && item.actor !== actor &&
         !(item.actor.uuid && item.actor.uuid === actor.uuid) &&
@@ -162,13 +166,20 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
     const sourceToken = resolveSourceToken(actor, token, canvasRef);
     const source = centerOf(sourceToken);
     const directional = SHAPES[shape].t !== 'circle';
-    const originMode = getPowerAoeSettings(item).origin;
+    const originMode = explicitOrigin ?? getPowerAoeSettings(item).origin;
     const freeOrigin = directional && originMode === 'free';
     const user = gameRef.user;
     const initialTarget = {x: source.x + Number(canvasRef.grid?.size ?? scene.grid.size ?? 100), y: source.y};
     let direction = 0;
-    const buildData = target => buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
-        originMode, direction});
+    const buildData = target => {
+        const value = buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
+            originMode, direction});
+        if (weapon) {
+            delete value.flags['swade-tools'].powerAoeTemplate;
+            value.flags['swade-tools'].weaponAoeTemplate = true;
+        }
+        return value;
+    };
     let data = buildData(initialTarget);
     let preview = null;
     let cancelled = false;
@@ -217,7 +228,7 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
             data = buildData(target);
             if (preview) refreshPreview(preview, data);
         };
-        const range = directional && !freeOrigin ? null : getNumericPowerRange(item);
+        const range = weapon || directional && !freeOrigin ? null : getNumericPowerRange(item);
         const radius = directional ? Number(scene.grid.distance) * 0.05 : data.distance;
         const crosshairConfig = {
             t: 'circle', distance: radius, distanceMin: radius, distanceMax: radius,
@@ -239,6 +250,10 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
         const targetPoint = pointOf(target);
         if (!targetPoint) throw new Error('The confirmed Power AoE position could not be read.');
         if (canvasRef.scene?.id !== scene.id) throw new Error('The active scene changed. Place the Power AoE again.');
+        const confirmedSource = centerOf(sourceToken);
+        if (!confirmedSource || Math.hypot(confirmedSource.x - source.x, confirmedSource.y - source.y) > 0.000001) {
+            throw new Error(`The ${weapon ? 'firing' : 'casting'} token moved. Place the AoE again.`);
+        }
         if (range !== null) {
             const straightDistance = Math.hypot(targetPoint.x - source.x, targetPoint.y - source.y) /
                 Number(canvasRef.grid?.size ?? scene.grid.size ?? 100) * Number(scene.grid.distance);
@@ -255,18 +270,45 @@ export const placePowerAoeTemplate = async ({actor, item, token, shape}, runtime
         data = buildData(targetPoint);
         if (!preview) await createPreview(false);
         else refreshPreview(preview, data);
-        const targetIds = getPowerAoeTargetIds(preview, canvasRef.tokens?.placeables,
-            {sourceToken, excludeSource: directional && !freeOrigin});
+        const targetIds = weapon ? collectAoeTemplateTargets(preview, canvasRef.tokens?.placeables,
+            {gridSize: Number(canvasRef.grid?.size ?? scene.grid.size ?? 100), sceneDistance: Number(scene.grid.distance),
+                sourceTokenUuid: sourceToken.document?.uuid, sourceTokenId: tokenId(sourceToken),
+                excludeSource: directional && !freeOrigin})
+            .map(tokenId) : getPowerAoeTargetIds(preview, canvasRef.tokens?.placeables,
+                {sourceToken, excludeSource: directional && !freeOrigin});
+        const geometry = Object.fromEntries(['t', 'x', 'y', 'direction', 'distance', 'width', 'angle']
+            .filter(key => data[key] !== undefined).map(key => [key, data[key]]));
+        if (!createDocument) return {sceneId: scene.id, targetIds, sourceToken, shape, geometry, point: targetPoint};
         let documents;
         try { documents = await scene.createEmbeddedDocuments('MeasuredTemplate', [data]); }
         catch (error) { throw new Error(`The Power AoE template could not be created: ${error.message}`, {cause: error}); }
         const templateDocument = documents?.[0];
         if (!templateDocument) throw new Error('The Power AoE template could not be created.');
-        const geometry = Object.fromEntries(['t', 'x', 'y', 'direction', 'distance', 'width', 'angle']
-            .filter(key => data[key] !== undefined).map(key => [key, data[key]]));
-        return {templateDocument, sceneId: scene.id, targetIds, sourceToken, shape, geometry};
+        return {templateDocument, sceneId: scene.id, targetIds, sourceToken, shape, geometry, point: targetPoint};
     } finally {
         removeRotationListener?.();
         destroyPreview(preview, baseTemplateClass, configRef);
     }
+};
+
+export const placePowerAoeTemplate = (input, runtime = {}) => placeNativeAoeTemplate(input, runtime);
+
+/** Preview a weapon cone/stream without spending ammunition or creating a persistent document. */
+export const placeWeaponAoeTemplatePoint = async ({actor, item, token, shape, origin = 'token'}, runtime = {}) => {
+    if (!['scone', 'cone', 'stream'].includes(shape)) throw new Error('Choose a directional weapon template.');
+    if (!['token', 'free'].includes(origin)) throw new Error('Choose a valid weapon template origin.');
+    const result = await placeNativeAoeTemplate({actor, item, token, shape, origin: origin === 'token' ? 'caster' : 'free',
+        weapon: true, createDocument: false}, runtime);
+    return result ? {...result.point, direction: result.geometry.direction, geometry: result.geometry,
+        targetIds: result.targetIds} : null;
+};
+
+/** Build the same native weapon geometry for a trusted RoF pool projectile. */
+export const buildWeaponAoeTemplateData = ({actor, item, shape, source, target, scene, user, origin = 'token', direction = 0}) => {
+    if (!['token', 'free'].includes(origin)) throw new Error('Choose a valid weapon template origin.');
+    const data = buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
+        originMode: origin === 'token' ? 'caster' : 'free', direction});
+    delete data.flags['swade-tools'].powerAoeTemplate;
+    data.flags['swade-tools'].weaponAoeTemplate = true;
+    return data;
 };

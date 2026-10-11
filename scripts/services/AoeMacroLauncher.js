@@ -5,6 +5,10 @@ import * as aoeChat from './AoeChatControl.js';
 import { showAoeAttackDialog } from './AoeAttackDialog.js';
 import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
 import { nativeWeaponDamageFormula, prepareWeaponDamageModifier } from './WeaponDamageModifier.js';
+import * as aoeGeometry from './AoeGeometry.js';
+import { placeWeaponAoeTemplatePoint, buildWeaponAoeTemplateData } from './PowerAoeTemplate.js';
+import { resolveAoeEvade } from './AoeEvade.js';
+import { recordAoeFireHit } from './AoeFire.js';
 
 // Keep the filename used by existing grenade actions and macro references.
 const AOE_SCRIPT_PATH =
@@ -36,6 +40,10 @@ const authorizePoolAttack = (attack, scope, options) => {
     if (Object.entries(identities).some(([key, uuid]) => !uuid || attack[key] !== uuid)) {
         throw new Error('The AoE pool result no longer matches its weapon or operator.');
     }
+    const directional = ['cone', 'scone', 'stream'].includes(profile.getAoeItemSettings(scope.item).shape);
+    if (directional && !Number.isFinite(options.attackPoint.direction)) {
+        throw new Error('The directional AoE pool placement is incomplete.');
+    }
     const normalized = Object.freeze({...attack, ...identities,
         baseModifier: Number(attack.baseModifier),
         rawTotal: Number(attack.rawRoll.total),
@@ -46,6 +54,7 @@ const authorizePoolAttack = (attack, scope, options) => {
     trustedAoePoolAttacks.set(normalized, {...identities,
         tokenUuid: contextUuid(scope.token?.document ?? scope.token),
         x: Number(options.attackPoint.x), y: Number(options.attackPoint.y),
+        ...(directional ? {direction: options.attackPoint.direction} : {}),
     });
     return normalized;
 };
@@ -60,7 +69,8 @@ export const isTrustedAoePoolAttack = (attack, {item, weaponOwner, operatorActor
         context.weaponActorUuid === contextUuid(weaponOwner) &&
         context.operatorActorUuid === contextUuid(operatorActor) &&
         context.tokenUuid === contextUuid(token?.document ?? token) && finitePoint(point) &&
-        context.x === Number(point.x) && context.y === Number(point.y));
+        context.x === Number(point.x) && context.y === Number(point.y) &&
+        (context.direction === undefined || context.direction === point.direction));
 };
 
 const asArray = collection => {
@@ -148,8 +158,9 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
         token: options.token?.object ?? options.token ??
             findAoeActorToken(weaponActor),
         aoeResource,
-        aoeServices: { ...profile, ...aoeChat, aoeResource,
+        aoeServices: { ...profile, ...aoeChat, ...aoeGeometry, aoeResource,
             nativeWeaponDamageFormula, prepareWeaponDamageModifier,
+            placeWeaponAoeTemplatePoint, buildWeaponAoeTemplateData, resolveAoeEvade, recordAoeFireHit,
             showAoeAttackDialog: context => showAoeAttackDialog({ ...context,
                 token: scope.token, restoreLast: scope.restoreLast }),
             playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack }
@@ -157,7 +168,8 @@ export const resolveAoeLaunchScope = async (actor, item, options = {}) => {
     if (options.poolAttack) {
         scope.poolAttack = authorizePoolAttack(options.poolAttack, scope, options);
         scope.skipConsumption = true;
-        scope.attackPoint = {x: Number(options.attackPoint.x), y: Number(options.attackPoint.y)};
+        scope.attackPoint = {x: Number(options.attackPoint.x), y: Number(options.attackPoint.y),
+            ...(Number.isFinite(options.attackPoint.direction) ? {direction: options.attackPoint.direction} : {})};
     } else if (options.skipConsumption) {
         throw new Error('Only a resolved RoF pool can skip AoE resource consumption.');
     }
@@ -184,12 +196,13 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
         globalThis.ui?.notifications?.warn('This item’s configured AoE damage action no longer exists. Update AoE Settings before firing.');
         return [];
     }
+    const directional = ['cone', 'scone', 'stream'].includes(settings.shape);
     const blastSize = settings.blastSize;
     const sceneDistance = Number(globalThis.canvas?.scene?.grid?.distance) || 1;
     const distance = ({small: 1, medium: 2, large: 3}[blastSize] ?? 2) * sceneDistance;
     const rangeParts = String(item.system?.range ?? '').split('/').map(Number);
     const longRange = rangeParts[2];
-    if (!Number.isFinite(longRange) || longRange <= 0) {
+    if (!directional && (!Number.isFinite(longRange) || longRange <= 0)) {
         globalThis.ui?.notifications?.warn('Set valid Short/Medium/Long ranges before using an AoE RoF pool.');
         return [];
     }
@@ -198,6 +211,13 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
         const candidate = candidates[candidateIndex];
         if (!Number.isFinite(Number(candidate?.roll?.total)) ||
             !Number.isFinite(Number(candidate?.modifier))) return [];
+        if (directional) {
+            const point = await placeWeaponAoeTemplatePoint({actor: owner, item,
+                token: scope.token, shape: settings.shape, origin: settings.origin});
+            if (!finitePoint(point) || !Number.isFinite(point.direction)) return [];
+            points.push({candidateIndex, attackPoint: {x: point.x, y: point.y, direction: point.direction}});
+            continue;
+        }
         let cancelled = false;
         const point = await crosshair.show({
             t: 'circle', distance, borderColor: '#ff6b35', fillColor: '#ff6b35',
@@ -235,6 +255,7 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
     if (!isAoeItem(item) || !configuredActionExists() ||
         currentSettings.damageAction !== settings.damageAction ||
         currentSettings.blastSize !== settings.blastSize ||
+        currentSettings.shape !== settings.shape || currentSettings.origin !== settings.origin ||
         currentSettings.consumeMode !== settings.consumeMode) {
         globalThis.ui?.notifications?.warn('AoE settings changed during placement. The volley was cancelled before consuming resources.');
         return [];

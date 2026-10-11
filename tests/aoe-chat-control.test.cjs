@@ -60,6 +60,65 @@ async function fixture({gm = true, vehicle = false, total = 3,
     return {api, state, message, runtime, owner, operator, item, target, template, changes, calls, warnings, documents};
 }
 
+test('failed cone and stream attacks never expose or accept blast deviation', async () => {
+    for (const shape of ['cone', 'scone', 'stream']) {
+        const s = await fixture({total: 3});
+        Object.assign(s.state, {shape, origin: 'token'});
+        assert.equal(s.api.renderAoeDeviationControls(s.state), '');
+        assert.equal(await s.api.resolveAoeChatDeviation(s.message, s.runtime), false);
+        s.state.deviationResolved = true;
+        assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false,
+            'A stale blast flag must never turn a failed cone into damage');
+        assert.doesNotMatch(s.api.renderAoeAttackTargets(s.state.targets, s.state), /data-aoe-damage-target/);
+        assert.equal(s.calls.length, 0);
+    }
+});
+
+test('automatic Evade blocks damage and ignition, and renders a compact non-clickable Evaded target', async () => {
+    const s = await fixture({total: 8});
+    Object.assign(s.state, {shape: 'cone', autoEvade: true, fire: {enabled: true}});
+    let defenses = 0, fire = 0;
+    s.runtime.resolveAoeEvade = async () => { defenses++; return {allowed: false, evaded: true}; };
+    s.runtime.recordAoeFireHit = async () => { fire++; };
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), true);
+    assert.equal(defenses, 1); assert.equal(fire, 0); assert.equal(s.calls.length, 0);
+    s.message.flags.world.aoeEvadeResults = {[s.target.uuid]: {evaded: true, total: 6}};
+    assert.equal(await s.api.refreshAoeChatCard(s.message, s.runtime), true);
+    assert.match(s.message.content, /Victim: Evaded/);
+    assert.doesNotMatch(s.message.content, /data-aoe-damage-target=/);
+    await s.api.applyAoeGmModifier(s.message, '+1', s.runtime);
+    assert.match(s.message.content, /Victim: Evaded/, 'GM result corrections retain the durable defense');
+});
+
+test('pending Evade fails closed; failed Evade allows native damage before its fire check', async () => {
+    const s = await fixture({total: 6});
+    Object.assign(s.state, {autoEvade: true, fire: {enabled: true}});
+    s.runtime.resolveAoeEvade = async () => ({allowed: false, pending: true});
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false);
+    assert.equal(s.calls.length, 0);
+    s.runtime.resolveAoeEvade = async () => ({allowed: true, evaded: false});
+    s.runtime.recordAoeFireHit = async (message, uuid) => {
+        assert.equal(message, s.message); assert.equal(uuid, s.target.uuid);
+        assert.equal(s.calls.filter(value => value[0] === 'display').length, 1);
+        s.calls.push(['fire']);
+    };
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), true);
+    assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+    assert.equal(s.calls.filter(value => value[0] === 'fire').length, 1);
+});
+
+test('an attack superseded during its asynchronous defense cannot damage or ignite', async () => {
+    const s = await fixture({total: 6});
+    Object.assign(s.state, {autoEvade: true, fire: {enabled: true}});
+    s.runtime.resolveAoeEvade = async () => {
+        s.message.flags.world.aoeSuperseded = true;
+        return {allowed: true, evaded: false};
+    };
+    s.runtime.recordAoeFireHit = async () => { throw Error('Stale attacks cannot ignite'); };
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false);
+    assert.equal(s.calls.length, 0);
+});
+
 // Foundry's persisted HTML fields strip comments. Reproduce that boundary on
 // both the initial player-authored card and every subsequent GM update, rather
 // than letting a mock keep update markers that the real server removes.

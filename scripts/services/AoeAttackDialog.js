@@ -55,8 +55,9 @@ export const buildAoeAttackDialogContent = ({item, weaponOwner, operatorActor, a
     const action = settings.damageAction ? item.system?.actions?.additional?.[settings.damageAction] : null;
     const damage = String(action?.override ?? action?.dmgOverride ?? item.system?.damage ?? '').trim();
     const ap = action?.ap ?? item.system?.ap ?? 0;
-    const blast = String(settings.blastSize ?? 'medium');
-    const blastLabel = blast[0].toUpperCase() + blast.slice(1);
+    const shape = String(settings.shape ?? settings.blastSize ?? 'medium');
+    const templateLabel = ({small: 'Small Blast Template', medium: 'Medium Blast Template', large: 'Large Blast Template',
+        scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template'})[shape] ?? 'Medium Blast Template';
     const consumeMode = settings.consumeMode ?? (settings.consume ? 'ammo' : 'none');
     const consumeLabel = consumeMode === 'item' ? 'Consume Item' : 'Ammunition';
     return `<div class="swadetools-dialog-item">
@@ -65,7 +66,7 @@ export const buildAoeAttackDialogContent = ({item, weaponOwner, operatorActor, a
         <div><strong>Shots:</strong> ${escapeHTML(item.system?.currentShots ?? '—')}/${escapeHTML(item.system?.shots ?? '—')}</div>
         <div><strong>Range:</strong> ${escapeHTML(item.system?.range || '5/10/20')}</div>
         <div><strong>RoF:</strong> ${escapeHTML(item.system?.rof ?? 1)}</div>
-        <div><strong>Blast:</strong> ${escapeHTML(blastLabel)} Blast Template</div>
+        <div><strong>Area:</strong> ${escapeHTML(templateLabel)}</div>
         <div><strong>Trait:</strong> ${escapeHTML(attackSkill.name)}</div>
       </div><div class="swadetools-weapon-checks">
         <label class="swadetools-small-check" title="The Drop: +4 attack and +4 damage"><input id="rof-drop" type="checkbox">The Drop</label>

@@ -88,12 +88,62 @@ async function signedPoolScope({vehicle = false, total = 7, modifier = 1,
         ...await import(pathToFileURL(path.join(services, 'AoeAnimationService.js'))),
         ...await import(pathToFileURL(path.join(services, 'WeaponDamageModifier.js'))),
         ...await import(pathToFileURL(path.join(services, 'AoeChatControl.js'))),
+        ...await import(pathToFileURL(path.join(services, 'AoeGeometry.js'))),
+        ...await import(pathToFileURL(path.join(services, 'PowerAoeTemplate.js'))),
+        ...await import(pathToFileURL(path.join(services, 'AoeEvade.js'))),
+        ...await import(pathToFileURL(path.join(services, 'AoeFire.js'))),
         isTrustedAoePoolAttack: module.isTrustedAoePoolAttack,
         showAoeAttackDialog() { throw new Error('A resolved pool must not open a second setup dialog'); },
     };
     return {poolAttack: scope.poolAttack, skipConsumption: true,
         attackPoint: scope.attackPoint, attackSetup: scope.attackSetup, aoeServices};
 }
+
+test('Cone RoF points use native directional preview without numeric weapon ranges or resource changes', async () => {
+    const {prepareAoePoolPoints} = await launcher;
+    const s = fixture();
+    s.item.flags['swade-tools'].aoeTemplateShape = 'cone';
+    s.item.flags['swade-tools'].aoeTemplateOrigin = 'token';
+    s.item.system.range = 'Cone Template';
+    s.globals.canvas.scene.id = 'scene';
+    s.globals.canvas.tokens.placeables = [];
+    s.globals.canvas.templates = {preview: {addChild() {}}};
+    class TemplateDocument {
+        constructor(data) { Object.assign(this, data); }
+        updateSource(data) { Object.assign(this, data); }
+    }
+    class Template {
+        constructor(document) { this.document = document; }
+        async draw() {}
+        refresh() {}
+        destroy() {}
+    }
+    s.globals.CONFIG = {MeasuredTemplate: {documentClass: TemplateDocument, objectClass: Template}};
+    const result = await withGlobals(s.globals, () => prepareAoePoolPoints({actor: s.operator,
+        item: s.item, weaponOwner: s.owner, token: s.token, candidates: s.candidates, setup: {aoe: true}}));
+    assert.equal(result.length, 2);
+    assert.equal(result[0].attackPoint.direction, 45);
+    assert.ok(Number.isFinite(result[1].attackPoint.direction));
+    assert.equal(s.crosshairs[0].location.limitMaxRange, undefined);
+    assert.deepEqual(s.mutations, []);
+});
+
+test('signed directional pool payloads preserve rotation and reject missing or tampered rotation', async () => {
+    const api = await launcher;
+    const s = fixture();
+    s.item.flags['swade-tools'].aoeTemplateShape = 'cone';
+    const options = {operatorActor: s.operator, token: s.token, poolAttack: s.poolAttack(),
+        skipConsumption: true, attackPoint: {x: 100, y: 100, direction: 45}, attackSetup: {aoe: true}};
+    const scope = await withGlobals(s.globals, () => api.resolveAoeLaunchScope(s.operator, s.item, options));
+    assert.equal(scope.attackPoint.direction, 45);
+    const context = {item: s.item, weaponOwner: s.owner, operatorActor: s.operator,
+        token: s.token, point: scope.attackPoint};
+    assert.equal(api.isTrustedAoePoolAttack(scope.poolAttack, context), true);
+    assert.equal(api.isTrustedAoePoolAttack(scope.poolAttack, {...context,
+        point: {...scope.attackPoint, direction: 90}}), false);
+    await assert.rejects(withGlobals(s.globals, () => api.resolveAoeLaunchScope(s.operator, s.item,
+        {...options, attackPoint: {x: 100, y: 100}})), /directional AoE pool placement/);
+});
 
 test('AoE preplacement accepts every pool point without rolls, resources, dialogs or templates', async () => {
     const {prepareAoePoolPoints} = await launcher;

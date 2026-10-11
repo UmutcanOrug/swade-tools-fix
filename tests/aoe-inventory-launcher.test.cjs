@@ -240,14 +240,18 @@ test('saved AoE settings default from item and update flags without changing its
     const { getAoeItemSettings, saveAoeItemSettings } = await load('AoeItemFlags.js');
     const item = makeItem(makeActor('owner'));
     assert.deepEqual(getAoeItemSettings(item), {
-        skill: 'Gunnery', blastSize: 'large', consume: true, consumeMode: 'ammo', damageAction: '', ammoCost: 1
+        skill: 'Gunnery', blastSize: 'large', shape: 'large', origin: 'token', autoEvade: false, evadeModifier: -2,
+        fire: {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6},
+        consume: true, consumeMode: 'ammo', damageAction: '', ammoCost: 1
     });
     await saveAoeItemSettings(item, {
         skill: ' Siege Weapons ', blastSize: 'small', consume: false, damageAction: 'he', ammoCost: 2
     });
     assert.equal(item.system.actions.trait, 'Gunnery');
     assert.deepEqual(getAoeItemSettings(item), {
-        skill: 'Gunnery', blastSize: 'small', consume: false, consumeMode: 'none', damageAction: 'he', ammoCost: 2
+        skill: 'Gunnery', blastSize: 'small', shape: 'small', origin: 'token', autoEvade: false, evadeModifier: -2,
+        fire: {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6},
+        consume: false, consumeMode: 'none', damageAction: 'he', ammoCost: 2
     });
     assert.ok(!item.updates.some(change => Object.hasOwn(change,'flags.swade-tools.aoeSkill')));
     item.flags['swade-tools'].aoeSkill='Old Shooting Override';
@@ -288,6 +292,44 @@ test('launcher uses vehicle token and inventory owner but assigned gunner for tr
     const clone = { ...tank, uuid: 'Scene.scene.Token.other.Actor.tank' };
     canvas.tokens.controlled = [{ actor: clone, id: 'other-tank-token' }];
     assert.equal(findAoeActorToken(tank), token);
+});
+
+test('weapon cone settings save native shape/origin with opt-in Evade and fire, without changing damage or Trait', async () => {
+    const {getAoeItemSettings, saveAoeItemSettings} = await load('AoeItemFlags.js');
+    const item = makeItem(makeActor('owner'));
+    const original = structuredClone(item.system);
+    await saveAoeItemSettings(item, {shape: 'cone', origin: 'token', autoEvade: true, evadeModifier: -2,
+        fire: {enabled: true, initialIntensity: 3, maxIntensity: 5}, ammoCost: 1, consumeMode: 'ammo'});
+    const saved = getAoeItemSettings(item);
+    assert.equal(saved.shape, 'cone'); assert.equal(saved.origin, 'token'); assert.equal(saved.blastSize, 'large');
+    assert.equal(saved.autoEvade, true); assert.equal(saved.evadeModifier, -2);
+    assert.deepEqual(saved.fire, {enabled: true, initialIntensity: 3, maxIntensity: 5, ignitionThreshold: 6});
+    assert.deepEqual(item.system, original);
+    await saveAoeItemSettings(item, {shape: 'stream', origin: 'free', consumeMode: 'none'});
+    assert.equal(getAoeItemSettings(item).autoEvade, true);
+    assert.equal(getAoeItemSettings(item).fire.enabled, true);
+    assert.equal(getAoeItemSettings(item).origin, 'free');
+    const savedCount = item.updates.length;
+    for (const bad of [{shape: 'invalid'}, {shape: 'cone', origin: 'nowhere'},
+        {shape: 'cone', evadeModifier: 21}, {shape: 'cone', evadeModifier: 'bad'},
+        {shape: 'cone', fire: {initialIntensity: 6}}, {shape: 'cone', fire: {maxIntensity: 0}},
+        {shape: 'cone', fire: {initialIntensity: 5, maxIntensity: 3}}]) {
+        await assert.rejects(saveAoeItemSettings(item, bad));
+    }
+    assert.equal(item.updates.length, savedCount);
+});
+
+test('native cone flags are recognized only as explicit geometry, and bad imported settings fall back safely', async () => {
+    const {getAoeItemSettings} = await load('AoeItemFlags.js');
+    const item = makeItem(makeActor('owner'));
+    item.system.templates = {cone: true};
+    assert.equal(getAoeItemSettings(item).shape, 'cone');
+    item.flags['swade-tools'] = {aoeTemplateShape: 'unknown', aoeTemplateOrigin: 'unknown',
+        aoeEvadeModifier: 999, aoeFireIntensity: -1, aoeFireMaxIntensity: -1};
+    const settings = getAoeItemSettings(item);
+    assert.equal(settings.shape, 'cone'); assert.equal(settings.origin, 'token');
+    assert.equal(settings.autoEvade, false); assert.equal(settings.evadeModifier, 20);
+    assert.deepEqual(settings.fire, {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6});
 });
 
 test('inventory shows only one explosion shortcut for enabled items and no row options', async () => {

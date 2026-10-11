@@ -39,10 +39,16 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeAnimationService.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/WeaponDamageModifier.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeChatControl.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeGeometry.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/PowerAoeTemplate.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeEvade.js")),
+  ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeFire.js")),
 };
 const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
   playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
-  prepareWeaponDamageModifier, renderAoeAttackTargets, renderAoeDeviationControls, isAoeChatTransactionPending} = aoeServices;
+  prepareWeaponDamageModifier, renderAoeAttackTargets, renderAoeDeviationControls, isAoeChatTransactionPending,
+  placeWeaponAoeTemplatePoint, buildWeaponAoeTemplateData, collectAoeTemplateTargets,
+  resolveAoeEvade, recordAoeFireHit} = aoeServices;
 const animationRuntime = {gameRef: game, hooksRef: Hooks,
   automatedAnimations: globalThis.AutomatedAnimations, sequencerRef: Sequencer,
   SequenceClass: typeof Sequence === "function" ? Sequence : undefined};
@@ -118,6 +124,9 @@ if (!contextualItem) {
 const grenade = weaponActor.items.get(weaponChoice);
 if (!grenade) return ui.notifications.error("The selected AoE weapon could not be found.");
 const selectedAoeSettings = getAoeItemSettings(grenade);
+const templateShape = selectedAoeSettings.shape ?? selectedAoeSettings.blastSize;
+const directionalTemplate = ['scone', 'cone', 'stream'].includes(templateShape);
+const templateOrigin = selectedAoeSettings.origin ?? 'token';
 if (selectedAoeSettings.damageAction && grenade.system.actions?.additional?.[selectedAoeSettings.damageAction]?.type !== "damage") {
   return ui.notifications.warn("This item's configured AoE damage action no longer exists. Update AoE Settings before firing.");
 }
@@ -283,9 +292,16 @@ const blastSize = blastSizeKey[0].toUpperCase() + blastSizeKey.slice(1);
 const blastRadiusSquares = {small: 1, medium: 2, large: 3}[blastSizeKey];
 const sceneDistance = Number(canvas.scene.grid.distance || 1);
 const blastRadius = blastRadiusSquares * sceneDistance;
+const templateLabel = ({small: 'Small Blast Template', medium: 'Medium Blast Template', large: 'Large Blast Template',
+  scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template'})[templateShape];
 
 let cancelled = false;
-const target = poolAttack ? macroScope.attackPoint : await Sequencer.Crosshair.show(
+const target = poolAttack ? macroScope.attackPoint : directionalTemplate
+  ? await placeWeaponAoeTemplatePoint({actor: weaponActor, item: grenade, token: selectedToken,
+      shape: templateShape, origin: templateOrigin}, {canvasRef: canvas, gameRef: game, sequencerRef: Sequencer,
+      configRef: CONFIG, constRef: CONST, notifications: ui.notifications,
+      baseTemplateClass: foundry.canvas?.placeables?.MeasuredTemplate})
+  : await Sequencer.Crosshair.show(
   {
     t: "circle",
     distance: blastRadius,
@@ -381,7 +397,9 @@ if (typeof canvas.grid?.measurePath === "function") {
 const distanceUnits = String(canvas.scene.grid.units || "squares");
 let rangeBand = "Short";
 let rangePenalty = 0;
-if (distance > mediumRange) {
+if (directionalTemplate) {
+  rangeBand = 'Template';
+} else if (distance > mediumRange) {
   rangeBand = "Long";
   rangePenalty = -4;
 } else if (distance > shortRange) {
@@ -485,12 +503,12 @@ const getAthleticsAttemptLabel = (attempt) =>
   attempt.criticalFailure
     ? "Critical Failure"
     : attempt.naturalOneFailure
-      ? "Failure - Resolve Deviation"
+      ? (directionalTemplate ? "Failure - No Effect" : "Failure - Resolve Deviation")
       : attempt.total >= 8
       ? "Success with a Raise"
       : attempt.total >= 4
         ? "Success"
-        : "Failure - Resolve Deviation";
+        : (directionalTemplate ? "Failure - No Effect" : "Failure - Resolve Deviation");
 
 const poolNaturalOneFailure = poolAttack && !isWildCard &&
   poolAttack.rawRoll.dice?.[0]?.results?.[0]?.result === 1;
@@ -615,16 +633,18 @@ const getGrenadeBennyControlsHtml = () => {
 
 
 const templateColor = success ? "#ff6b35" : "#d62828";
+const weaponTemplateGeometry = directionalTemplate ? buildWeaponAoeTemplateData({actor: weaponActor, item: grenade,
+    shape: templateShape, source: sourceCenter, target, scene: canvas.scene, user: game.user,
+    origin: templateOrigin, direction: target.direction ?? 0}) : {
+    t: "circle", x: target.x, y: target.y, distance: blastRadius, direction: 0
+  };
 const templateData = {
-  t: "circle",
+  ...weaponTemplateGeometry,
   author: game.user.id,
-  x: target.x,
-  y: target.y,
-  distance: blastRadius,
-  direction: 0,
   fillColor: templateColor,
   borderColor: templateColor,
   flags: {
+    ...weaponTemplateGeometry.flags,
     world: {
       grenadeItemUuid: grenade.uuid,
       aoeItemUuid: grenade.uuid,
@@ -632,7 +652,9 @@ const templateData = {
       aoeAttackSkillUuid: attackSkill.uuid,
       throwerActorUuid: actingActor.uuid,
       throwSucceeded: success,
-      pendingDeviation: !success,
+      pendingDeviation: !success && !directionalTemplate,
+      aoeTemplateShape: templateShape,
+      aoeTemplateOrigin: templateOrigin,
     },
   },
 };
@@ -645,6 +667,9 @@ const [templateDocument] = await canvas.scene.createEmbeddedDocuments(
 let throwMessage = null;
 const getBlastTargetsHtml = (targets) => renderAoeAttackTargets(targets,
   {baseTotal: total, criticalFailure, naturalOneFailure,
+    shape: templateShape, origin: templateOrigin,
+    autoEvade: selectedAoeSettings.autoEvade,
+    evadeResults: throwMessage?.flags?.world?.aoeEvadeResults,
     deviationResolved: deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved === true});
 const updateBlastTargetText = async (targets) => {
   if (!throwMessage) return;
@@ -658,23 +683,13 @@ const updateBlastTargetText = async (targets) => {
 };
 
 const collectTokensInBlast = (centerX, centerY, notificationLabel) => {
-  const radiusPixels =
-    (blastRadius / Math.max(sceneDistance, Number.EPSILON)) * gridSize;
-  const blastTargets = canvas.tokens.placeables.filter((candidate) => {
-    if (!candidate.actor || candidate.isVisible === false || candidate.visible === false || candidate.document?.hidden) return false;
-    const candidateCenter = candidate.center ?? candidate.getCenterPoint?.();
-    if (!candidateCenter) return false;
-    return (
-      Math.hypot(
-        Number(candidateCenter.x) - Number(centerX),
-        Number(candidateCenter.y) - Number(centerY)
-      ) <= radiusPixels + 0.5
-    );
-  });
+  const blastTargets = collectAoeTemplateTargets({...templateData, x: centerX, y: centerY},
+    canvas.tokens.placeables, {gridSize, sceneDistance, sourceTokenUuid: selectedToken.document.uuid,
+      excludeSource: directionalTemplate && templateOrigin === 'token'});
 
   const targetCount = blastTargets.length;
   ui.notifications.info(
-    `${notificationLabel}: ${targetCount} token${targetCount === 1 ? "" : "s"} inside the blast.`
+    `${notificationLabel}: ${targetCount} token${targetCount === 1 ? "" : "s"} inside the area.`
   );
   return blastTargets;
 };
@@ -696,6 +711,7 @@ let cleanupDeviationTargeting = () => {};
 // the chat-card name list once when this specific template is moved.
 const armGrenadeDeviation = () => {
   cleanupDeviationTargeting();
+  if (directionalTemplate) return;
   let updateTemplateHookId;
   let deleteTemplateHookId;
   let cleanupTimer;
@@ -748,13 +764,14 @@ const armGrenadeDeviation = () => {
   });
   cleanupTimer = setTimeout(cleanupDeviationTargeting, 5 * 60 * 1000);
 };
-if (!success && templateDocument) armGrenadeDeviation();
+if (!success && templateDocument && !directionalTemplate) armGrenadeDeviation();
 
 const useThrownProjectile = isLegacyGrenadeItem(grenade) &&
   /athletics/i.test(attackSkillName);
 // No flags.swade.origin: AA must not also animate createMeasuredTemplate.
 const animationResult = await playAoeAnimation({sourceToken: selectedToken,
   item: grenade, templateDocument, targets: blastTargets, success,
+  allowFallback: !directionalTemplate,
   throwProjectile: useThrownProjectile, blastDiameter: blastRadiusSquares * 2,
   projectileEffect: PROJECTILE_EFFECT, impactEffect: IMPACT_EFFECT}, animationRuntime);
 if (animationResult.reason === "missing-assets") {
@@ -769,7 +786,7 @@ let resultLabel = criticalFailure
     ? "Success with a Raise"
     : success
       ? "Success"
-      : "Failure - Resolve Deviation";
+      : (directionalTemplate ? "Failure - No Effect" : "Failure - Resolve Deviation");
 let resultColor = success ? "#1b7f3a" : "#a61b1b";
 const baseDamage = String(damageSourceItem.system.damage ?? "").trim();
 const additionalActions =
@@ -874,7 +891,7 @@ const renderGrenadeThrowContent = async () => {
       <summary style="cursor:pointer">Details</summary>
       ${weaponActor.type === "vehicle" ? `<div><strong>Operator:</strong> ${escape(actingActor.name)}; <strong>Vehicle:</strong> ${escape(weaponActor.name)}</div>` : ""}
       <div><strong>Range:</strong> ${distance.toFixed(1)} ${escape(distanceUnits)}, ${rangeBand} (${rangePenalty})</div>
-      <div><strong>Blast:</strong> ${blastSize} Blast Template</div>
+      <div><strong>Area:</strong> ${templateLabel}</div>
       ${damageLine}
       <div><strong>Used:</strong> ${chosenDie} ${bestDie} ${signed(totalModifier)} = ${total}; ${resultLabel}</div>
       ${totalModifier ? `<div><strong>Total Modifier:</strong> ${signed(totalModifier)}</div>` : ""}
@@ -907,7 +924,15 @@ const getGrenadeChatState = (targets = blastTargets) => ({
   damageItemUuid: damageSourceItem.uuid,
   sourceTokenUuid: selectedToken.document.uuid,
   templateId: templateDocument.id,
-  originalPoint: {x: target.x, y: target.y},
+  originalPoint: {x: templateData.x, y: templateData.y},
+  shape: templateShape,
+  origin: templateOrigin,
+  geometry: Object.fromEntries(['t', 'x', 'y', 'direction', 'distance', 'width', 'angle']
+    .filter(key => templateData[key] !== undefined).map(key => [key, templateData[key]])),
+  autoEvade: selectedAoeSettings.autoEvade === true,
+  evadeModifier: selectedAoeSettings.evadeModifier ?? -2,
+  fire: {...selectedAoeSettings.fire},
+  evadeResults: throwMessage?.flags?.world?.aoeEvadeResults,
   deviationResolved: deviationResolved || throwMessage?.flags?.world?.aoeAttack?.deviationResolved === true,
   resolvedPoint: resolvedPoint ?? throwMessage?.flags?.world?.aoeAttack?.resolvedPoint ?? null,
   targets: targets.map((entry) => ({id: entry.id,
@@ -942,6 +967,12 @@ const createGrenadeThrowMessage = async (previousMessage = null) => ChatMessage.
   flags: { world: { aoeAttack: getGrenadeChatState(), ...(poolAttack ? {aoePoolId: poolAttack.poolId,
       aoePoolCandidate: poolAttack.candidateIndex} : {grenadeBennySession: grenadeBennyKey}),
     ...(previousMessage ? {aoePreviousMessage: previousMessage.id} : {}),
+    ...(previousMessage?.flags?.world?.aoeEvadeResults ? {
+      aoeEvadeResults: structuredClone(previousMessage.flags.world.aoeEvadeResults)
+    } : {}),
+    ...(previousMessage?.flags?.world?.aoeFireResults ? {
+      aoeFireResults: structuredClone(previousMessage.flags.world.aoeFireResults)
+    } : {}),
   } },
   content: await renderGrenadeThrowContent(),
 });
@@ -1289,15 +1320,36 @@ if (damage) {
     }
 
     damageWorkflowStarted = true;
-    let completed = 0;
+    let completed = 0, evaded = 0, pending = 0;
+    const targetStillAllowed = targetUuid => {
+      const latest = throwMessage?.flags?.world;
+      const state = latest?.aoeAttack;
+      return !latest?.aoeSuperseded && state && (state.success || !directionalTemplate && state.deviationResolved) &&
+        state.targets?.some(target => target.uuid === targetUuid);
+    };
     for (const targetToken of uniqueTargets) {
       try {
+        if (!targetStillAllowed(targetToken.document.uuid)) break;
+        if (selectedAoeSettings.autoEvade === true) {
+          if (typeof resolveAoeEvade !== 'function') throw new Error('The AoE Evade service is unavailable. Reload Foundry.');
+          const defense = await resolveAoeEvade(throwMessage, targetToken.document.uuid);
+          if (!targetStillAllowed(targetToken.document.uuid)) break;
+          if (!defense?.allowed) {
+            if (defense?.evaded) evaded += 1;
+            else pending += 1;
+            continue;
+          }
+        }
         // Open SWADE Tools for one target at a time. Each click creates a
         // separate SWADE Tools damage roll/card and only that target ID is
         // injected into the card.
         await withSuppressedAoeAutomation([grenade, damageSourceItem],
           () => rollDamageWithSwadeTools([targetToken]), animationRuntime);
         completed += 1;
+        if (selectedAoeSettings.fire?.enabled === true) {
+          if (typeof recordAoeFireHit !== 'function') throw new Error('The AoE Fire service is unavailable. Reload Foundry.');
+          await recordAoeFireHit(throwMessage, targetToken.document.uuid);
+        }
 
         // Give the previous SWADE Tools Dialog/chat workflow time to close
         // before opening the next target's independent damage dialog.
@@ -1318,7 +1370,7 @@ if (damage) {
     }
 
     ui.notifications.info(
-      `${grenade.name}: ${completed}/${uniqueTargets.length} independent SWADE Tools damage rolls completed.`
+      `${grenade.name}: ${completed}/${uniqueTargets.length - evaded - pending} independent SWADE Tools damage rolls completed.${evaded ? ` ${evaded} evaded.` : ''}${pending ? ` ${pending} awaiting Evade.` : ''}`
     );
   };
 
@@ -1409,11 +1461,11 @@ const rerollGrenadeAthletics = async (source, messageId) => {
           fillColor: color,
           borderColor: color,
           "flags.world.throwSucceeded": success,
-          "flags.world.pendingDeviation": !success,
+          "flags.world.pendingDeviation": !success && !directionalTemplate,
         };
         if (success && !previousSuccess) {
-          changes.x = target.x;
-          changes.y = target.y;
+          changes.x = templateData.x;
+          changes.y = templateData.y;
         }
         suppressDeviationUpdate = true;
         try {
@@ -1425,7 +1477,7 @@ const rerollGrenadeAthletics = async (source, messageId) => {
           Number(templateDocument.x), Number(templateDocument.y),
           `${grenade.name} rerolled blast`
         );
-        if (!success) armGrenadeDeviation();
+        if (!success && !directionalTemplate) armGrenadeDeviation();
       } else if (!templateStillExists) {
         athleticsReviewNote += " The blast template was removed, so its position was not updated.";
       }

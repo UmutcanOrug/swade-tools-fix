@@ -142,8 +142,34 @@ export const showAoeItemSettings = async (actor, item) => {
             content: `<div class="standard-form">
                 <p class="hint">Uses the weapon's native Trait${item.system?.actions?.trait ? `: ${escape(String(item.system.actions.trait))}` : ''}. Edit Trait on the weapon's Properties tab to change the attack skill.</p>
                 <div class="form-group">
-                    <label>Blast Template</label>
-                    <div class="form-fields"><select name="aoeBlastSize">${['small', 'medium', 'large'].map(size => `<option value="${size}" ${settings.blastSize === size ? 'selected' : ''}>${size[0].toUpperCase() + size.slice(1)} Blast Template</option>`).join('')}</select></div>
+                    <label>Template Shape</label>
+                    <div class="form-fields"><select name="aoeTemplateShape">${[
+                        ['small', 'Small Blast Template'], ['medium', 'Medium Blast Template'],
+                        ['large', 'Large Blast Template'], ['scone', 'Small Cone Template'],
+                        ['cone', 'Cone Template'], ['stream', 'Stream Template']
+                    ].map(([shape, label]) => `<option value="${shape}" ${settings.shape === shape ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+                </div>
+                <div class="form-group"><label>Template Origin</label>
+                    <div class="form-fields"><select name="aoeTemplateOrigin">
+                        <option value="token" ${settings.origin === 'token' ? 'selected' : ''}>Firing Token</option>
+                        <option value="free" ${settings.origin === 'free' ? 'selected' : ''}>Place Freely</option>
+                    </select></div>
+                    <p class="hint">Cones and streams. Free placement: mouse wheel rotates.</p>
+                </div>
+                <div class="form-group"><label>Automatic Evade</label>
+                    <div class="form-fields"><input name="aoeAutoEvade" type="checkbox" ${settings.autoEvade ? 'checked' : ''}></div>
+                </div>
+                <div class="form-group"><label>Evade Modifier</label>
+                    <div class="form-fields"><input name="aoeEvadeModifier" type="number" value="${settings.evadeModifier}" min="-20" max="20" step="1"></div>
+                </div>
+                <div class="form-group"><label>Enable Fire</label>
+                    <div class="form-fields"><input name="aoeFireEnabled" type="checkbox" ${settings.fire.enabled ? 'checked' : ''}></div>
+                </div>
+                <div class="form-group"><label>Initial Fire Damage (d6)</label>
+                    <div class="form-fields"><input name="aoeFireIntensity" type="number" value="${settings.fire.initialIntensity}" min="1" max="5" step="1"></div>
+                </div>
+                <div class="form-group"><label>Maximum Fire Damage (d6)</label>
+                    <div class="form-fields"><input name="aoeFireMaxIntensity" type="number" value="${settings.fire.maxIntensity}" min="1" max="10" step="1"></div>
                 </div>
                 <div class="form-group">
                     <label>Damage Action</label>
@@ -167,7 +193,15 @@ export const showAoeItemSettings = async (actor, item) => {
             ok: {
                 label: 'Save Settings',
                 callback: (event, button) => ({
-                    blastSize: button.form.elements.aoeBlastSize.value,
+                    shape: button.form.elements.aoeTemplateShape?.value ?? button.form.elements.aoeBlastSize?.value,
+                    origin: button.form.elements.aoeTemplateOrigin?.value ?? settings.origin,
+                    autoEvade: button.form.elements.aoeAutoEvade?.checked ?? settings.autoEvade,
+                    evadeModifier: button.form.elements.aoeEvadeModifier?.valueAsNumber ?? settings.evadeModifier,
+                    fire: {
+                        enabled: button.form.elements.aoeFireEnabled?.checked ?? settings.fire.enabled,
+                        initialIntensity: button.form.elements.aoeFireIntensity?.valueAsNumber ?? settings.fire.initialIntensity,
+                        maxIntensity: button.form.elements.aoeFireMaxIntensity?.valueAsNumber ?? settings.fire.maxIntensity
+                    },
                     damageAction: button.form.elements.aoeDamageAction.value,
                     consumeMode: button.form.elements.aoeConsumeItem.checked ? 'item'
                         : button.form.elements.aoeConsumeAmmo.checked ? 'ammo' : 'none',
