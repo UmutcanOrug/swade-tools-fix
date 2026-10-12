@@ -393,6 +393,63 @@ test('chat role enforcement hides controls from players and secondary GMs after 
     }
 });
 
+test('late-added pending sections expose Apply to the current primary GM only', async () => {
+    const f = await fixture();
+    await f.api.registerPropertyCandidate(f.input, f.runtime);
+    const primary = f.api.renderPropertyCandidates(f.message, f.runtime);
+    assert.match(primary, /<span data-properties-gm><button[^>]+data-properties-apply=/);
+    assert.doesNotMatch(primary, /<details[^>]+\bopen\b/);
+    for (const user of [f.player, {id: 'secondary', isGM: true, active: true}]) {
+        f.game.user = user;
+        if (user.isGM) f.game.users.set(user.id, user);
+        const html = f.api.renderPropertyCandidates(f.message, f.runtime);
+        assert.match(html, /<span data-properties-gm hidden>/);
+        if (user.isGM) assert.match(html, /Approval GM: gm\./);
+        else assert.doesNotMatch(html, /Approval GM:/);
+    }
+    f.game.user = f.gm;
+    assert.equal(f.api.renderPropertyCandidates({...f.message, isContentVisible: false}, f.runtime), '');
+    assert.equal(f.calls.create.length, 0, 'rendering never applies the pending effect');
+});
+
+test('late-added resolved sections expose Undo only to the current primary GM', async () => {
+    const f = await fixture(), candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+    const html = f.api.renderPropertyCandidates(f.message, f.runtime);
+    assert.match(html, /<span data-properties-gm><button[^>]+data-properties-undo=/);
+    assert.doesNotMatch(html, /data-properties-apply=/);
+    f.game.user = f.player;
+    assert.match(f.api.renderPropertyCandidates(f.message, f.runtime), /<span data-properties-gm hidden>/);
+});
+
+test('chat controls registered before game initialization use the current viewer at render and click time', async () => {
+    const {registerPropertiesChatControls} = await chatService;
+    const f = await fixture(), candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    const handlers = {}, listeners = {}, previous = globalThis.game;
+    try {
+        delete globalThis.game;
+        registerPropertiesChatControls({...f.runtime, gameRef: undefined,
+            hooks: {on(name, callback) {handlers[name] = callback;}},
+            documentRef: {addEventListener(name, callback) {listeners[name] = callback;}}});
+        globalThis.game = f.game;
+        const span = {hidden: true};
+        handlers.renderChatMessageHTML(f.message, {querySelectorAll: () => [span]});
+        assert.equal(span.hidden, false);
+        const control = {dataset: {propertiesApply: candidate.id},
+            closest: () => ({dataset: {messageId: f.message.id}})};
+        await listeners.click({preventDefault() {}, target: {closest: () => control}});
+        assert.equal(f.calls.create.length, 1);
+        f.game.user = f.player;
+        handlers.renderChatMessageHTML(f.message, {querySelectorAll: () => [span]});
+        assert.equal(span.hidden, true);
+        await listeners.click({preventDefault() {}, target: {closest: () => control}});
+        assert.equal(f.calls.create.length, 1);
+    } finally {
+        if (previous === undefined) delete globalThis.game;
+        else globalThis.game = previous;
+    }
+});
+
 test('primary-GM chat Apply and Undo reuse the same card and exact world-approved candidate', async () => {
     const {registerPropertiesChatControls} = await chatService;
     const f = await fixture(), handlers = {}, listeners = {}, candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);

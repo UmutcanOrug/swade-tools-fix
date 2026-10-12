@@ -58,6 +58,11 @@
 .swadetools-properties-dialog button:hover { background: #d6cbb2; border-color: #7e603d; }
 .swadetools-properties-dialog button:disabled { opacity: .5; cursor: default; }
 .swadetools-properties-dialog .st-property-search { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 7px; }
+.swadetools-properties-dialog .st-property-scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.swadetools-properties-dialog .st-property-scopes button { height: auto; min-height: 30px; white-space: normal; line-height: 1.3; padding: 5px 6px; }
+.swadetools-properties-dialog .st-property-scopes button[aria-pressed="true"] { background: #cfc1a2; border-color: #7e603d; }
+.swadetools-properties-dialog .st-property-scope-heading { color: #54442e; font-size: 12px; font-weight: 700; margin: 0; }
+.swadetools-properties-dialog .st-properties .st-property-legacy { color: #87551d; }
 .swadetools-properties-dialog .st-property-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .swadetools-properties-dialog .st-property-toolbar > button { width: auto; flex: 0 0 auto; }
 .swadetools-properties-dialog .st-property-toolbar [data-property-count] { color: #655e4c; font-size: 11px; margin-right: auto; }

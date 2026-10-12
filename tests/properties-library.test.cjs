@@ -17,9 +17,10 @@ test('library contains broad supported searchable examples with English and Turk
     const f = fixture(), library = getPropertyLibrary(f.runtime);
     assert.equal(library.version, 1); assert.ok(library.presets.length >= 35);
     assert.ok(new Set(library.presets.map(entry => entry.category)).size >= 7);
-    assert.ok(searchPropertyPresets('zırh', 'all', f.runtime).length >= 3);
+    assert.ok(searchPropertyPresets('zırh', 'all', f.runtime, 'character').length >= 2);
+    assert.ok(searchPropertyPresets('zırh', 'all', f.runtime, 'weapon').length >= 1);
     assert.equal(searchPropertyPresets('kaçınma', 'Defense', f.runtime).some(entry => entry.id === 'builtin.dodge'), true);
-    assert.equal(searchPropertyPresets('zehir', 'all', f.runtime)[0].id, 'builtin.poison-wound');
+    assert.equal(searchPropertyPresets('zehir', 'all', f.runtime, 'weapon')[0].id, 'builtin.poison-wound');
     assert.equal(searchPropertyPresets('shooting', 'Skills', f.runtime).some(entry => entry.id === 'builtin.shooting-buff'), true);
     assert.equal(searchPropertyPresets('ignore', 'Defense', f.runtime).some(entry => entry.id === 'builtin.ignore-gangup'), true);
     assert.equal(searchPropertyPresets('IGNORE', 'Defense', f.runtime).some(entry => entry.id === 'builtin.ignore-gangup'), true);
@@ -45,9 +46,9 @@ test('custom presets can be edited, favorited and removed without changing appro
     const api = await load(), f = fixture(), item = {uuid: 'Actor.actor.Item.weapon'};
     await api.saveItemPropertyRules(item, [{id: 'approved', action: 'attackMod', value: 1}], f.runtime);
     await api.savePropertyPreset({id: 'custom.weakening', name: 'My Weakening', category: 'Campaign', aliases: ['benim'], rules: [{id: 'weaken', action: 'traitSteps', value: -1}]}, f.runtime);
-    assert.equal(api.searchPropertyPresets('benim', 'Campaign', f.runtime).length, 1);
+    assert.equal(api.searchPropertyPresets('benim', 'Campaign', f.runtime, 'weapon').length, 1);
     await api.setPropertyFavorite('custom.weakening', true, f.runtime);
-    assert.equal(api.searchPropertyPresets('', 'all', f.runtime)[0].id, 'custom.weakening');
+    assert.equal(api.searchPropertyPresets('', 'all', f.runtime, 'weapon')[0].id, 'custom.weakening');
     await api.savePropertyPreset({id: 'custom.weakening', name: 'Edited', rules: [{id: 'weaken', action: 'traitSteps', value: -2}]}, f.runtime);
     assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'custom.weakening').rules[0].value, -2);
     assert.equal(api.getItemPropertyRules(item, f.runtime)[0].value, 1);
@@ -108,5 +109,57 @@ test('merge import keeps existing assignments and combines custom catalogs', asy
     await api.importPropertyLibrary(JSON.stringify({version: 1, presets: [{id: 'imported', name: 'Imported', rules: [{id: 'new', value: 2}]}], assignments: {'Item.new': [{id: 'new', value: 3}]}, favorites: ['imported']}), {}, f.runtime);
     assert.equal(api.getItemPropertyRules('Item.old', f.runtime)[0].value, 1);
     assert.equal(api.getItemPropertyRules('Item.new', f.runtime)[0].value, 3);
-    assert.equal(api.searchPropertyPresets('', 'all', f.runtime)[0].id, 'imported');
+    assert.equal(api.searchPropertyPresets('', 'all', f.runtime, 'weapon')[0].id, 'imported');
+});
+
+test('builtins have intentional disjoint scopes and searching never combines libraries', async () => {
+    const api = await load(), f = fixture(), library = api.getPropertyLibrary(f.runtime);
+    const weapon = api.searchPropertyPresets('', 'all', f.runtime, 'weapon');
+    const character = api.searchPropertyPresets('', 'all', f.runtime, 'character');
+    assert.equal(weapon.length, 17); assert.equal(character.length, 23);
+    assert.equal(new Set([...weapon, ...character].map(entry => entry.id)).size, library.presets.length);
+    assert.equal(weapon.some(entry => entry.id === 'builtin.dodge'), false);
+    assert.equal(weapon.some(entry => entry.id === 'builtin.strength-buff'), false);
+    assert.equal(character.some(entry => entry.id === 'builtin.weakening'), false);
+    assert.equal(character.every(entry => entry.rules.every(rule => rule.trigger === 'passive')), true);
+    assert.equal(api.searchPropertyPresets('dodge', 'all', f.runtime, 'weapon').length, 0);
+    assert.equal(api.searchPropertyPresets('weakening', 'all', f.runtime, 'character').length, 0);
+    assert.throws(() => api.searchPropertyPresets('', 'all', f.runtime, 'all'), /scope/);
+    assert.equal(api.getItemPropertyScope({type: 'power'}), 'weapon');
+    for (const type of ['edge', 'ability', 'hindrance', 'armor', 'gear']) assert.equal(api.getItemPropertyScope({type}), 'character');
+});
+
+test('legacy scope migration is deterministic, keeps mixed rules and never changes existing assignments', async () => {
+    const api = await load(), f = fixture();
+    const mixed = [{id: 'old-hit', action: 'traitSteps', trigger: 'hit', value: -1}, {id: 'old-cover', action: 'cover', value: -2}];
+    await api.importPropertyLibrary(JSON.stringify({version: 1, presets: [
+        {id: 'mixed', rules: mixed}, {id: 'char', rules: [{id: 'passive', action: 'traitSteps', trigger: 'passive', value: 1}]},
+        {id: 'attack', rules: [{id: 'attack', action: 'attackMod', value: 1}]}
+    ], assignments: {'Item.legacy': mixed}}), {}, f.runtime);
+    assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'mixed').scope, 'weapon');
+    assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'char').scope, 'character');
+    assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'attack').scope, 'weapon');
+    assert.equal(api.getItemPropertyRules('Item.legacy', f.runtime).length, 2);
+    assert.equal(api.getItemPropertyRules('Item.legacy', f.runtime)[0].trigger, 'hit');
+    assert.equal(api.getItemPropertyRules('Item.legacy', f.runtime)[1].action, 'cover');
+    const mixedPreset = api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'mixed');
+    assert.equal(mixedPreset.rules.length, 2);
+    assert.equal(api.isPropertyRuleInScope(mixedPreset.rules[0], mixedPreset.scope), true);
+    assert.equal(api.isPropertyRuleInScope(mixedPreset.rules[1], mixedPreset.scope), false);
+});
+
+test('custom scope metadata survives edits and export/import and invalid scope values fail before writes', async () => {
+    const api = await load(), f = fixture();
+    await api.savePropertyPreset({id: 'edge-bonus', scope: 'character', rules: [{id: 'a', action: 'attackMod', value: 2}]}, f.runtime);
+    await api.savePropertyPreset({id: 'edge-bonus', name: 'Renamed', rules: [{id: 'a', action: 'attackMod', value: 3}]}, f.runtime);
+    assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'edge-bonus').scope, 'character');
+    const fresh = fixture(); await api.importPropertyLibrary(api.exportPropertyLibrary(f.runtime), {}, fresh.runtime);
+    assert.equal(api.getPropertyLibrary(fresh.runtime).presets.find(entry => entry.id === 'edge-bonus').scope, 'character');
+    const before = fresh.writes.length;
+    for (const scope of ['all', 'both', '', null, {}, ['weapon']]) {
+        await assert.rejects(() => api.savePropertyPreset({id: 'invalid', scope, rules: []}, fresh.runtime), /scope/);
+        await assert.rejects(() => api.importPropertyLibrary(JSON.stringify({version: 1, presets: [{id: 'invalid', scope, rules: []}]}), {}, fresh.runtime), /scope/);
+    }
+    await assert.rejects(() => api.savePropertyPreset({id: 'builtin.dodge', scope: 'weapon', rules: []}, fresh.runtime), /original library/);
+    assert.equal(fresh.writes.length, before);
 });

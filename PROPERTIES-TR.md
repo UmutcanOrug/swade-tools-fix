@@ -1,6 +1,6 @@
-# Properties & Effects — 2.2.0
+# Properties & Effects — 2.2.1
 
-2.2.0 normal güncelleme kanalında ve ana daldadır. Yeni Properties sistemi
+2.2.1 normal güncelleme kanalında ve ana daldadır. Yeni Properties sistemi
 varsayılan kapalıdır. Canlı oyunun ortasında kurmayın. Önce Foundry'den dünyanın
 ayrıca yedeğini alın. Önceki 2.1.20 sürümü geri dönüş için durur; hazırlanan
 2.1.20 ZIP yalnız modül dosyalarının yedeğidir.
@@ -31,8 +31,15 @@ tüm bağlı istemciler yeniden başlatılmalı.
    **Save Properties** onayından önce değişiklikler taslaktır. **Preview / Test**
    gerçek zar atmaz, kaynak harcamaz ve karakteri değiştirmez.
 
-Kütüphanede 40 düzenlenebilir başlangıç şablonu, kategoriler, favoriler ve
-Türkçe/İngilizce arama vardır. Şablonu düzenlemek daha önce item'a eklenmiş
+Kütüphanede iki ayrı liste vardır: **Weapon / Power** saldırı-isabet özellikleri
+ve **Edge / Ability / Character** sürekli karakter özellikleri. Item'dan açılan
+seçici yalnız kendi listesini gösterir; birleşik “Tümünü göster” yoktur.
+Genel ayarlar kütüphanesinde iki liste ayrı sekmelerdedir. Yeni özel özelliklerin
+eylem ve tetikleyici seçenekleri de bulundukları listeye uygundur.
+
+40 düzenlenebilir başlangıç şablonu, kategoriler, favoriler ve Türkçe/İngilizce
+arama vardır. Eski kayıtlardaki özellikler silinmez; daha önce atanmış karma
+özellikler çalışmaya devam eder ve düzenlenebilir. Şablonu düzenlemek daha önce item'a eklenmiş
 kopyaları değiştirmez. Kopyalanan item yeni kimlik aldığı için GM yeniden
 onaylamalıdır. Oyuncunun kendi item flag'lerini değiştirmesi kuralları onaylamaz.
 
@@ -45,6 +52,13 @@ onaylamalıdır. Oyuncunun kendi item flag'lerini değiştirmesi kuralları onay
   ile yetkili GM uygular. Direnç varsa zar ve sonuç aynı bölümde görünür.
 - Yarayla zehir: **Poison Wound** ancak GM hasarı gerçekten uygulayıp kalan
   yara oluştuğunda çalışır. Hasar önizlemesi veya tamamen emilmiş yara yetmez.
+
+**Pending**, etkinin henüz uygulanmadığı anlamındadır. 2.2.1'de GM düğmesinin
+gizli kalması düzeltildi: eski pending kartlarda da sayfayı yeniden yükledikten
+sonra **Apply Effects** görünür. Sırf düğmeyi görmek için yeniden saldırı atmayın.
+Birden fazla GM bağlıysa çift uygulamayı önlemek için onayı sistemin seçtiği
+aktif GM verir; diğer GM'de onay verecek GM'nin adı görünür, oyuncularda
+uygulama düğmesi gizlidir.
 
 Stat düşüşleri temel karakter değerlerinin üzerine yazılmaz; yönetilen native
 Active Effect olarak görünür. Süreli efektler native combat süresiyle biter.
@@ -59,6 +73,11 @@ otomatik Edge verme ve serbest kod çalıştırma bu pakette yoktur. Sayısal Ro
 sonucuyla çelişen elle seçilmiş Hit/Raise yeni efekt için kabul edilmez.
 
 ## Güvenli geri dönüş
+
+Bu güncellemeden önce dünya/kütüphane yedeği alın. 2.2.1'in şablon liste bilgisi
+2.2.0 tarafından tanınmaz; özellikle 2.2.0'a dönmek için güncelleme öncesi
+dünya/kütüphane yedeğinizi kullanın. Yalnız modül ZIP'ini değiştirmek yeni
+kütüphane verisini eski biçime çevirmez.
 
 1. Bu sürüm hâlâ kurulu iken **Experimental Properties & Effects** ayarını kapatın.
    Yalnız yeni sistemin yönettiği efektler devre dışı kalır; On Fire ve diğer

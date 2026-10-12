@@ -4,7 +4,9 @@ const registrations = new WeakSet();
 export const registerPropertiesChatControls = (runtime = {}) => {
     const document = runtime.documentRef ?? globalThis.document;
     const hooks = runtime.hooks ?? globalThis.Hooks;
-    const game = runtime.gameRef ?? globalThis.game;
+    // Modules can register before game exists; resolve the current viewer
+    // when a card is rendered or a control is clicked.
+    const gameOf = () => runtime.gameRef ?? runtime.game ?? globalThis.game;
     if (!document?.addEventListener || !hooks?.on || registrations.has(document)) return;
     registrations.add(document);
     hooks.on('renderChatMessageHTML', (message, html) => {
@@ -12,10 +14,11 @@ export const registerPropertiesChatControls = (runtime = {}) => {
         root?.querySelectorAll?.('[data-properties-gm]').forEach(control => {
             // Persisted Foundry HTML sanitization can strip hidden. Reapply
             // authorization per viewer; click handlers enforce it again.
-            control.hidden = message.isContentVisible === false || !isPrimaryPropertiesGm(game);
+            control.hidden = message.isContentVisible === false || !isPrimaryPropertiesGm(gameOf());
         });
     });
     document.addEventListener('click', async event => {
+        const game = gameOf();
         const control = event.target?.closest?.('[data-properties-apply],[data-properties-undo]');
         if (!control || !isPrimaryPropertiesGm(game)) return;
         event.preventDefault();

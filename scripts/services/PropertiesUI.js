@@ -5,7 +5,9 @@ import {
 import {
     getPropertyLibrary, getItemPropertyRules, saveItemPropertyRules,
     savePropertyPreset, removePropertyPreset, setPropertyFavorite,
-    exportPropertyLibrary, importPropertyLibrary, normalizePropertyPreset, foldPropertySearch
+    exportPropertyLibrary, importPropertyLibrary, normalizePropertyPreset, foldPropertySearch,
+    PROPERTY_LIBRARY_SCOPES, PROPERTY_LIBRARY_SCOPE_LABELS, normalizePropertyScope,
+    getItemPropertyScope, getPropertyPresetScope, isPropertyRuleInScope
 } from './PropertiesLibrary.js';
 
 const SUPPORTED_ITEMS = new Set(['weapon', 'power', 'edge', 'ability', 'hindrance', 'gear', 'armor', 'shield', 'ancestry', 'race']);
@@ -24,7 +26,7 @@ const input = (name, value, extra = '') => `<input name="${escape(name)}" value=
 const select = (name, values, value, labels = {}) => `<select name="${escape(name)}">${options(values, value, labels)}</select>`;
 const number = (name, value, min = -100, max = 100, step = 1) => input(name, value, `type="number" min="${min}" max="${max}" step="${step}"`);
 const check = (name, label, checked) => `<label class="st-property-check"><input type="checkbox" name="${escape(name)}"${checked ? ' checked' : ''}><span>${escape(label)}</span></label>`;
-const button = (command, label, id = '', extra = '') => `<button type="button" data-property-command="${escape(command)}"${id ? ` data-property-id="${escape(id)}"` : ''} ${extra}>${escape(label)}</button>`;
+const button = (command, label, id = '', extra = '') => `<button type="button" data-property-command="${escape(command)}"${id !== '' && id !== null && id !== undefined ? ` data-property-id="${escape(id)}"` : ''} ${extra}>${escape(label)}</button>`;
 const errorMessage = error => error?.message ?? 'The property could not be saved.';
 const busy = async (element, operation, runtime) => {
     if (element?.disabled) return;
@@ -69,8 +71,18 @@ const waitValidatedDialog = (config, runtime) => {
     });
 };
 const rootOf = dialog => asElement(dialog?.element)?.querySelector?.('[data-property-root]');
-const actionEntries = () => Object.entries(PROPERTY_ACTIONS).filter(([key, value]) => key !== 'grantEdge' && value?.supported !== false);
+const actionEntries = (scope, legacy = false) => Object.entries(PROPERTY_ACTIONS).filter(([key, value]) => key !== 'grantEdge' && value?.supported !== false &&
+    (!scope || legacy || scope === 'character' || ['attackMod', 'damageMod'].includes(key) || value.kind === 'effect'));
 const actionKind = action => PROPERTY_ACTIONS[action]?.kind ?? 'passive';
+const newRuleForScope = scope => scope === 'weapon'
+    ? {action: 'status', status: 'distracted', value: 1, trigger: 'hit', target: 'target', duration: {rounds: 1}}
+    : {action: 'attackMod', value: 0, trigger: 'passive', target: 'self'};
+const scopeLabel = scope => PROPERTY_LIBRARY_SCOPE_LABELS[normalizePropertyScope(scope)];
+const scopeHint = scope => scope === 'weapon'
+    ? 'Weapon / Power properties: attack bonuses and effects triggered by this attack.'
+    : 'Character properties: passive Edge, Ability and bearer bonuses.';
+const scopedPresets = (library, scope) => (library?.presets ?? []).filter(entry => getPropertyPresetScope(entry) === scope);
+const legacyRuleNotice = '<p class="st-property-notice">Previously saved cross-library properties are preserved. Editing them does not change their trigger or recipient automatically. New properties use this library only.</p>';
 
 export const summarizePropertyRule = rule => {
     const action = PROPERTY_ACTIONS[rule?.action]?.label ?? titleCase(rule?.action);
@@ -86,11 +98,12 @@ const rulesMarkup = (rules, editable = true) => rules.length ? rules.map((rule, 
     ${editable ? `<div class="st-property-row-actions">${button('toggle-rule', rule.enabled === false ? 'Off' : 'On', index, `aria-label="${rule.enabled === false ? 'Enable' : 'Disable'} ${escape(rule.name)}"`)}${button('edit-rule', 'Edit', index)}${button('remove-rule', '×', index, 'title="Remove property" aria-label="Remove property"')}</div>` : ''}</li>`).join('') : '<li class="st-property-empty">No properties. Add one from the searchable library or create a custom rule.</li>';
 
 /** Pure markup; all user-authored strings are escaped before entering a dialog. */
-export const renderPropertyLibrary = (library, {query = '', category = 'all', favoritesOnly = false, picker = false} = {}) => {
+export const renderPropertyLibrary = (library, {query = '', category = 'all', favoritesOnly = false, picker = false, scope = 'character'} = {}) => {
+    normalizePropertyScope(scope);
     const fold = foldPropertySearch;
     const terms = fold(query).trim().split(/\s+/u).filter(Boolean);
     const favorites = new Set(library?.favorites ?? []), hidden = new Set(library?.hiddenPresets ?? []);
-    const presets = (library?.presets ?? []).filter(preset => !hidden.has(preset.id) &&
+    const presets = scopedPresets(library, scope).filter(preset => !hidden.has(preset.id) &&
         (category === 'all' || preset.category === category) && (!favoritesOnly || favorites.has(preset.id)) &&
         terms.every(term => fold([preset.name, preset.category, preset.description, ...(preset.aliases ?? []), ...(preset.rules ?? []).map(summarizePropertyRule)].join(' ')).includes(term)))
         .sort((a, b) => Number(favorites.has(b.id)) - Number(favorites.has(a.id)) || a.name.localeCompare(b.name));
@@ -98,19 +111,22 @@ export const renderPropertyLibrary = (library, {query = '', category = 'all', fa
         <div class="st-property-preset-heading"><strong>${escape(preset.name)}</strong><span class="st-property-category">${escape(preset.category)}</span></div>
         <div class="st-property-preset-description">${escape(preset.description ?? '')}</div>
         <small>${escape((preset.rules ?? []).map(summarizePropertyRule).join(' · '))}</small>
+        ${(preset.rules ?? []).some(rule => !isPropertyRuleInScope(rule, scope)) ? '<small class="st-property-legacy">Saved legacy cross-library rule — preserved.</small>' : ''}
         <div class="st-property-row-actions">${button('favorite', favorites.has(preset.id) ? '★' : '☆', preset.id, `title="${favorites.has(preset.id) ? 'Remove favorite' : 'Add favorite'}" aria-label="${favorites.has(preset.id) ? 'Remove favorite' : 'Add favorite'} ${escape(preset.name)}"`)}
         ${picker ? button('choose-preset', 'Add', preset.id) : `${button('edit-preset', 'Edit', preset.id)}${button('duplicate-preset', 'Duplicate', preset.id)}${button('delete-preset', preset.builtin ? 'Hide' : 'Delete', preset.id)}`}</div>
     </li>`).join('') : '<li class="st-property-empty">No matches. Try a different word or category.</li>';
 };
 
-const libraryMarkup = (library, {picker = false, query = ''} = {}) => {
-    const categories = [...new Set(library.presets.map(preset => preset.category))].sort();
+const libraryMarkup = (library, {picker = false, query = '', scope = 'character'} = {}) => {
+    const categories = [...new Set(scopedPresets(library, scope).map(preset => preset.category))].sort();
     return `<section class="st-properties" data-property-root>
-        <div class="st-property-search"><input type="search" data-property-search value="${escape(query)}" placeholder="Search Edge, Ability or property…" aria-label="Search property library" autofocus>
+        ${picker ? `<p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>` : `<nav class="st-property-scopes" aria-label="Separate property libraries">${PROPERTY_LIBRARY_SCOPES.map(value => button('switch-scope', scopeLabel(value), value, `aria-pressed="${scope === value}"`)).join('')}</nav>`}
+        <p class="st-property-hint" data-property-scope-hint>${escape(scopeHint(scope))}</p>
+        <div class="st-property-search"><input type="search" data-property-search value="${escape(query)}" placeholder="${scope === 'weapon' ? 'Search attack or on-hit property…' : 'Search Edge, Ability or passive property…'}" aria-label="Search property library" autofocus>
         <select data-property-category aria-label="Property category">${options(['all', ...categories], 'all', {all: 'All categories'})}</select></div>
         <div class="st-property-toolbar"><label class="st-property-check"><input type="checkbox" data-property-favorites><span>Favorites</span></label><span data-property-count></span>
-        ${button('new-preset', '+ New preset')}${!picker ? `${button('import-library', 'Import')}${button('export-library', 'Export')}` : button('new-custom', '+ Custom property')}</div>
-        <ul class="st-property-list" data-property-preset-list>${renderPropertyLibrary(library, {picker, query})}</ul>
+        ${button('new-preset', '+ New preset')}${!picker ? `${button('import-library', 'Import both')}${button('export-library', 'Export both')}` : button('new-custom', '+ Custom property')}</div>
+        <ul class="st-property-list" data-property-preset-list>${renderPropertyLibrary(library, {picker, query, scope})}</ul>
         <details class="st-property-details"><summary>More Details</summary><p class="st-property-hint">Presets are editable templates, not complete automation for every official Edge. Adding a preset copies its properties to the item; later library edits do not alter existing items. Native Edge behavior is not automatically replaced: do not add a second copy of an already implemented bonus. Built-in presets can be edited or hidden. JSON import accepts data only, never scripts.</p>${!picker ? button('show-hidden', 'Restore hidden presets') : ''}</details>
     </section>`;
 };
@@ -122,14 +138,15 @@ const showExport = async runtime => {
     const json = exportPropertyLibrary(runtime);
     const download = runtime.saveDataToFile ?? globalThis.saveDataToFile;
     if (download) { download(json, 'application/json', 'swade-tools-property-library.json'); return; }
-    await waitDialog({window: {title: 'Export Properties Library'}, content: `<section class="st-properties" data-property-root><p class="st-property-hint">Copy this data to a .json file.</p><textarea rows="14" readonly>${escape(json)}</textarea></section>`, buttons: [{action: 'close', label: 'Close'}]}, runtime);
+    await waitDialog({window: {title: 'Export Properties Libraries'}, content: `<section class="st-properties" data-property-root><p class="st-property-hint">Copy this data to a .json file. This bundle contains both separate libraries, with each preset's library preserved.</p><textarea rows="14" readonly>${escape(json)}</textarea></section>`, buttons: [{action: 'close', label: 'Close'}]}, runtime);
 };
 
 const showImport = async runtime => {
     if (!isGM(runtime)) return;
-    const result = await waitDialog({window: {title: 'Import Properties Library'}, content: `<section class="st-properties" data-property-root>
+    const result = await waitDialog({window: {title: 'Import Properties Libraries'}, content: `<section class="st-properties" data-property-root>
+        <p class="st-property-notice">Import applies to both separate libraries, not just the selected tab. Replace replaces both catalogs. Preset library assignments are preserved; older templates are assigned to one library without discarding rules.</p>
         <label class="st-property-field"><span>Choose a JSON file or paste its contents</span><input type="file" accept=".json,application/json" data-property-import-file></label>
-        <textarea name="libraryJson" rows="11" maxlength="1000000" placeholder="Paste library JSON"></textarea>${check('replace', 'Replace custom library instead of merging', false)}
+        <textarea name="libraryJson" rows="11" maxlength="1000000" placeholder="Paste library JSON"></textarea>${check('replace', 'Replace both catalogs instead of merging', false)}
         ${check('includeAssignments', 'Also restore assigned item properties (exact item UUIDs)', false)}
         <p class="st-property-hint">Item assignments are unchanged unless explicitly enabled above. Invalid rules or script fields are rejected.</p></section>`,
         render: (_event, dialog) => {
@@ -163,9 +180,14 @@ const readRuleForm = (form, original) => {
     return normalizeRule(rule);
 };
 
-export const renderPropertyRuleEditor = rule => `<section class="st-properties" data-property-root>
-    <div class="st-property-grid">${field('Name', input('name', rule.name, 'maxlength="100" required'))}${field('Action', select('action', actionEntries().map(([key]) => key), rule.action, Object.fromEntries(actionEntries().map(([key, value]) => [key, value.label]))))}
-    ${field('Trigger', select('trigger', PROPERTY_TRIGGERS, rule.trigger))}${field('Value', number('value', rule.value))}
+export const renderPropertyRuleEditor = (rule, {scope, legacy = false} = {}) => {
+    if (scope) normalizePropertyScope(scope);
+    const actions = actionEntries(scope, legacy), triggers = !scope || legacy ? PROPERTY_TRIGGERS
+        : scope === 'character' ? ['passive'] : actionKind(rule.action) === 'effect' ? PROPERTY_TRIGGERS.filter(value => value !== 'passive') : ['passive'];
+    return `<section class="st-properties" data-property-root>
+    ${scope ? `<p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>` : ''}${legacy ? legacyRuleNotice : ''}
+    <div class="st-property-grid">${field('Name', input('name', rule.name, 'maxlength="100" required'))}${field('Action', select('action', actions.map(([key]) => key), rule.action, Object.fromEntries(actions.map(([key, value]) => [key, value.label]))))}
+    ${field('Trigger', select('trigger', triggers, rule.trigger))}${field('Value', number('value', rule.value))}
     <div data-property-specific="traitModifier traitSteps">${field('Attribute', select('trait', PROPERTY_TRAITS, rule.trait))}</div>
     <div data-property-specific="skillModifier">${field('Skill name', input('skill', rule.skill, 'maxlength="100" placeholder="Shooting"'))}</div>
     <div data-property-specific="statModifier">${field('Stat', select('stat', PROPERTY_STATS, rule.stat))}</div>
@@ -181,15 +203,22 @@ export const renderPropertyRuleEditor = rule => `<section class="st-properties" 
     ${field('Resistance attribute', select('resistTrait', PROPERTY_TRAITS, rule.resist?.trait ?? 'vigor'))}${field('Resistance modifier', number('resistModifier', rule.resist?.modifier ?? 0, -20, 20))}${field('Resistance TN', number('resistTn', rule.resist?.tn ?? 4, 2, 20))}</div>
     <p class="st-property-hint">0 rounds = until removed. Same group controls duplicate properties. Passive rules change calculations; triggered effects require the matching attack event. Resistance and duration apply only to triggered effects. No JavaScript or arbitrary data paths are accepted.</p></details>
     <p class="st-property-error" data-property-validation role="alert" hidden></p></section>`;
+};
 
-const bindRuleEditor = root => {
+const bindRuleEditor = (root, {scope, legacy = false} = {}) => {
     const form = root?.closest('form');
     if (!form) return;
     const update = () => {
         const action = form.elements.action.value, effect = actionKind(action) === 'effect';
         const trigger = form.elements.trigger;
-        for (const option of trigger.options) option.disabled = !effect && option.value !== 'passive';
-        if (!effect) trigger.value = 'passive';
+        const allowedTriggers = !scope || legacy ? PROPERTY_TRIGGERS
+            : scope === 'character' || !effect ? ['passive'] : PROPERTY_TRIGGERS.filter(value => value !== 'passive');
+        // Rebuild when switching between an outgoing weapon modifier and a
+        // triggered weapon effect. Opposite-library triggers never appear.
+        if (scope && !legacy && Array.from(trigger.options).map(option => option.value).join() !== allowedTriggers.join())
+            trigger.innerHTML = options(allowedTriggers, allowedTriggers.includes(trigger.value) ? trigger.value : allowedTriggers[0]);
+        for (const option of trigger.options) option.disabled = !allowedTriggers.includes(option.value) || (!effect && option.value !== 'passive');
+        if (!effect || scope === 'character' && !legacy) trigger.value = 'passive';
         for (const container of root.querySelectorAll('[data-property-specific]')) container.hidden = !container.dataset.propertySpecific.split(' ').includes(action);
         const meta = PROPERTY_ACTIONS[action] ?? {};
         form.elements.value.min = String(meta.valueMin ?? -100); form.elements.value.max = String(meta.valueMax ?? 100);
@@ -203,6 +232,10 @@ const bindRuleEditor = root => {
         form.elements.rounds.disabled = trigger.value === 'passive';
         form.elements.expiry.disabled = trigger.value === 'passive';
         if (trigger.value === 'passive') form.elements.rounds.value = '0';
+        if (scope === 'character' && !legacy && effect) {
+            form.elements.attackType.value = 'any'; form.elements.weaponType.value = 'any';
+            form.elements.minRange.value = ''; form.elements.maxRange.value = '';
+        }
         form.elements.resistEnabled.disabled = !effect || trigger.value === 'passive';
         if (form.elements.resistEnabled.disabled) form.elements.resistEnabled.checked = false;
         const resist = root.querySelector('[data-property-resistance]');
@@ -210,7 +243,8 @@ const bindRuleEditor = root => {
     };
     form.elements.action.addEventListener('change', () => {
         if (actionKind(form.elements.action.value) === 'effect') {
-            form.elements.trigger.value = 'hit'; form.elements.target.value = 'target';
+            form.elements.trigger.value = scope === 'character' && !legacy ? 'passive' : 'hit';
+            form.elements.target.value = scope === 'character' && !legacy ? 'self' : 'target';
             if (form.elements.action.value === 'status') {
                 form.elements.value.value = '1';
                 if (!form.elements.status.value) form.elements.status.value = 'distracted';
@@ -223,18 +257,25 @@ const bindRuleEditor = root => {
     update();
 };
 
-const showRuleEditor = async (source = {}, runtime = {}) => {
+const showRuleEditor = async (source = {}, runtime = {}, {scope = 'character'} = {}) => {
     if (!isGM(runtime)) return null;
-    const original = normalizeRule({id: newId(), name: 'New property', action: 'attackMod', ...source});
+    normalizePropertyScope(scope);
+    const original = normalizeRule({id: newId(), name: 'New property', ...newRuleForScope(scope), ...source});
+    const legacy = Object.keys(source).length > 0 && !isPropertyRuleInScope(original, scope);
     // A normal wait() resolves on every submit, even invalid ones. Use native
     // DialogV2 with closeOnSubmit:false so validation stays in the same form.
-    return waitValidatedDialog({window: {title: 'Edit Property'}, content: renderPropertyRuleEditor(original),
-        render: (_event, dialog) => bindRuleEditor(rootOf(dialog)),
-        buttons: [{action: 'save', label: 'Save Property', callback: (_event, target) => isGM(runtime) ? readRuleForm(target.form, original) : null},
+    return waitValidatedDialog({window: {title: 'Edit Property'}, content: renderPropertyRuleEditor(original, {scope, legacy}),
+        render: (_event, dialog) => bindRuleEditor(rootOf(dialog), {scope, legacy}),
+        buttons: [{action: 'save', label: 'Save Property', callback: (_event, target) => {
+            if (!isGM(runtime)) return null;
+            const rule = readRuleForm(target.form, original);
+            if (!legacy && !isPropertyRuleInScope(rule, scope)) throw new TypeError('This property belongs to the other library.');
+            return rule;
+        }},
             {action: 'cancel', label: 'Cancel', callback: () => null}]}, runtime);
 };
 
-const editRules = async (root, rules, changed, runtime) => {
+const editRules = async (root, rules, changed, runtime, scope) => {
     root.addEventListener('click', event => {
         const control = event.target.closest?.('[data-property-command]');
         if (!control || !root.contains(control)) return;
@@ -244,32 +285,35 @@ const editRules = async (root, rules, changed, runtime) => {
         void busy(control, async () => {
             if (!isGM(runtime)) return;
             const index = Number(control.dataset.propertyId);
-            if (command === 'new-rule') { const result = await showRuleEditor({}, runtime); if (result) rules.push(result); }
+            if (command === 'new-rule') { const result = await showRuleEditor({}, runtime, {scope}); if (result) rules.push(result); }
             else if (Number.isInteger(index) && index >= 0 && index < rules.length) {
                 if (command === 'remove-rule') rules.splice(index, 1);
                 else if (command === 'toggle-rule') rules[index] = {...rules[index], enabled: rules[index].enabled === false};
-                else { const result = await showRuleEditor(rules[index], runtime); if (result) rules[index] = result; }
+                else { const result = await showRuleEditor(rules[index], runtime, {scope}); if (result) rules[index] = result; }
             }
             changed();
         }, runtime);
     });
 };
 
-const showPresetEditor = async (source, runtime) => {
+const showPresetEditor = async (source, runtime, scope) => {
     if (!isGM(runtime)) return;
-    const preset = clone(source ?? {id: newId(), name: 'New preset', category: 'Custom', description: '', aliases: [], rules: []});
+    normalizePropertyScope(scope);
+    const preset = clone(source ?? {id: newId(), name: 'New preset', category: 'Custom', description: '', aliases: [], rules: [], scope});
     const rules = preset.rules ?? [];
     const result = await waitValidatedDialog({window: {title: 'Edit Library Preset'}, content: `<section class="st-properties" data-property-root>
+        <p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>
+        ${rules.some(rule => !isPropertyRuleInScope(rule, scope)) ? legacyRuleNotice : ''}
         <div class="st-property-grid">${field('Name', input('presetName', preset.name, 'maxlength="100" required'))}${field('Category', input('presetCategory', preset.category, 'maxlength="60" required'))}</div>
         ${field('Short description', input('presetDescription', preset.description, 'maxlength="1000"'))}
         <ul class="st-property-rules" data-property-rules>${rulesMarkup(rules)}</ul><div class="st-property-toolbar">${button('new-rule', '+ Property')}</div>
         <details class="st-property-details"><summary>More Details</summary>${field('Search aliases (comma separated)', input('presetAliases', preset.aliases?.join(', '), 'maxlength="1000"'))}<p class="st-property-hint">Use aliases for alternate names or another language. Editing a built-in preset changes this world only.</p></details><p class="st-property-error" data-property-validation role="alert" hidden></p></section>`,
         render: (_event, dialog) => {
             const root = rootOf(dialog);
-            if (root) void editRules(root, rules, () => { root.querySelector('[data-property-rules]').innerHTML = rulesMarkup(rules); }, runtime);
+            if (root) void editRules(root, rules, () => { root.querySelector('[data-property-rules]').innerHTML = rulesMarkup(rules); }, runtime, scope);
         }, buttons: [{action: 'save', label: 'Save Preset', callback: (_event, target) => normalizePropertyPreset({...preset, name: target.form.elements.presetName.value,
             category: target.form.elements.presetCategory.value, description: target.form.elements.presetDescription.value,
-            aliases: target.form.elements.presetAliases.value.split(',').map(value => value.trim()).filter(Boolean), rules: validateRules(rules)})}, {action: 'cancel', label: 'Cancel', callback: () => null}]}, runtime);
+            aliases: target.form.elements.presetAliases.value.split(',').map(value => value.trim()).filter(Boolean), rules: validateRules(rules), scope})}, {action: 'cancel', label: 'Cancel', callback: () => null}]}, runtime);
     if (result && isGM(runtime)) return savePropertyPreset(result, runtime);
 };
 
@@ -277,21 +321,27 @@ const showPresetEditor = async (source, runtime) => {
 export const showPropertiesLibrary = async (config = {}, runtime = {}) => {
     if (!isGM(runtime)) { notify('Only the GM can edit the Properties Library.', 'warn', runtime); return null; }
     const picker = config.picker === true;
+    let scope = normalizePropertyScope(config.scope ?? (picker ? 'weapon' : 'character'));
     let selection = null;
     const library = getPropertyLibrary(runtime);
-    await waitDialog({window: {title: picker ? 'Add Property — Library' : 'Properties & Effects — Library'}, content: libraryMarkup(library, {picker, query: config.query ?? ''}),
+    await waitDialog({window: {title: picker ? `Add Property — ${scopeLabel(scope)}` : 'Properties & Effects — Separate Libraries'}, content: libraryMarkup(library, {picker, query: config.query ?? '', scope}),
         render: (_event, dialog) => {
             const root = rootOf(dialog);
             if (!root) return;
             const refresh = () => {
                 const current = getPropertyLibrary(runtime);
-                const query = root.querySelector('[data-property-search]').value, category = root.querySelector('[data-property-category]').value;
+                const categories = [...new Set(scopedPresets(current, scope).map(preset => preset.category))].sort();
+                const categoryControl = root.querySelector('[data-property-category]');
+                const category = ['all', ...categories].includes(categoryControl.value) ? categoryControl.value : 'all';
+                categoryControl.innerHTML = options(['all', ...categories], category, {all: 'All categories'});
+                const query = root.querySelector('[data-property-search]').value;
                 const favoritesOnly = root.querySelector('[data-property-favorites]').checked;
-                root.querySelector('[data-property-preset-list]').innerHTML = renderPropertyLibrary(current, {query, category, favoritesOnly, picker});
+                root.querySelector('[data-property-preset-list]').innerHTML = renderPropertyLibrary(current, {query, category, favoritesOnly, picker, scope});
                 const count = root.querySelectorAll('.st-property-preset').length;
                 root.querySelector('[data-property-count]').textContent = `${count} preset${count === 1 ? '' : 's'}`;
-                const categories = [...new Set(current.presets.map(preset => preset.category))].sort();
-                root.querySelector('[data-property-category]').innerHTML = options(['all', ...categories], ['all', ...categories].includes(category) ? category : 'all', {all: 'All categories'});
+                root.querySelector('[data-property-search]').placeholder = scope === 'weapon' ? 'Search attack or on-hit property…' : 'Search Edge, Ability or passive property…';
+                root.querySelector('[data-property-scope-hint]').textContent = scopeHint(scope);
+                for (const control of root.querySelectorAll('[data-property-command="switch-scope"]')) control.setAttribute('aria-pressed', String(control.dataset.propertyId === scope));
             };
             root.querySelector('[data-property-search]').addEventListener('input', refresh);
             root.querySelector('[data-property-category]').addEventListener('change', refresh);
@@ -303,17 +353,29 @@ export const showPropertiesLibrary = async (config = {}, runtime = {}) => {
                 void busy(control, async () => {
                     if (!isGM(runtime)) return;
                     const command = control.dataset.propertyCommand, id = control.dataset.propertyId;
-                    const data = getPropertyLibrary(runtime), preset = data.presets.find(entry => entry.id === id);
+                    if (command === 'switch-scope') {
+                        if (picker) return;
+                        scope = normalizePropertyScope(id);
+                        root.querySelector('[data-property-search]').value = '';
+                        root.querySelector('[data-property-category]').value = 'all';
+                        refresh(); return;
+                    }
+                    // Recheck scope at the action boundary. A stale or forged
+                    // opposite-library ID cannot bypass a locked item picker.
+                    const data = getPropertyLibrary(runtime), preset = data.presets.find(entry => entry.id === id && getPropertyPresetScope(entry) === scope);
                     if (command === 'choose-preset' && preset) { selection = uniqueRules(preset.rules); await dialog.close(); return; }
-                    if (command === 'new-custom') { const rule = await showRuleEditor({}, runtime); if (rule) { selection = [rule]; await dialog.close(); } return; }
+                    if (command === 'new-custom') { const rule = await showRuleEditor({}, runtime, {scope}); if (rule) { selection = [rule]; await dialog.close(); } return; }
                     if (command === 'favorite' && preset) await setPropertyFavorite(id, !data.favorites.includes(id), runtime);
-                    else if (command === 'new-preset') await showPresetEditor(null, runtime);
-                    else if (command === 'edit-preset' && preset) await showPresetEditor(preset, runtime);
-                    else if (command === 'duplicate-preset' && preset) await showPresetEditor({...clone(preset), id: newId(), name: `${preset.name} Copy`, builtin: false, rules: uniqueRules(preset.rules)}, runtime);
+                    else if (command === 'new-preset') await showPresetEditor(null, runtime, scope);
+                    else if (command === 'edit-preset' && preset) await showPresetEditor(preset, runtime, scope);
+                    else if (command === 'duplicate-preset' && preset) await showPresetEditor({...clone(preset), id: newId(), name: `${preset.name} Copy`, builtin: false, rules: uniqueRules(preset.rules)}, runtime, scope);
                     else if (command === 'delete-preset' && preset && await confirm(preset.builtin ? 'Hide Preset' : 'Delete Preset', `Existing items are unchanged. ${preset.builtin ? 'Hide' : 'Delete'} “${preset.name}”?`, runtime)) await removePropertyPreset(id, runtime);
                     else if (command === 'show-hidden') {
                         const {savePropertyLibrary} = await import('./PropertiesLibrary.js');
-                        await savePropertyLibrary({...data, hiddenPresets: []}, runtime);
+                        // Restore only the visible library, not the other list.
+                        const {BUILTIN_PROPERTY_PRESETS} = await import('./PropertiesLibrary.js');
+                        const scopedIds = new Set(BUILTIN_PROPERTY_PRESETS.filter(entry => entry.scope === scope).map(entry => entry.id));
+                        await savePropertyLibrary({...data, hiddenPresets: data.hiddenPresets.filter(id => !scopedIds.has(id))}, runtime);
                     } else if (command === 'import-library') await showImport(runtime);
                     else if (command === 'export-library') await showExport(runtime);
                     refresh();
@@ -362,15 +424,18 @@ export const showItemProperties = async (item, runtime = {}) => {
     if (!item || !SUPPORTED_ITEMS.has(item.type)) return;
     const editable = isGM(runtime) && item.isOwner !== false;
     const rules = clone(getItemPropertyRules(item, runtime));
+    const scope = getItemPropertyScope(item);
     const result = await waitDialog({window: {title: `${item.name} — Properties & Effects`}, content: `<section class="st-properties" data-property-root>
+        <p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>
         ${!isPropertiesEnabled(runtime) ? '<p class="st-property-notice">Disabled in world settings. Saved properties remain dormant.</p>' : ''}
+        ${rules.some(rule => !isPropertyRuleInScope(rule, scope)) ? legacyRuleNotice : ''}
         <ul class="st-property-rules" data-property-rules>${rulesMarkup(rules, editable)}</ul>
         <div class="st-property-toolbar">${editable ? `${button('add-from-library', '+ Add Property')}${button('new-rule', '+ Custom')}` : ''}${button('preview', 'Preview / Test')}${isGM(runtime) ? button('open-library', 'Library') : ''}</div>
         <details class="st-property-details"><summary>More Details</summary><p class="st-property-hint">Item properties are independent copies of library templates. Passive rules require the source to be active. Triggered effects occur only at their configured event. AoE, Evade and Fire keep their existing settings.</p></details></section>`,
         render: (_event, dialog) => {
             const root = rootOf(dialog); if (!root) return;
             const refresh = () => { root.querySelector('[data-property-rules]').innerHTML = rulesMarkup(rules, editable); };
-            if (editable) void editRules(root, rules, refresh, runtime);
+            if (editable) void editRules(root, rules, refresh, runtime, scope);
             root.addEventListener('click', event => {
                 const control = event.target.closest?.('[data-property-command]');
                 if (!control || !root.contains(control)) return;
@@ -380,8 +445,8 @@ export const showItemProperties = async (item, runtime = {}) => {
                 void busy(control, async () => {
                     if (command === 'preview') { await showPropertiesPreview(item, runtime, rules); return; }
                     if (!editable || !isGM(runtime)) return;
-                    if (command === 'open-library') await showPropertiesLibrary({}, runtime);
-                    else { const additions = await showPropertiesLibrary({picker: true}, runtime); if (additions?.length) { rules.push(...additions); refresh(); } }
+                    if (command === 'open-library') await showPropertiesLibrary({scope}, runtime);
+                    else { const additions = await showPropertiesLibrary({picker: true, scope}, runtime); if (additions?.length) { rules.push(...additions); refresh(); } }
                 }, runtime);
             });
         }, buttons: editable ? [{action: 'save', label: 'Save Properties', callback: () => validateRules(rules)}, {action: 'cancel', label: 'Cancel', callback: () => null}] : [{action: 'close', label: 'Close'}]}, runtime);

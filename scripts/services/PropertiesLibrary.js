@@ -1,6 +1,29 @@
 import {PROPERTY_VERSION, normalizeRule, validateRules, isPropertyItemUuid} from './PropertiesRules.js';
 
 const SCOPE = 'swade-tools';
+export const PROPERTY_LIBRARY_SCOPES = Object.freeze(['weapon', 'character']);
+export const PROPERTY_LIBRARY_SCOPE_LABELS = Object.freeze({weapon: 'Weapon / Power', character: 'Edge / Ability / Character'});
+export const normalizePropertyScope = value => {
+    if (!PROPERTY_LIBRARY_SCOPES.includes(value)) throw new TypeError('Property library scope must be weapon or character.');
+    return value;
+};
+export const getItemPropertyScope = item => ['weapon', 'power'].includes(item?.type) ? 'weapon' : 'character';
+const WEAPON_PRESET_IDS = new Set(['attack-bonus', 'ranged-bonus', 'melee-bonus', 'damage-bonus',
+    'weakening', 'slowing', 'distracted-hit', 'vulnerable-raise', 'shaken-hit', 'stun-hit', 'entangle-hit',
+    'bound-raise', 'prone-hit', 'poison-wound', 'parry-debuff', 'armor-debuff', 'shooting-debuff']);
+// Legacy custom catalogs did not store a scope. Preserve every rule and choose
+// exactly one list: any triggered effect wins weapon scope; otherwise bearer
+// effects/defenses win character scope, and pure outgoing bonuses are weapons.
+export const inferPropertyPresetScope = rules => {
+    if ((rules ?? []).some(rule => rule.trigger && rule.trigger !== 'passive')) return 'weapon';
+    if (!(rules ?? []).length || (rules ?? []).some(rule => !['attackMod', 'damageMod'].includes(rule.action))) return 'character';
+    return 'weapon';
+};
+export const isPropertyRuleInScope = (rule, scope) => normalizePropertyScope(scope) === 'character'
+    ? rule?.trigger === 'passive'
+    : ['attackMod', 'damageMod'].includes(rule?.action) || rule?.trigger !== 'passive';
+export const getPropertyPresetScope = entry => entry?.scope === undefined
+    ? inferPropertyPresetScope(entry?.rules) : normalizePropertyScope(entry.scope);
 const copy = value => JSON.parse(JSON.stringify(value));
 const gameOf = runtime => runtime.game ?? globalThis.game;
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,79}$/u;
@@ -21,7 +44,7 @@ const knownKeys = (value, allowed, label) => {
     for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new TypeError(`${label}: unsupported field ${key}.`);
 };
 const preset = (id, name, category, aliases, rule, description = '') => Object.freeze({
-    id: `builtin.${id}`, name, category, aliases: Object.freeze(aliases), description,
+    id: `builtin.${id}`, name, category, aliases: Object.freeze(aliases), description, scope: WEAPON_PRESET_IDS.has(id) ? 'weapon' : 'character',
     rules: Object.freeze([Object.freeze(normalizeRule({id, name, ...rule}))]), builtin: true
 });
 
@@ -72,14 +95,17 @@ export const BUILTIN_PROPERTY_PRESETS = Object.freeze([
 ]);
 
 export const normalizePropertyPreset = raw => {
-    plain(raw, 'Preset'); knownKeys(raw, ['id', 'name', 'category', 'aliases', 'description', 'rules', 'builtin'], 'Preset');
+    plain(raw, 'Preset'); knownKeys(raw, ['id', 'name', 'category', 'aliases', 'description', 'rules', 'builtin', 'scope'], 'Preset');
     const id = assertId(raw.id, 'preset ID');
+    const rules = validateRules(raw.rules ?? []), builtin = BUILTIN_PROPERTY_PRESETS.find(entry => entry.id === id);
+    const scope = raw.scope === undefined ? builtin?.scope ?? inferPropertyPresetScope(rules) : normalizePropertyScope(raw.scope);
+    if (builtin && builtin.scope !== scope) throw new TypeError('Built-in presets must remain in their original library. Duplicate the preset to create a separate custom template.');
     const aliases = raw.aliases ?? [];
     if (!Array.isArray(aliases) || aliases.length > 30) throw new TypeError('Preset aliases must be an array of at most 30 names.');
     return {
         id, name: safeText(raw.name, 'Property Preset', 100, 'preset name'), category: safeText(raw.category, 'Custom', 60, 'category'),
         aliases: aliases.map(alias => safeText(alias, '', 100, 'alias')), description: safeText(raw.description, '', 1000, 'description'),
-        rules: validateRules(raw.rules ?? []), builtin: BUILTIN_PROPERTY_PRESETS.some(entry => entry.id === id)
+        rules, scope, builtin: Boolean(builtin)
     };
 };
 
@@ -163,10 +189,12 @@ export const saveItemPropertyRules = async (item, rules, runtime = {}) => {
     return getItemPropertyRules(uuid, runtime);
 };
 
-export const searchPropertyPresets = (query = '', category = 'all', runtime = {}) => {
+export const searchPropertyPresets = (query = '', category = 'all', runtime = {}, scope = 'character') => {
+    normalizePropertyScope(scope);
     const needle = foldPropertySearch(query).trim();
     const words = needle.split(/\s+/u).filter(Boolean), library = getPropertyLibrary(runtime);
     return library.presets.filter(entry => {
+        if (entry.scope !== scope) return false;
         if (category && category !== 'all' && category !== '*' && entry.category !== category) return false;
         const haystack = foldPropertySearch([entry.name, entry.category, entry.description, ...entry.aliases, ...entry.rules.map(rule => `${rule.name} ${rule.action} ${rule.trait} ${rule.stat} ${rule.skill} ${rule.status}`)].join(' '));
         return words.every(word => haystack.includes(word));
@@ -177,7 +205,8 @@ export const foldPropertySearch = value => String(value ?? '').toLocaleLowerCase
 
 export const savePropertyPreset = async (raw, runtime = {}) => {
     assertGm(runtime);
-    const entry = normalizePropertyPreset(raw);
+    const existing = getPropertyLibrary(runtime).presets.find(entry => entry.id === raw?.id);
+    const entry = normalizePropertyPreset(raw?.scope === undefined && existing ? {...raw, scope: existing.scope} : raw);
     await editLibrary(library => {
         const index = library.presets.findIndex(presetEntry => presetEntry.id === entry.id);
         if (index < 0) library.presets.push(entry); else library.presets[index] = entry;

@@ -3,9 +3,9 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Experimental Properties & Effects (2.2.0)
+## Experimental Properties & Effects (2.2.1)
 
-Version 2.2.0 is available through the normal stable Latest update channel.
+Version 2.2.1 is available through the normal stable Latest update channel.
 Back up the world and update between sessions. The new Properties system
 remains **off by default**; existing AoE/Flame workflows are preserved.
 
@@ -19,9 +19,13 @@ Enable **Configure Settings → SWADE Tools → Experimental Properties & Effect
 Open **Properties & Effects Library** in those settings, or open a weapon,
 Edge or Ability's **Properties** tab and use the new **Properties & Effects ⚙**.
 
-The light compact editor includes 40 editable starting templates, categorized
-Turkish/English search, favorites, custom rules, duplication and JSON import/
-export. Adding a template creates an independent item rule; later library
+The light compact editor includes 40 editable starting templates in two separate
+libraries: Weapon / Power attack properties and Edge / Ability / Character
+passive properties. Item pickers stay in their own library, without a combined
+Show All view. The settings library has two tabs. Categorized Turkish/English
+search, favorites, custom rules, duplication and JSON import/export stay available.
+Existing assigned cross-context rules are preserved rather than silently removed.
+Adding a template creates an independent item rule; later library
 edits do not silently change existing actors. GM-approved rules are stored
 against the full item UUID. A copied item requires fresh GM approval.
 

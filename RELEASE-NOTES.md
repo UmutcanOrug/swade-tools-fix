@@ -1,3 +1,36 @@
+## SWADE Tools 2.2.1 — Visible GM Controls & Separate Property Libraries
+
+Normal stable update. Reload all GM and player clients after updating.
+Existing pending attack cards can be used after reload; do not roll again
+just to reveal the controls. Properties remains opt-in and disabled by default.
+
+- Fixed Apply Effects / Undo controls staying hidden when the Effects section
+  was inserted after the chat render permission hook. Both native single-fire
+  and RoF now set current viewer visibility at insertion. Game/viewer lookup
+  also works when controls registered before game initialization.
+- Kept primary-GM approval, service-side authority, repeat-application guards,
+  private-card visibility and player/secondary-GM restrictions unchanged.
+  Secondary GMs now see which active GM handles approval, rather than a
+  silent pending state with no visible action.
+  Showing the button never applies an effect, rolls dice or spends resources.
+- Split the library into Weapon / Power attack properties and Edge / Ability /
+  Character passive properties. Item pickers are locked to their own list;
+  there is no combined Show All view. The settings library has two separate
+  tabs. New custom properties use the appropriate actions and trigger defaults.
+- Presets retain their library scope through edit, duplicate and JSON export /
+  import. Older custom presets without scope are classified without deleting
+  rules. Existing assigned properties remain unchanged and editable, including
+  legacy cross-context rules. AoE, Flame and combat calculations are unchanged.
+- Fixed Edit / On-Off / Remove not targeting the first saved property row.
+- Added delayed-insertion, current-viewer and separate-library regressions.
+  All 586 module tests pass. Browser checks cover compact layout and actual
+  Foundry V13 HTML sanitization.
+
+Back up the world/library before upgrading. New preset scope metadata is not
+understood by 2.2.0; a downgrade to that version requires the pre-upgrade world /
+library backup. Disable Properties-managed effects before any source rollback.
+The existing 2.1.20 ZIP is a module-file backup, not a world-data backup.
+
 ## SWADE Tools 2.2.0 — Opt-in Properties & Effects Library
 
 NORMAL STABLE UPDATE — promotes the tested 2.2.0-test.1 implementation to

@@ -70,7 +70,7 @@ export const registerPropertiesPoolControls = (runtime={}) => {
     hooks.on('renderChatMessageHTML',(message,html)=>{
         if (!flagsOf(message).propertiesPool) return;
         const root=html?.[0] ?? html;
-        if (!root?.querySelector?.('.swadetools-properties-chat')) root?.insertAdjacentHTML?.('beforeend',renderPropertyCandidates(message));
+        if (!root?.querySelector?.('.swadetools-properties-chat')) root?.insertAdjacentHTML?.('beforeend',renderPropertyCandidates(message,runtime));
         void stagePropertyPool(message,runtime).catch(error=>console.warn('SWADE Tools | Properties pool review unavailable',error));
     });
 };

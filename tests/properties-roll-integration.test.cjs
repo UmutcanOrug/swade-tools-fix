@@ -164,6 +164,27 @@ test('RoF render hook is registered once and only stages review metadata, never 
     assert.equal(f.calls.length, 3); assert.equal(inserted.length, 0);
 });
 
+test('RoF inserts a visible primary-GM control after the earlier role hook has already run', async () => {
+    const {registerPropertiesPoolControls} = await load(), f = fixture(), handlers = [];
+    f.message.flags['swade-tools'].propertiesCandidates = [{id: 'candidate-1', targetName: 'Target',
+        status: 'pending', rules: ['Weakening Hit']}];
+    const runtime = {...f.runtime, Hooks: {on(name, callback) {handlers.push(callback);}}};
+    registerPropertiesPoolControls(runtime);
+    const inserted = [], html = {querySelector() {return inserted.length > 0;},
+        insertAdjacentHTML(_position, source) {inserted.push(source);}};
+    handlers[0](f.message, html);
+    assert.equal(inserted.length, 1);
+    assert.match(inserted[0], /<span data-properties-gm><button[^>]+data-properties-apply=/);
+    handlers[0](f.message, html);
+    assert.equal(inserted.length, 1, 'rerendering does not duplicate the section');
+    f.runtime.game.user = f.player;
+    const playerHtml = [];
+    handlers[0](f.message, {querySelector() {return false;},
+        insertAdjacentHTML(_position, source) {playerHtml.push(source);}});
+    assert.match(playerHtml[0], /<span data-properties-gm hidden>/);
+    await new Promise(resolve => setImmediate(resolve));
+});
+
 test('production RoF staging persists only trusted GM review metadata and no actor effects', async () => {
     const {stagePropertyPool} = await load(), f = fixture();
     delete f.runtime.registerPropertyCandidate;

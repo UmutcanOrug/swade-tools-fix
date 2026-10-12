@@ -101,7 +101,7 @@ test('library refuses non-GM edits before opening or writing; disabled world sti
     const gm = fixture({enabled: false}); await showPropertiesLibrary({}, gm.runtime);
     assert.equal(gm.dialogs.length, 1); assert.equal(gm.writes.length, 0);
     const dialog = gm.dialogs[0]; assert.ok(dialog.classes.includes('theme-light')); assert.equal(dialog.modal, false); assert.equal(dialog.position.width, 560);
-    assert.match(dialog.content, /Search Edge, Ability or property/); assert.match(dialog.content, /All categories/); assert.match(dialog.content, /More Details/);
+    assert.match(dialog.content, /Search Edge, Ability or passive property/); assert.match(dialog.content, /All categories/); assert.match(dialog.content, /More Details/);
     assert.ok(!dialog.content.includes('<details open'));
 });
 
@@ -190,4 +190,65 @@ test('library JSON import clearly requires explicit assignment restoration; expo
     await showPropertiesLibrary({}, state.runtime);
     assert.match(state.dialogs[0].content, /JSON import accepts data only, never scripts/);
     assert.match(state.dialogs[0].content, /later library edits do not alter existing items/);
+});
+
+test('library display and item pickers are strictly separated with no combined or Show All view', async () => {
+    const ui = await uiModule(), state = fixture();
+    await ui.showPropertiesLibrary({}, state.runtime);
+    const global = state.dialogs[0].content;
+    assert.match(global, /data-property-command="switch-scope" data-property-id="weapon"/);
+    assert.match(global, /data-property-command="switch-scope" data-property-id="character"/);
+    assert.match(global, /Dodge-like Ranged Avoidance/); assert.ok(!global.includes('Weakening Hit:'));
+    assert.ok(!/Show All|Show all|data-property-id="all"/u.test(global));
+    await ui.showPropertiesLibrary({picker: true, scope: 'weapon'}, state.runtime);
+    const weapon = state.dialogs[1].content;
+    assert.match(weapon, /Weakening Hit:/); assert.ok(!weapon.includes('Dodge-like Ranged Avoidance'));
+    assert.ok(!weapon.includes('Strength +1 Die Step')); assert.ok(!weapon.includes('switch-scope'));
+    await ui.showPropertiesLibrary({picker: true, scope: 'character'}, state.runtime);
+    const character = state.dialogs[2].content;
+    assert.match(character, /Dodge-like Ranged Avoidance/); assert.ok(!character.includes('Weakening Hit:'));
+    assert.ok(!character.includes('switch-scope'));
+    await assert.rejects(() => ui.showPropertiesLibrary({scope: 'all'}, state.runtime), /scope/);
+    assert.equal(state.writes.length, 0);
+});
+
+test('new character rule forms expose passive triggers only; weapon forms omit defensive actions and passive effects', async () => {
+    const {renderPropertyRuleEditor} = await uiModule(), {normalizeRule} = await rulesModule();
+    const triggerOptions = html => html.match(/<select name="trigger">([\s\S]*?)<\/select>/u)[1];
+    const actionOptions = html => html.match(/<select name="action">([\s\S]*?)<\/select>/u)[1];
+    const character = renderPropertyRuleEditor(normalizeRule({action: 'traitSteps', trigger: 'passive', value: 1}), {scope: 'character'});
+    assert.match(triggerOptions(character), /value="passive"/); assert.ok(!triggerOptions(character).includes('value="hit"'));
+    const weapon = renderPropertyRuleEditor(normalizeRule({action: 'traitSteps', trigger: 'hit', value: -1}), {scope: 'weapon'});
+    assert.match(triggerOptions(weapon), /value="hit"/); assert.ok(!triggerOptions(weapon).includes('value="passive"'));
+    assert.ok(!actionOptions(weapon).includes('value="cover"')); assert.ok(!actionOptions(weapon).includes('value="soakMod"'));
+    assert.match(actionOptions(weapon), /value="damageMod"/);
+    const modifier = renderPropertyRuleEditor(normalizeRule({action: 'attackMod', value: 1}), {scope: 'weapon'});
+    assert.equal((triggerOptions(modifier).match(/<option /gu) ?? []).length, 1);
+    assert.match(triggerOptions(modifier), /value="passive"/);
+});
+
+test('legacy cross-library item assignments are preserved with explicit notice, never migrated on opening', async () => {
+    const ui = await uiModule(), {normalizeRule} = await rulesModule();
+    const old = normalizeRule({id: 'legacy', action: 'traitSteps', trigger: 'hit', trait: 'strength', value: -1});
+    const state = fixture({library: {version: 1, presets: [], assignments: {'Actor.actor.Item.edge': [old]}, favorites: [], hiddenPresets: []}});
+    await ui.showItemProperties(item({uuid: 'Actor.actor.Item.edge', type: 'edge', name: 'Legacy Edge'}), state.runtime);
+    assert.match(state.dialogs[0].content, /Previously saved cross-library properties are preserved/);
+    assert.match(state.dialogs[0].content, /Hit → Attribute Die Steps/);
+    assert.match(state.dialogs[0].content, /data-property-command="edit-rule" data-property-id="0"/);
+    assert.match(state.dialogs[0].content, /data-property-command="toggle-rule" data-property-id="0"/);
+    assert.match(state.dialogs[0].content, /data-property-command="remove-rule" data-property-id="0"/);
+    assert.deepEqual(state.values.propertiesLibrary.assignments['Actor.actor.Item.edge'], [old]);
+    assert.equal(state.writes.length, 0);
+    const editor = ui.renderPropertyRuleEditor(old, {scope: 'character', legacy: true});
+    assert.match(editor, /value="hit" selected/); assert.match(editor, /Previously saved cross-library/);
+});
+
+test('legacy mixed library presets retain both rules visibly while staying in exactly one list', async () => {
+    const {renderPropertyLibrary} = await uiModule(), {normalizeRule} = await rulesModule();
+    const data = {presets: [{id: 'mixed', name: 'Legacy Mixed', scope: 'weapon', category: 'Legacy', rules: [
+        normalizeRule({id: 'hit', action: 'traitSteps', value: -1}), normalizeRule({id: 'cover', action: 'cover', value: -2})
+    ]}], favorites: [], hiddenPresets: []};
+    const weapon = renderPropertyLibrary(data, {scope: 'weapon'}), character = renderPropertyLibrary(data, {scope: 'character'});
+    assert.match(weapon, /Saved legacy cross-library rule/); assert.match(weapon, /Attribute Die Steps/); assert.match(weapon, /Cover \/ Ranged Avoidance/);
+    assert.ok(!character.includes('Legacy Mixed'));
 });

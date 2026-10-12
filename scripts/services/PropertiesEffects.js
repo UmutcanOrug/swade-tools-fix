@@ -29,9 +29,10 @@ const fingerprint = value => {
 };
 const identityKey = value => encodeURIComponent(JSON.stringify(value));
 
+const primaryPropertiesGm = gameRef => values(gameRef?.users).filter(user => user.isGM && user.active)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))[0];
 export const isPrimaryPropertiesGm = (gameRef = globalThis.game) => {
-    const elected = values(gameRef?.users).filter(user => user.isGM && user.active)
-        .sort((left, right) => String(left.id).localeCompare(String(right.id)))[0];
+    const elected = primaryPropertiesGm(gameRef);
     return gameRef?.user?.isGM === true && elected?.id === gameRef.user.id;
 };
 
@@ -464,16 +465,25 @@ export const undoPropertyCandidate = (message, candidateId, runtime = {}) => ser
     await saveLedger(ledger, runtime); await mirror(message, ledger); return true;
 });
 
-export const renderPropertyCandidates = message => {
+export const renderPropertyCandidates = (message, runtime = {}) => {
     if (message?.isContentVisible === false || excluded(message)) return '';
     const entries = message?.flags?.[SCOPE]?.propertiesCandidates;
     if (!Array.isArray(entries) || !entries.some(entry => entry.status !== 'ineligible')) return '';
+    // Native single-fire and RoF append this section after the chat render
+    // hooks have already run. Set viewer permissions here as well, rather
+    // than relying on an earlier hook to unhide a not-yet-existing control.
+    const game = gameOf(runtime), canManage = isPrimaryPropertiesGm(game);
+    const manager = primaryPropertiesGm(game);
+    const approvalNote = game?.user?.isGM && !canManage ?
+        `<p style="margin:3px 0;font-size:11px">${manager ?
+            `Approval GM: ${escapeHTML(manager.name ?? manager.id)}. Only that active GM can apply these effects.` :
+            'No active GM is available for effects approval.'}</p>` : '';
     return '<details class="swadetools-properties-chat" style="font-size:12px;line-height:1.35;margin-top:4px">' +
-        '<summary>Effects · More Details</summary>' + entries.filter(entry => entry.status !== 'ineligible').map(entry =>
+        '<summary>Effects · More Details</summary>' + approvalNote + entries.filter(entry => entry.status !== 'ineligible').map(entry =>
         `<div style="padding:3px 0;border-top:1px solid #9996"><strong>${escapeHTML(entry.targetName)}</strong> — ` +
         `<span style="color:${entry.status === 'applied' ? '#23752b' : entry.status === 'resisted' ? '#8a4c00' : '#333'}">${escapeHTML(entry.status)}</span>` +
         `<div>${escapeHTML(entry.result || (entry.rules ?? []).join(', '))}</div>` +
-        `<span data-properties-gm hidden>${entry.status === 'pending' ?
+        `<span data-properties-gm${canManage ? '' : ' hidden'}>${entry.status === 'pending' ?
             `<button type="button" data-properties-apply="${escapeHTML(entry.id)}" style="height:24px;line-height:20px">Apply Effects</button>` : ''}` +
         `${entry.canUndo ? `<button type="button" data-properties-undo="${escapeHTML(entry.id)}" style="height:24px;line-height:20px">Undo Created Effects</button>` : ''}</span></div>`).join('') + '</details>';
 };
