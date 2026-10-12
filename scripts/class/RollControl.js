@@ -9,7 +9,7 @@ import { settlePowerAoeCorrection } from '../services/PowerAoeCast.js';
 import { getAoeFireDamageTarget } from '../services/AoeFireDamage.js';
 import {canUsePropertiesCombat, getPropertyTargetModifiers, getPropertySoakModifier,
     propertyAttackType, propertySourceForTarget} from '../services/PropertiesCombat.js';
-import {registerPropertyCandidate, renderPropertyCandidates, applyPropertiesForEvent} from '../services/PropertiesEffects.js';
+import {registerPropertyCandidate, renderPropertyCandidates, applyPropertiesForEvent, getResolvedPropertyOutcome} from '../services/PropertiesEffects.js';
 import {isPropertiesEnabled} from '../services/PropertiesRules.js';
 
 export default class RollControl {
@@ -1227,6 +1227,15 @@ export default class RollControl {
         }
 
         if (canUsePropertiesCombat(item,this.chat) && Number(this.chat.flags['swade-tools'].userof ?? 1)<2){
+            // A debuff from this very hit must not improve its own result or
+            // add Raise damage when the native chat card is rendered again.
+            // A real roll/GM correction changes the binding and recalculates.
+            const resolved=getResolvedPropertyOutcome({message:this.chat,actor:this.getActor(),item,target,hitKey:String(rofnumb)});
+            if (resolved?.hit){
+                addTarget=resolved.raise ? 'raise' : 'hit';
+                raise=resolved.raise ? 1 : 0;
+                rollDmg=true;
+            }
             this.propertiesInputs.push({message:this.chat,actor:this.getActor(),item,target,
                 outcome:addTarget,hitKey:String(rofnumb),attackType:propertiesAttackType,range:propertiesRange});
         }

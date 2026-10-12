@@ -50,6 +50,27 @@ test('native passive effects are self-only and cannot silently apply attack cond
     }
 });
 
+test('Automatic Accept is typed, opt-in and only retained for hit or raise effect rules', async () => {
+    const {normalizeRule} = await load();
+    assert.equal(normalizeRule({action: 'traitSteps', value: -1}).automaticAccept, false);
+    for (const trigger of ['hit', 'raise']) {
+        const rule = normalizeRule({action: 'traitSteps', value: -1, trigger, automaticAccept: true, automaticAcceptSince: 123});
+        assert.equal(rule.automaticAccept, true); assert.equal(rule.automaticAcceptSince, 123);
+    }
+    for (const trigger of ['passive', 'damageApplied', 'wound']) {
+        const rule = normalizeRule({action: 'traitSteps', value: -1, trigger, automaticAccept: true, automaticAcceptSince: 123});
+        assert.equal(rule.automaticAccept, false); assert.equal(rule.automaticAcceptSince, 0);
+    }
+    assert.equal(normalizeRule({action: 'attackMod', value: 2, automaticAccept: true}).automaticAccept, false);
+    for (const automaticAccept of ['true', 1, {}, null]) assert.throws(() => normalizeRule({automaticAccept}), /Automatic Accept/);
+    assert.throws(() => normalizeRule({automaticAccept: true, code: 'actor.update({})'}), /unsupported field/);
+    assert.equal(normalizeRule({action: 'traitSteps', value: -1, automaticAccept: true}).automaticAcceptSince, 0);
+    assert.equal(normalizeRule({action: 'traitSteps', value: -1, automaticAccept: false, automaticAcceptSince: 123}).automaticAcceptSince, 0);
+    for (const automaticAcceptSince of ['123', -1, 1.5, NaN, Infinity, 8640000000000001]) {
+        assert.throws(() => normalizeRule({automaticAcceptSince}), /Activation/);
+    }
+});
+
 test('collector trusts only exact GM world assignments, not arbitrary item flags or prototype keys', async () => {
     const {collectPropertyRules} = await load();
     const f = fixture(); f.item.flags = {'swade-tools': {properties: [{action: 'attackMod', value: 20}]}};

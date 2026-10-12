@@ -153,6 +153,23 @@ const assertGm = runtime => {
 export const savePropertyLibrary = async (library, runtime = {}) => {
     assertGm(runtime);
     const normalized = normalizePropertyLibrary(library);
+    const previous = readStored(runtime);
+    const serverTime = Number(gameOf(runtime)?.time?.serverTime);
+    const now = Number(typeof runtime.now === 'function' ? runtime.now() :
+        Number.isFinite(serverTime) && serverTime > 0 ? Math.ceil(serverTime) : Date.now());
+    if (!Number.isSafeInteger(now) || now <= 0 || now > 8640000000000000) throw new TypeError('Properties approval time is unavailable.');
+    // Approval is bound to this exact item/rule configuration, never to a
+    // timestamp supplied by an imported preset. Historical chat must not gain
+    // newly-enabled automatic effects when its cards are rendered again.
+    const configuration = rule => JSON.stringify({...rule, automaticAcceptSince: 0});
+    for (const [uuid, rules] of Object.entries(normalized.assignments)) {
+        for (const rule of rules) {
+            if (!rule.automaticAccept) {rule.automaticAcceptSince = 0; continue;}
+            const old = previous.assignments[uuid]?.find(candidate => candidate.id === rule.id);
+            rule.automaticAcceptSince = old?.automaticAccept === true && old.automaticAcceptSince > 0 &&
+                configuration(old) === configuration(rule) ? old.automaticAcceptSince : now;
+        }
+    }
     await gameOf(runtime).settings.set(SCOPE, 'propertiesLibrary', normalized);
     return getPropertyLibrary(runtime);
 };

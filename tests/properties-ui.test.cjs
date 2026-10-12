@@ -8,9 +8,23 @@ const rulesModule = () => import(pathToFileURL(path.resolve(__dirname, '../scrip
 const fixture = ({enabled = true, gm = true, response = null, library} = {}) => {
     const values = {propertiesEnabled: enabled, propertiesLibrary: library ?? {version: 1, presets: [], assignments: {}, favorites: [], hiddenPresets: []}};
     const writes = [], dialogs = [], notices = [];
+    class DialogV2 extends EventTarget {
+        constructor(config) { super(); this.options = config; }
+        static async wait(config) { dialogs.push(config); return typeof response === 'function' ? response(config) : response; }
+        render() {
+            dialogs.push(this.options);
+            queueMicrotask(async () => {
+                const value = typeof response === 'function' ? await response(this.options) : response;
+                if (value && typeof value === 'object') await this.options.submit(value);
+                else await this.close();
+            });
+            return this;
+        }
+        async close() { this.dispatchEvent(new Event('close')); return this; }
+    }
     const runtime = {game: {user: {isGM: gm}, settings: {
         get: (_scope, key) => values[key], set: async (scope, key, value) => { writes.push({scope, key, value}); values[key] = value; }
-    }}, DialogV2: {async wait(config) { dialogs.push(config); return typeof response === 'function' ? response(config) : response; }},
+    }}, DialogV2,
     ui: {notifications: Object.fromEntries(['info', 'warn', 'error'].map(key => [key, message => notices.push([key, message])]))}};
     return {runtime, writes, dialogs, notices, values};
 };
@@ -112,7 +126,8 @@ test('item draft Cancel is non-mutating, saving explicitly approves exact item U
     const saved = fixture({response: [approved]}); await showItemProperties(item(), saved.runtime);
     assert.equal(saved.writes.length, 1); assert.equal(saved.writes[0].scope, 'swade-tools'); assert.equal(saved.writes[0].key, 'propertiesLibrary');
     assert.deepEqual(saved.values.propertiesLibrary.assignments['Actor.actor.Item.weapon'], [approved]);
-    assert.match(saved.dialogs[0].content, /Add Property/); assert.match(saved.dialogs[0].content, /AoE, Evade and Fire keep their existing settings/);
+    assert.equal(saved.dialogs.length, 2); assert.match(saved.dialogs[0].window.title, /Property Wizard/);
+    assert.match(saved.dialogs[1].content, /Add Property/); assert.match(saved.dialogs[1].content, /AoE, Evade and Fire keep their existing settings/);
 });
 
 test('non-GM and non-owner item views are read-only; disabled option is explicit and inert', async () => {
@@ -251,4 +266,51 @@ test('legacy mixed library presets retain both rules visibly while staying in ex
     const weapon = renderPropertyLibrary(data, {scope: 'weapon'}), character = renderPropertyLibrary(data, {scope: 'character'});
     assert.match(weapon, /Saved legacy cross-library rule/); assert.match(weapon, /Attribute Die Steps/); assert.match(weapon, /Cover \/ Ranged Avoidance/);
     assert.ok(!character.includes('Legacy Mixed'));
+});
+
+test('empty owned item starts the comprehensive wizard and Cancel never opens a picker or approves assignments', async () => {
+    const ui = await uiModule(), state = fixture();
+    await ui.showItemProperties(item(), state.runtime);
+    assert.equal(state.dialogs.length, 1); assert.match(state.dialogs[0].window.title, /Property Wizard/);
+    const config = state.dialogs[0];
+    assert.ok(config.classes.includes('swadetools-properties-wizard'));
+    assert.match(config.content, /data-property-wizard-step="0"/);
+    for (const step of [1, 2, 3]) assert.match(config.content, new RegExp(`data-property-wizard-step="${step}" hidden`));
+    assert.match(config.content, /data-property-wizard-library hidden/);
+    assert.deepEqual(config.buttons.map(button => button.action), ['back', 'next', 'finish', 'cancel']);
+    assert.equal(config.buttons.find(button => button.action === 'finish').label, 'Add to Draft');
+    assert.equal(state.writes.length, 0);
+});
+
+test('wizard fields cover every supported setting, show explicit acceptance and keep optional library scope locked', async () => {
+    const ui = await uiModule(), {normalizeRule} = await rulesModule();
+    const rule = normalizeRule({action: 'traitSteps', value: -1, automaticAccept: true});
+    const data = {presets: [{id: 'weapon', name: 'Weapon template', scope: 'weapon', rules: [rule], category: 'On Hit'},
+        {id: 'character', name: 'Character template', scope: 'character', rules: [normalizeRule({action: 'cover', value: -2})], category: 'Defense'}]};
+    const html = ui.renderPropertyWizard(rule, {scope: 'weapon', library: data});
+    for (const field of ['name', 'action', 'trigger', 'value', 'trait', 'skill', 'stat', 'status', 'enabled', 'target', 'stack', 'group', 'frequency',
+        'rounds', 'expiry', 'attackType', 'weaponType', 'minRange', 'maxRange', 'resistEnabled', 'resistTrait', 'resistModifier', 'resistTn', 'automaticAccept'])
+        assert.match(html, new RegExp(`name="${field}"`));
+    assert.match(html, /name="automaticAccept" checked/); assert.match(html, /new attacks after Save Properties/);
+    assert.match(html, /Weapon template/); assert.ok(!html.includes('Character template'));
+    assert.ok(!html.includes('switch-scope')); assert.ok(!html.includes('Show All'));
+    assert.ok(!html.includes('name="automaticAcceptSince"')); assert.match(html, /Nothing is assigned yet/);
+});
+
+test('wizard review previews complete behavior and explains manual, automatic, passive and damage acceptance', async () => {
+    const ui = await uiModule(), {normalizeRule} = await rulesModule();
+    const rules = [
+        normalizeRule({id: 'manual', name: '<script>bad()</script>', action: 'traitSteps', value: -1, trigger: 'hit', duration: {rounds: 2},
+            stack: 'refresh', group: 'weakening', frequency: 'hit', conditions: {attackType: 'ranged', weaponType: 'weapon', minRange: 2, maxRange: 20},
+            resist: {enabled: true, trait: 'vigor', modifier: -2, tn: 6}}),
+        normalizeRule({id: 'auto', action: 'traitSteps', value: -1, automaticAccept: true}),
+        normalizeRule({id: 'passive', action: 'cover', value: -2}),
+        normalizeRule({id: 'damage', action: 'statModifier', stat: 'armor', value: -2, trigger: 'damageApplied'})
+    ];
+    const html = ui.renderPropertyWizardReview(rules);
+    assert.ok(!html.includes('<script>')); assert.match(html, /&lt;script&gt;/);
+    for (const label of ['Recipient', 'Enabled', 'Acceptance', 'Duration', 'Stack / frequency', 'Shared group', 'Conditions', 'Resistance']) assert.ok(html.includes(label));
+    assert.match(html, /Manual GM approval in chat/); assert.match(html, /Automatic Accept/);
+    assert.match(html, /Passive — no approval needed/); assert.match(html, /After GM applies damage/);
+    assert.match(html, /range 2 – 20/); assert.match(html, /Vigor -2 · TN 6/); assert.match(html, /2 rounds/);
 });

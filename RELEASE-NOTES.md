@@ -1,3 +1,37 @@
+## SWADE Tools 2.2.2 — Wizard-first Properties & Automatic Accept
+
+Normal stable update. Back up the world/library, then update and reload all
+GM and player clients. Properties remains opt-in and disabled by default.
+
+- Add Property now opens a four-step configuration wizard, not the preset
+  picker. Empty items enter the wizard directly. Action/trigger, recipient,
+  duration/expiry, stacking/frequency, conditions and resistance are exposed
+  before a complete final review. Back/Next/Cancel do not approve assignments.
+- Optional Library opens inline on the right, with scoped search, categories
+  and favorites. Loading a template copies a draft and confirms replacement
+  of edited content. Multi-rule bundles retain every rule. Weapon/Power and
+  Edge/Ability lists remain completely separate, without Show All.
+- Per-rule Automatic Accept is off by default and offered for Hit/Raise
+  effects only. Save Properties approves the exact item and stamps activation
+  using server time where available. Newly enabled/changed rules never execute
+  automatically on older chat history; imported timestamps cannot backdate approval.
+- Automatic and manual approval share primary-GM authority, fresh native/RoF
+  outcome validation, resistance, durable duplicate guards and reversible
+  managed effects. Mixed rules leave manual effects pending with Apply and
+  Undo available together. No automatic weapon damage application is added.
+- Native attack cards retain the original resolved Hit/Raise after their own
+  debuff is applied; a Vulnerable/Parry effect cannot grant its own Raise-damage
+  link on re-render. Actual roll/GM corrections still recalculate the card.
+- Existing AoE, Evade, Flame, fire checks and animation workflows stay separate.
+- All 615 module tests pass. Browser checks use the installed Foundry V13
+  DialogV2/sanitizer and cover wizard navigation, separate side libraries,
+  draft/approval boundaries, native chat permissions, Fire and AoE regressions.
+
+New automatic-approval metadata is not understood by 2.2.1 or older. A source
+downgrade requires a pre-update world/library backup. Disable Properties while
+this build is installed before rolling back its managed effects. A 2.2.1 source
+ZIP backup was retained separately; module files are not a world-data backup.
+
 ## SWADE Tools 2.2.1 — Visible GM Controls & Separate Property Libraries
 
 Normal stable update. Reload all GM and player clients after updating.

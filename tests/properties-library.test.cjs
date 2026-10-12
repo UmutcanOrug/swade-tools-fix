@@ -12,6 +12,61 @@ const fixture = (isGM = true) => {
     }}}, writes, get state() { return state; }};
 };
 
+test('automatic assignment approval starts at Save Properties and ignores imported activation timestamps', async () => {
+    const api = await load(), f = fixture(), item = {uuid: 'Actor.actor.Item.weapon'};
+    let now = 1000; f.runtime.now = () => now;
+    const rule = {id: 'weakening', name: 'Weakening', action: 'traitSteps', trigger: 'hit', trait: 'strength',
+        value: -1, automaticAccept: true, automaticAcceptSince: 1};
+    await api.saveItemPropertyRules(item, [rule], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 1000);
+    now = 2000;
+    await api.saveItemPropertyRules(item, [{...rule, automaticAcceptSince: 999999}], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 1000,
+        'unchanged configuration preserves the genuine approval boundary, not incoming metadata');
+    await api.setPropertyFavorite('builtin.dodge', true, f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 1000,
+        'unrelated library edits must not disable automatic acceptance for existing attacks');
+    now = 3000;
+    await api.saveItemPropertyRules(item, [{...rule, value: -2}], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 3000);
+    now = 4000;
+    await api.saveItemPropertyRules(item, [{...rule, automaticAccept: false}], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 0);
+    now = 5000;
+    await api.saveItemPropertyRules(item, [rule], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 5000);
+    now = 6000;
+    const imported = api.getPropertyLibrary(f.runtime);
+    imported.assignments['Actor.other.Item.copy'] = [{...rule, automaticAcceptSince: 10}];
+    await api.importPropertyLibrary(JSON.stringify(imported), {}, f.runtime);
+    assert.equal(api.getItemPropertyRules('Actor.other.Item.copy', f.runtime)[0].automaticAcceptSince, 6000);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 5000);
+    assert.equal(rule.automaticAcceptSince, 1, 'the caller draft remains untouched');
+});
+
+test('preset editing alone never approves automatic effects on an item', async () => {
+    const api = await load(), f = fixture();
+    f.runtime.now = () => 1000;
+    await api.savePropertyPreset({id: 'custom.auto', name: 'Auto Weakening', scope: 'weapon', rules: [{
+        id: 'weakening', action: 'traitSteps', trigger: 'hit', trait: 'strength', value: -1, automaticAccept: true
+    }]}, f.runtime);
+    assert.deepEqual(f.state.assignments, {});
+    assert.equal(api.getPropertyLibrary(f.runtime).presets.find(entry => entry.id === 'custom.auto').rules[0].automaticAcceptSince, 0);
+});
+
+test('automatic approval uses the synchronized Foundry server clock and fails before writing on an invalid clock', async () => {
+    const api = await load(), f = fixture(), item = {uuid: 'Actor.actor.Item.weapon'};
+    f.runtime.game.time = {serverTime: 98765.5};
+    const rule = {id: 'weaken', action: 'traitSteps', trigger: 'hit', value: -1, automaticAccept: true};
+    await api.saveItemPropertyRules(item, [rule], f.runtime);
+    assert.equal(api.getItemPropertyRules(item, f.runtime)[0].automaticAcceptSince, 98766,
+        'fractional latency-adjusted clock is rounded forward, not replaced by client wall time');
+    const count = f.writes.length;
+    f.runtime.now = () => NaN;
+    await assert.rejects(() => api.saveItemPropertyRules(item, [{...rule, value: -2}], f.runtime), /approval time/);
+    assert.equal(f.writes.length, count);
+});
+
 test('library contains broad supported searchable examples with English and Turkish aliases', async () => {
     const {getPropertyLibrary, searchPropertyPresets} = await load();
     const f = fixture(), library = getPropertyLibrary(f.runtime);

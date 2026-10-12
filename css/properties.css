@@ -93,6 +93,26 @@
 .swadetools-properties-dialog [hidden] { display: none !important; }
 .swadetools-properties-dialog .st-property-total { display: flex; justify-content: space-between; border-bottom: 1px solid #c2b8a2; padding: 5px; font-size: 12px; }
 .swadetools-properties-dialog .st-property-total strong { color: #27632f; }
+.swadetools-properties-dialog .st-property-wizard { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.swadetools-properties-dialog .st-property-wizard-main,
+.swadetools-properties-dialog .st-property-wizard-step,
+.swadetools-properties-dialog .st-property-wizard-library { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.swadetools-properties-dialog .st-property-wizard-main > .st-property-toolbar > strong { margin-right: auto; }
+.swadetools-properties-dialog .st-property-wizard-step h3 { font-size: 14px; margin: 2px 0; color: #54442e; }
+.swadetools-properties-dialog .st-property-steps { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0; margin: 0; gap: 4px; }
+.swadetools-properties-dialog .st-property-steps li { color: #79705c; font-size: 11px; border-bottom: 2px solid #d5ccb8; padding: 4px 1px; }
+.swadetools-properties-dialog .st-property-steps li[aria-current="step"] { color: #54442e; font-weight: 700; border-bottom-color: #8e6035; }
+.swadetools-properties-dialog .st-property-bundle > select { width: auto; flex: 1 1 180px; }
+.swadetools-properties-dialog.has-property-sidebar { width: min(900px, calc(100vw - 48px)) !important; }
+.swadetools-properties-dialog.has-property-sidebar .st-property-wizard { grid-template-columns: minmax(0, 1fr) 300px; }
+.swadetools-properties-dialog .st-property-wizard-library { border-left: 1px solid #c2b8a2; padding-left: 12px; }
+.swadetools-properties-dialog .st-property-wizard-library .st-property-list { max-height: min(410px, 45vh); }
+.swadetools-properties-dialog .st-property-review { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.swadetools-properties-dialog .st-property-review > li { border: 1px solid #b9b09b; border-radius: 3px; padding: 8px; background: #f5f0e3; }
+.swadetools-properties-dialog .st-property-review p { font-size: 12px; line-height: 1.4; margin: 4px 0; }
+.swadetools-properties-dialog .st-property-review dl { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 4px 8px; font-size: 11px; margin: 8px 0 0; }
+.swadetools-properties-dialog .st-property-review dt { color: #655e4c; font-weight: 600; }
+.swadetools-properties-dialog .st-property-review dd { margin: 0; overflow-wrap: anywhere; }
 .swadetools-properties-dialog .st-property-tag { color: #746c5c; font-size: 10px; font-weight: 400; }
 .swadetools-properties-dialog .st-property-tag.is-applied { color: #27632f; }
 .st-properties-sheet-control { display: flex; align-items: center; gap: 6px; }
@@ -102,4 +122,9 @@
 @media (max-width: 560px) {
     .swadetools-properties-dialog .st-property-search { grid-template-columns: minmax(0, 1fr) 120px; }
     .swadetools-properties-dialog .st-property-rule { flex-wrap: wrap; }
+}
+@media (max-width: 850px) {
+    .swadetools-properties-dialog.has-property-sidebar { width: min(560px, calc(100vw - 48px)) !important; }
+    .swadetools-properties-dialog.has-property-sidebar .st-property-wizard { grid-template-columns: minmax(0, 1fr); }
+    .swadetools-properties-dialog .st-property-wizard-library { border-left: 0; border-top: 1px solid #c2b8a2; padding: 10px 0 0; }
 }

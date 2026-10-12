@@ -37,6 +37,7 @@ const busy = async (element, operation, runtime) => {
 };
 
 const dialogClass = runtime => runtime.DialogV2 ?? globalThis.foundry?.applications?.api?.DialogV2;
+const keepDialogOpen = Symbol('property-wizard-navigation');
 const waitDialog = (config, runtime) => {
     const Dialog = dialogClass(runtime);
     if (!Dialog?.wait) throw new Error('Properties & Effects requires Foundry V13 DialogV2.');
@@ -61,7 +62,7 @@ const waitValidatedDialog = (config, runtime) => {
         const dialog = new Dialog({classes: ['dialog', 'themed', 'theme-light', 'swadetools-rof-dialog', 'swadetools-properties-dialog'],
             position: {width: 560}, modal: false, ...options, buttons, form: {closeOnSubmit: false},
             submit: async value => {
-                if (value === invalid) return;
+                if (value === invalid || value === keepDialogOpen) return;
                 resolve(value && typeof value === 'object' ? value : null);
                 await dialog.close({submitted: true});
             }});
@@ -90,15 +91,15 @@ export const summarizePropertyRule = rule => {
         : rule?.action === 'skillModifier' ? rule.skill : rule?.action === 'statModifier' ? rule.stat : rule?.action === 'status' ? rule.status : '';
     const value = typeof rule?.value === 'number' ? `${rule.value > 0 ? '+' : ''}${rule.value}` : '';
     const duration = rule?.duration?.rounds ? ` · ${rule.duration.rounds} round${rule.duration.rounds === 1 ? '' : 's'}` : '';
-    return `${titleCase(rule?.trigger)} → ${action}${qualifier ? ` (${titleCase(qualifier)})` : ''}${rule?.action === 'status' ? '' : ` ${value}`}${duration}`.trim();
+    return `${titleCase(rule?.trigger)} → ${action}${qualifier ? ` (${titleCase(qualifier)})` : ''}${rule?.action === 'status' ? '' : ` ${value}`}${duration}${rule?.automaticAccept ? ' · Automatic' : ''}`.trim();
 };
 
 const rulesMarkup = (rules, editable = true) => rules.length ? rules.map((rule, index) => `<li class="st-property-rule${rule.enabled === false ? ' is-disabled' : ''}">
     <div class="st-property-rule-copy"><strong>${escape(rule.name)}</strong><small>${escape(summarizePropertyRule(rule))}</small></div>
-    ${editable ? `<div class="st-property-row-actions">${button('toggle-rule', rule.enabled === false ? 'Off' : 'On', index, `aria-label="${rule.enabled === false ? 'Enable' : 'Disable'} ${escape(rule.name)}"`)}${button('edit-rule', 'Edit', index)}${button('remove-rule', '×', index, 'title="Remove property" aria-label="Remove property"')}</div>` : ''}</li>`).join('') : '<li class="st-property-empty">No properties. Add one from the searchable library or create a custom rule.</li>';
+    ${editable ? `<div class="st-property-row-actions">${button('toggle-rule', rule.enabled === false ? 'Off' : 'On', index, `aria-label="${rule.enabled === false ? 'Enable' : 'Disable'} ${escape(rule.name)}"`)}${button('edit-rule', 'Edit', index)}${button('remove-rule', '×', index, 'title="Remove property" aria-label="Remove property"')}</div>` : ''}</li>`).join('') : '<li class="st-property-empty">No properties. Use Add Property to configure a rule in the wizard; the optional library provides templates.</li>';
 
 /** Pure markup; all user-authored strings are escaped before entering a dialog. */
-export const renderPropertyLibrary = (library, {query = '', category = 'all', favoritesOnly = false, picker = false, scope = 'character'} = {}) => {
+export const renderPropertyLibrary = (library, {query = '', category = 'all', favoritesOnly = false, picker = false, scope = 'character', pickerLabel = 'Add'} = {}) => {
     normalizePropertyScope(scope);
     const fold = foldPropertySearch;
     const terms = fold(query).trim().split(/\s+/u).filter(Boolean);
@@ -113,7 +114,7 @@ export const renderPropertyLibrary = (library, {query = '', category = 'all', fa
         <small>${escape((preset.rules ?? []).map(summarizePropertyRule).join(' · '))}</small>
         ${(preset.rules ?? []).some(rule => !isPropertyRuleInScope(rule, scope)) ? '<small class="st-property-legacy">Saved legacy cross-library rule — preserved.</small>' : ''}
         <div class="st-property-row-actions">${button('favorite', favorites.has(preset.id) ? '★' : '☆', preset.id, `title="${favorites.has(preset.id) ? 'Remove favorite' : 'Add favorite'}" aria-label="${favorites.has(preset.id) ? 'Remove favorite' : 'Add favorite'} ${escape(preset.name)}"`)}
-        ${picker ? button('choose-preset', 'Add', preset.id) : `${button('edit-preset', 'Edit', preset.id)}${button('duplicate-preset', 'Duplicate', preset.id)}${button('delete-preset', preset.builtin ? 'Hide' : 'Delete', preset.id)}`}</div>
+        ${picker ? button('choose-preset', pickerLabel, preset.id) : `${button('edit-preset', 'Edit', preset.id)}${button('duplicate-preset', 'Duplicate', preset.id)}${button('delete-preset', preset.builtin ? 'Hide' : 'Delete', preset.id)}`}</div>
     </li>`).join('') : '<li class="st-property-empty">No matches. Try a different word or category.</li>';
 };
 
@@ -168,7 +169,7 @@ const showImport = async runtime => {
     }
 };
 
-const readRuleForm = (form, original) => {
+const readRuleForm = (form, original, {validate = true} = {}) => {
     const elements = form.elements, value = name => elements[name]?.value ?? '', checked = name => elements[name]?.checked === true;
     const numeric = name => Number(value(name));
     const conditions = {attackType: value('attackType'), weaponType: value('weaponType')};
@@ -176,39 +177,53 @@ const readRuleForm = (form, original) => {
     const rule = {...clone(original), name: value('name'), enabled: checked('enabled'), trigger: value('trigger'), action: value('action'),
         target: value('target'), value: numeric('value'), trait: value('trait'), skill: value('skill'), stat: value('stat'), status: value('status'),
         duration: {rounds: numeric('rounds'), expiry: value('expiry')}, stack: value('stack'), group: value('group') || original.group, frequency: value('frequency'), conditions,
+        automaticAccept: ['hit', 'raise'].includes(value('trigger')) && checked('automaticAccept'),
         resist: {enabled: checked('resistEnabled'), trait: value('resistTrait'), modifier: numeric('resistModifier'), tn: numeric('resistTn')}};
-    return normalizeRule(rule);
+    return validate ? normalizeRule(rule) : rule;
 };
 
-export const renderPropertyRuleEditor = (rule, {scope, legacy = false} = {}) => {
+const propertyRuleFields = (rule, {scope, legacy = false} = {}) => {
     if (scope) normalizePropertyScope(scope);
     const actions = actionEntries(scope, legacy), triggers = !scope || legacy ? PROPERTY_TRIGGERS
         : scope === 'character' ? ['passive'] : actionKind(rule.action) === 'effect' ? PROPERTY_TRIGGERS.filter(value => value !== 'passive') : ['passive'];
-    return `<section class="st-properties" data-property-root>
-    ${scope ? `<p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>` : ''}${legacy ? legacyRuleNotice : ''}
-    <div class="st-property-grid">${field('Name', input('name', rule.name, 'maxlength="100" required'))}${field('Action', select('action', actions.map(([key]) => key), rule.action, Object.fromEntries(actions.map(([key, value]) => [key, value.label]))))}
+    return {payload: `<div class="st-property-grid">${field('Name', input('name', rule.name, 'maxlength="100" required'))}${field('Action', select('action', actions.map(([key]) => key), rule.action, Object.fromEntries(actions.map(([key, value]) => [key, value.label]))))}
     ${field('Trigger', select('trigger', triggers, rule.trigger))}${field('Value', number('value', rule.value))}
     <div data-property-specific="traitModifier traitSteps">${field('Attribute', select('trait', PROPERTY_TRAITS, rule.trait))}</div>
     <div data-property-specific="skillModifier">${field('Skill name', input('skill', rule.skill, 'maxlength="100" placeholder="Shooting"'))}</div>
     <div data-property-specific="statModifier">${field('Stat', select('stat', PROPERTY_STATS, rule.stat))}</div>
     <div data-property-specific="status">${field('Condition', input('status', rule.status, 'maxlength="100" list="st-property-statuses" placeholder="distracted"'))}<datalist id="st-property-statuses">${['distracted', 'vulnerable', 'shaken', 'stunned', 'prone', 'entangled', 'bound'].map(status => `<option value="${status}"></option>`).join('')}</datalist></div></div>
-    ${check('enabled', 'Enabled', rule.enabled !== false)}<p class="st-property-hint" data-property-action-hint></p>
-    <details class="st-property-details"><summary>More Details</summary><div class="st-property-grid">
+    ${check('enabled', 'Enabled', rule.enabled !== false)}<p class="st-property-hint" data-property-action-hint></p>`,
+    delivery: `<div class="st-property-grid">
     ${field('Recipient', select('target', ['self', 'target'], rule.target))}${field('Stacking', select('stack', ['sum', 'best', 'unique', 'refresh'], rule.stack))}
     ${field('Shared group', input('group', rule.group, 'maxlength="80" placeholder="Optional shared rule key"'))}${field('Frequency', select('frequency', ['attack', 'target', 'hit'], rule.frequency))}
-    ${field('Duration (rounds)', number('rounds', rule.duration?.rounds ?? 0, 0, 100))}${field('Expires at', select('expiry', ['turnStart', 'turnEnd'], rule.duration?.expiry ?? 'turnEnd'))}
+    ${field('Duration (rounds)', number('rounds', rule.duration?.rounds ?? 0, 0, 100))}${field('Expires at', select('expiry', ['turnStart', 'turnEnd'], rule.duration?.expiry ?? 'turnEnd'))}</div>
+    <div data-property-automatic>${check('automaticAccept', 'Automatic Accept', rule.automaticAccept === true)}<p class="st-property-hint">Off: the GM approves the pending effect in chat. On: a valid Hit / Raise applies automatically for new attacks after Save Properties; resistance still applies.</p></div>
+    <p class="st-property-hint" data-property-automatic-note></p>
+    <p class="st-property-hint">0 rounds = until removed. Shared group and stacking control duplicate effects; frequency limits repeated hits.</p>`,
+    conditions: `<div class="st-property-grid">
     ${field('Attack type', select('attackType', ['any', 'ranged', 'melee'], rule.conditions?.attackType ?? 'any'))}${field('Item type', select('weaponType', ['any', 'weapon', 'power'], rule.conditions?.weaponType ?? 'any'))}
     ${field('Minimum range', input('minRange', rule.conditions?.minRange ?? '', 'type="number" min="0" step="0.1" placeholder="Any"'))}${field('Maximum range', input('maxRange', rule.conditions?.maxRange ?? '', 'type="number" min="0" step="0.1" placeholder="Any"'))}</div>
     ${check('resistEnabled', 'Allow a resistance roll', rule.resist?.enabled)}<div class="st-property-grid" data-property-resistance>
     ${field('Resistance attribute', select('resistTrait', PROPERTY_TRAITS, rule.resist?.trait ?? 'vigor'))}${field('Resistance modifier', number('resistModifier', rule.resist?.modifier ?? 0, -20, 20))}${field('Resistance TN', number('resistTn', rule.resist?.tn ?? 4, 2, 20))}</div>
-    <p class="st-property-hint">0 rounds = until removed. Same group controls duplicate properties. Passive rules change calculations; triggered effects require the matching attack event. Resistance and duration apply only to triggered effects. No JavaScript or arbitrary data paths are accepted.</p></details>
+    <p class="st-property-hint">Passive native effects require unrestricted conditions and no resistance. No JavaScript or arbitrary data paths are accepted.</p>`};
+};
+
+export const renderPropertyRuleEditor = (rule, {scope, legacy = false} = {}) => {
+    const fields = propertyRuleFields(rule, {scope, legacy});
+    return `<section class="st-properties" data-property-root>${scope ? `<p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>` : ''}${legacy ? legacyRuleNotice : ''}
+    ${fields.payload}<details class="st-property-details"><summary>More Details</summary>${fields.delivery}${fields.conditions}</details>
     <p class="st-property-error" data-property-validation role="alert" hidden></p></section>`;
 };
 
-const bindRuleEditor = (root, {scope, legacy = false} = {}) => {
+const bindRuleEditor = (root, context = {}) => {
     const form = root?.closest('form');
     if (!form) return;
+    const {scope} = context;
     const update = () => {
+        const legacy = context.legacy === true;
+        const allowedActions = actionEntries(scope, legacy);
+        if (scope && Array.from(form.elements.action.options).map(option => option.value).join() !== allowedActions.map(([key]) => key).join())
+            form.elements.action.innerHTML = options(allowedActions.map(([key]) => key), form.elements.action.value, Object.fromEntries(allowedActions.map(([key, value]) => [key, value.label])));
         const action = form.elements.action.value, effect = actionKind(action) === 'effect';
         const trigger = form.elements.trigger;
         const allowedTriggers = !scope || legacy ? PROPERTY_TRIGGERS
@@ -240,8 +255,17 @@ const bindRuleEditor = (root, {scope, legacy = false} = {}) => {
         if (form.elements.resistEnabled.disabled) form.elements.resistEnabled.checked = false;
         const resist = root.querySelector('[data-property-resistance]');
         resist.hidden = form.elements.resistEnabled.disabled || !form.elements.resistEnabled.checked;
+        const automatic = form.elements.automaticAccept;
+        const accepts = effect && ['hit', 'raise'].includes(trigger.value);
+        automatic.disabled = !accepts;
+        if (!accepts) automatic.checked = false;
+        root.querySelector('[data-property-automatic]').hidden = !accepts;
+        root.querySelector('[data-property-automatic-note]').textContent = trigger.value === 'passive'
+            ? 'Passive properties need no attack approval and stay active with their source.'
+            : ['damageApplied', 'wound'].includes(trigger.value) ? 'This effect is checked after the GM applies damage; no separate automatic acceptance is needed.' : '';
     };
     form.elements.action.addEventListener('change', () => {
+        const legacy = context.legacy === true;
         if (actionKind(form.elements.action.value) === 'effect') {
             form.elements.trigger.value = scope === 'character' && !legacy ? 'passive' : 'hit';
             form.elements.target.value = scope === 'character' && !legacy ? 'self' : 'target';
@@ -255,27 +279,196 @@ const bindRuleEditor = (root, {scope, legacy = false} = {}) => {
     form.elements.trigger.addEventListener('change', update);
     form.elements.resistEnabled.addEventListener('change', update);
     update();
+    return update;
 };
 
-const showRuleEditor = async (source = {}, runtime = {}, {scope = 'character'} = {}) => {
+const WIZARD_STEPS = ['Rule', 'Effect', 'Conditions', 'Review'];
+
+export const renderPropertyWizard = (rule, {scope = 'character', legacy = false, library = {presets: []}, enabled = true} = {}) => {
+    normalizePropertyScope(scope);
+    const fields = propertyRuleFields(rule, {scope, legacy});
+    const categories = [...new Set(scopedPresets(library, scope).map(entry => entry.category))].sort();
+    return `<section class="st-properties st-property-wizard" data-property-root>
+        <div class="st-property-wizard-main">
+            <div class="st-property-toolbar"><strong class="st-property-scope-heading">${escape(scopeLabel(scope))}</strong>${button('wizard-library', 'Library', '', 'aria-expanded="false"')}</div>
+            ${!enabled ? '<p class="st-property-notice">Disabled in world settings. Saved properties remain dormant.</p>' : ''}
+            <ol class="st-property-steps" aria-label="Configuration steps">${WIZARD_STEPS.map((label, index) => `<li data-property-step-indicator="${index}"${index === 0 ? ' aria-current="step"' : ''}>${index + 1}. ${label}</li>`).join('')}</ol>
+            <div class="st-property-toolbar st-property-bundle"><select data-property-wizard-index aria-label="Property rule" hidden><option value="0">${escape(rule.name)}</option></select>${button('wizard-add-rule', '+ Rule')}${button('wizard-remove-rule', 'Remove rule', '', 'hidden')}</div>
+            <div data-property-wizard-legacy${legacy ? '' : ' hidden'}>${legacyRuleNotice}</div>
+            <section class="st-property-wizard-step" data-property-wizard-step="0"><h3>Define the rule</h3>${fields.payload}</section>
+            <section class="st-property-wizard-step" data-property-wizard-step="1" hidden><h3>Recipient and effect behavior</h3>${fields.delivery}</section>
+            <section class="st-property-wizard-step" data-property-wizard-step="2" hidden><h3>When it applies and resistance</h3>${fields.conditions}</section>
+            <section class="st-property-wizard-step" data-property-wizard-step="3" hidden><h3>Review your configuration</h3><div data-property-wizard-review></div>${button('wizard-preview', 'Preview / Test')}<p class="st-property-hint">Read-only preview: no dice, resources or character changes. Finish changes the current draft only. Save Properties approves an item; Save Preset saves a library template.</p></section>
+            <p class="st-property-error" data-property-validation role="alert" hidden></p>
+        </div>
+        <aside class="st-property-wizard-library" data-property-wizard-library hidden>
+            <div class="st-property-toolbar"><strong>${escape(scopeLabel(scope))} library</strong>${button('wizard-library', '×', '', 'aria-label="Close optional library"')}</div>
+            <p class="st-property-hint">Optional templates. Load a copy into this draft, then configure it in the wizard. Nothing is assigned yet.</p>
+            <input type="search" data-property-search placeholder="Search this library…" aria-label="Search optional library">
+            <select data-property-category aria-label="Property category">${options(['all', ...categories], 'all', {all: 'All categories'})}</select>
+            <div class="st-property-toolbar"><label class="st-property-check"><input type="checkbox" data-property-favorites><span>Favorites</span></label><span data-property-count></span></div>
+            <ul class="st-property-list" data-property-preset-list>${renderPropertyLibrary(library, {picker: true, scope, pickerLabel: 'Load draft'})}</ul>
+        </aside>
+    </section>`;
+};
+
+export const renderPropertyWizardReview = rules => `<ul class="st-property-review">${rules.map(rule => {
+    const condition = rule.conditions ?? {}, resistance = rule.resist ?? {};
+    const acceptance = rule.trigger === 'passive' ? 'Passive — no approval needed' : ['hit', 'raise'].includes(rule.trigger)
+        ? rule.automaticAccept ? 'Automatic Accept' : 'Manual GM approval in chat' : 'After GM applies damage';
+    return `<li><strong>${escape(rule.name)}</strong><p>${escape(summarizePropertyRule(rule))}</p><dl>
+        <dt>Recipient</dt><dd>${escape(titleCase(rule.target))}</dd><dt>Enabled</dt><dd>${rule.enabled === false ? 'No' : 'Yes'}</dd>
+        <dt>Acceptance</dt><dd>${escape(acceptance)}</dd><dt>Duration</dt><dd>${rule.trigger === 'passive' ? 'While source is active' : rule.duration?.rounds ? `${rule.duration.rounds} rounds · ${escape(titleCase(rule.duration.expiry))}` : 'Until removed'}</dd>
+        <dt>Stack / frequency</dt><dd>${escape(titleCase(rule.stack))} · ${escape(titleCase(rule.frequency))}</dd><dt>Shared group</dt><dd>${escape(rule.group)}</dd>
+        <dt>Conditions</dt><dd>${escape(titleCase(condition.attackType ?? 'any'))} attack · ${escape(titleCase(condition.weaponType ?? 'any'))} item · range ${escape(condition.minRange ?? 'Any')} – ${escape(condition.maxRange ?? 'Any')}</dd>
+        <dt>Resistance</dt><dd>${resistance.enabled ? `${escape(titleCase(resistance.trait))} ${resistance.modifier >= 0 ? '+' : ''}${escape(resistance.modifier)} · TN ${escape(resistance.tn)}` : 'None'}</dd>
+    </dl></li>`;
+}).join('')}</ul>`;
+
+const populateRuleForm = (form, rule) => {
+    const values = {...rule, rounds: rule.duration.rounds, expiry: rule.duration.expiry, ...rule.conditions,
+        minRange: rule.conditions.minRange ?? '', maxRange: rule.conditions.maxRange ?? '',
+        resistEnabled: rule.resist.enabled, resistTrait: rule.resist.trait, resistModifier: rule.resist.modifier, resistTn: rule.resist.tn};
+    for (const [name, value] of Object.entries(values)) {
+        const element = form.elements[name];
+        if (!element || typeof value === 'object') continue;
+        if (element.type === 'checkbox') element.checked = value === true;
+        else element.value = String(value);
+    }
+};
+
+/** Wizard returns a validated bundle only. It never approves item assignments. */
+export const showPropertyWizard = async (source = {}, runtime = {}, {scope = 'character', item} = {}) => {
     if (!isGM(runtime)) return null;
     normalizePropertyScope(scope);
+    const editing = Object.keys(source).length > 0;
     const original = normalizeRule({id: newId(), name: 'New property', ...newRuleForScope(scope), ...source});
-    const legacy = Object.keys(source).length > 0 && !isPropertyRuleInScope(original, scope);
-    // A normal wait() resolves on every submit, even invalid ones. Use native
-    // DialogV2 with closeOnSubmit:false so validation stays in the same form.
-    return waitValidatedDialog({window: {title: 'Edit Property'}, content: renderPropertyRuleEditor(original, {scope, legacy}),
-        render: (_event, dialog) => bindRuleEditor(rootOf(dialog), {scope, legacy}),
-        buttons: [{action: 'save', label: 'Save Property', callback: (_event, target) => {
-            if (!isGM(runtime)) return null;
-            const rule = readRuleForm(target.form, original);
-            if (!legacy && !isPropertyRuleInScope(rule, scope)) throw new TypeError('This property belongs to the other library.');
-            return rule;
-        }},
+    let drafts = [original], index = 0, step = 0, dirty = false, controller;
+    const context = {scope, legacy: editing && !isPropertyRuleInScope(original, scope)};
+    return waitValidatedDialog({classes: ['dialog', 'themed', 'theme-light', 'swadetools-rof-dialog', 'swadetools-properties-dialog', 'swadetools-properties-wizard'],
+        window: {title: `${item?.name ?? scopeLabel(scope)} — ${editing ? 'Edit' : 'Add'} Property Wizard`},
+        content: renderPropertyWizard(original, {...context, library: getPropertyLibrary(runtime), enabled: isPropertiesEnabled(runtime)}),
+        render: (_event, dialog) => {
+            const root = rootOf(dialog), form = root?.closest('form'); if (!root || !form) return;
+            const updateBindings = bindRuleEditor(root, context);
+            const main = root.querySelector('.st-property-wizard-main'), sidebar = root.querySelector('[data-property-wizard-library]');
+            const validation = root.querySelector('[data-property-validation]');
+            const showError = error => { validation.hidden = false; validation.textContent = errorMessage(error); };
+            const readCurrent = (stepOnly = false) => {
+                if ((!stepOnly || step === 0) && !form.elements.name.value.trim()) throw new TypeError('Give this property a name.');
+                const raw = readRuleForm(form, drafts[index], {validate: false});
+                let candidate = raw;
+                if (stepOnly) {
+                    const keys = [
+                        ['name', 'enabled', 'action', 'trigger', 'value', 'trait', 'skill', 'stat', 'status'],
+                        ['target', 'stack', 'group', 'frequency', 'duration', 'automaticAccept'],
+                        ['conditions', 'resist']
+                    ][step];
+                    candidate = {...drafts[index], ...Object.fromEntries(keys.map(key => [key, raw[key]]))};
+                    if (raw.trigger !== drafts[index].trigger && step === 0) {
+                        for (const key of ['target', 'duration', 'resist', 'automaticAccept']) candidate[key] = raw[key];
+                        if (raw.trigger === 'passive' && actionKind(raw.action) === 'effect') candidate.conditions = {attackType: 'any', weaponType: 'any'};
+                    }
+                }
+                const rule = normalizeRule(candidate);
+                if (!context.legacy && !isPropertyRuleInScope(rule, scope)) throw new TypeError('This property belongs to the other library.');
+                drafts[index] = rule;
+                return rule;
+            };
+            const updateBundle = () => {
+                const selector = root.querySelector('[data-property-wizard-index]');
+                selector.innerHTML = options(drafts.map((_, value) => String(value)), String(index), Object.fromEntries(drafts.map((rule, value) => [String(value), `${value + 1}. ${rule.name}`])));
+                selector.hidden = drafts.length < 2;
+                root.querySelector('[data-property-command="wizard-remove-rule"]').hidden = drafts.length < 2;
+            };
+            const displayStep = () => {
+                for (const panel of root.querySelectorAll('[data-property-wizard-step]')) panel.hidden = Number(panel.dataset.propertyWizardStep) !== step;
+                for (const indicator of root.querySelectorAll('[data-property-step-indicator]')) {
+                    if (Number(indicator.dataset.propertyStepIndicator) === step) indicator.setAttribute('aria-current', 'step'); else indicator.removeAttribute('aria-current');
+                }
+                form.querySelector('button[data-action="back"]').hidden = step === 0;
+                form.querySelector('button[data-action="next"]').hidden = step === 3;
+                form.querySelector('button[data-action="finish"]').hidden = step !== 3;
+                if (step === 3) root.querySelector('[data-property-wizard-review]').innerHTML = renderPropertyWizardReview(drafts);
+                validation.hidden = true;
+            };
+            const loadCurrent = () => {
+                context.legacy = !isPropertyRuleInScope(drafts[index], scope);
+                // Build the new action's trigger choices before assigning its
+                // value; otherwise Raise/Wound is lost in a passive-only list.
+                updateBindings(); form.elements.action.value = drafts[index].action; updateBindings();
+                populateRuleForm(form, drafts[index]); updateBindings();
+                root.querySelector('[data-property-wizard-legacy]').hidden = !context.legacy;
+                updateBundle();
+            };
+            const refreshLibrary = () => {
+                const library = getPropertyLibrary(runtime), categoryControl = root.querySelector('[data-property-category]');
+                const categories = [...new Set(scopedPresets(library, scope).map(entry => entry.category))].sort();
+                const category = ['all', ...categories].includes(categoryControl.value) ? categoryControl.value : 'all';
+                categoryControl.innerHTML = options(['all', ...categories], category, {all: 'All categories'});
+                root.querySelector('[data-property-preset-list]').innerHTML = renderPropertyLibrary(library, {picker: true, scope, pickerLabel: 'Load draft',
+                    query: root.querySelector('[data-property-search]').value, category, favoritesOnly: root.querySelector('[data-property-favorites]').checked});
+                root.querySelector('[data-property-count]').textContent = `${root.querySelectorAll('.st-property-preset').length} presets`;
+            };
+            main.addEventListener('input', () => { dirty = true; });
+            main.addEventListener('change', event => { if (!event.target.matches('[data-property-wizard-index]')) dirty = true; });
+            for (const [selector, event] of [['[data-property-search]', 'input'], ['[data-property-category]', 'change'], ['[data-property-favorites]', 'change']]) root.querySelector(selector).addEventListener(event, refreshLibrary);
+            root.querySelector('[data-property-wizard-index]').addEventListener('change', event => {
+                const next = Number(event.target.value);
+                try { readCurrent(); if (!Number.isInteger(next) || !drafts[next]) throw new TypeError('Choose a property rule.'); index = next; loadCurrent(); displayStep(); }
+                catch (error) { event.target.value = String(index); showError(error); }
+            });
+            root.addEventListener('click', event => {
+                const control = event.target.closest?.('[data-property-command]');
+                if (!control || !root.contains(control)) return;
+                event.preventDefault(); event.stopPropagation();
+                void busy(control, async () => {
+                    if (!isGM(runtime)) return;
+                    const command = control.dataset.propertyCommand;
+                    if (command === 'wizard-library') {
+                        sidebar.hidden = !sidebar.hidden;
+                        asElement(dialog.element)?.classList.toggle('has-property-sidebar', !sidebar.hidden);
+                        main.querySelector('[data-property-command="wizard-library"]').setAttribute('aria-expanded', String(!sidebar.hidden));
+                    } else if (command === 'choose-preset') {
+                        const preset = getPropertyLibrary(runtime).presets.find(entry => entry.id === control.dataset.propertyId && getPropertyPresetScope(entry) === scope);
+                        if (!preset || !preset.rules.length) return;
+                        if (dirty && !await confirm('Replace Unsaved Draft?', 'Loading this template replaces all unsaved wizard rules. Existing item properties are unchanged until Save Properties.', runtime)) return;
+                        drafts = uniqueRules(preset.rules); index = 0; step = 0; dirty = false;
+                        loadCurrent(); displayStep();
+                    } else if (command === 'favorite') {
+                        const library = getPropertyLibrary(runtime), preset = library.presets.find(entry => entry.id === control.dataset.propertyId && getPropertyPresetScope(entry) === scope);
+                        if (preset) { await setPropertyFavorite(preset.id, !library.favorites.includes(preset.id), runtime); refreshLibrary(); }
+                    } else if (command === 'wizard-add-rule') {
+                        readCurrent(); if (drafts.length >= 100) throw new TypeError('A property bundle supports at most 100 rules.');
+                        drafts.push(normalizeRule({id: newId(), name: 'New property', ...newRuleForScope(scope)})); index = drafts.length - 1; step = 0; dirty = true;
+                        loadCurrent(); displayStep();
+                    } else if (command === 'wizard-remove-rule' && drafts.length > 1) {
+                        drafts.splice(index, 1); index = Math.min(index, drafts.length - 1); dirty = true; loadCurrent(); displayStep();
+                    } else if (command === 'wizard-preview') {
+                        readCurrent();
+                        if (item) await showPropertiesPreview(item, runtime, drafts);
+                        else notify('Read-only rule preview is shown above. Open this wizard on an owned item to test character calculations.', 'info', runtime);
+                    }
+                }, runtime);
+            });
+            controller = {
+                back: () => { step = Math.max(0, step - 1); displayStep(); return keepDialogOpen; },
+                next: () => { if (step === 3) return keepDialogOpen; readCurrent(true); step = Math.min(3, step + 1); updateBundle(); displayStep(); return keepDialogOpen; },
+                finish: () => { if (!isGM(runtime)) return null; if (step !== 3) throw new TypeError('Review this configuration before finishing.'); readCurrent(); return validateRules(drafts); }
+            };
+            // Validation is handled in the wizard so invalid hidden controls
+            // never strand Cancel or Back with a browser focus error.
+            for (const control of form.querySelectorAll('.form-footer button')) control.formNoValidate = true;
+            refreshLibrary(); updateBundle(); displayStep();
+        }, buttons: [{action: 'back', label: 'Back', callback: () => controller.back()},
+            {action: 'next', label: 'Next', default: true, callback: () => controller.next()},
+            {action: 'finish', label: editing ? 'Update Draft' : 'Add to Draft', callback: () => controller.finish()},
             {action: 'cancel', label: 'Cancel', callback: () => null}]}, runtime);
 };
 
-const editRules = async (root, rules, changed, runtime, scope) => {
+const showRuleEditor = showPropertyWizard;
+
+const editRules = async (root, rules, changed, runtime, scope, item) => {
     root.addEventListener('click', event => {
         const control = event.target.closest?.('[data-property-command]');
         if (!control || !root.contains(control)) return;
@@ -285,11 +478,11 @@ const editRules = async (root, rules, changed, runtime, scope) => {
         void busy(control, async () => {
             if (!isGM(runtime)) return;
             const index = Number(control.dataset.propertyId);
-            if (command === 'new-rule') { const result = await showRuleEditor({}, runtime, {scope}); if (result) rules.push(result); }
+            if (command === 'new-rule') { const result = await showRuleEditor({}, runtime, {scope, item}); if (result?.length) rules.push(...result); }
             else if (Number.isInteger(index) && index >= 0 && index < rules.length) {
                 if (command === 'remove-rule') rules.splice(index, 1);
                 else if (command === 'toggle-rule') rules[index] = {...rules[index], enabled: rules[index].enabled === false};
-                else { const result = await showRuleEditor(rules[index], runtime, {scope}); if (result) rules[index] = result; }
+                else { const result = await showRuleEditor(rules[index], runtime, {scope, item}); if (result?.length) rules.splice(index, 1, ...result); }
             }
             changed();
         }, runtime);
@@ -364,7 +557,7 @@ export const showPropertiesLibrary = async (config = {}, runtime = {}) => {
                     // opposite-library ID cannot bypass a locked item picker.
                     const data = getPropertyLibrary(runtime), preset = data.presets.find(entry => entry.id === id && getPropertyPresetScope(entry) === scope);
                     if (command === 'choose-preset' && preset) { selection = uniqueRules(preset.rules); await dialog.close(); return; }
-                    if (command === 'new-custom') { const rule = await showRuleEditor({}, runtime, {scope}); if (rule) { selection = [rule]; await dialog.close(); } return; }
+                    if (command === 'new-custom') { const rules = await showRuleEditor({}, runtime, {scope}); if (rules?.length) { selection = rules; await dialog.close(); } return; }
                     if (command === 'favorite' && preset) await setPropertyFavorite(id, !data.favorites.includes(id), runtime);
                     else if (command === 'new-preset') await showPresetEditor(null, runtime, scope);
                     else if (command === 'edit-preset' && preset) await showPresetEditor(preset, runtime, scope);
@@ -425,28 +618,33 @@ export const showItemProperties = async (item, runtime = {}) => {
     const editable = isGM(runtime) && item.isOwner !== false;
     const rules = clone(getItemPropertyRules(item, runtime));
     const scope = getItemPropertyScope(item);
+    if (editable && !rules.length) {
+        const initial = await showPropertyWizard({}, runtime, {scope, item});
+        if (!initial?.length || !isGM(runtime)) return;
+        rules.push(...initial);
+    }
     const result = await waitDialog({window: {title: `${item.name} — Properties & Effects`}, content: `<section class="st-properties" data-property-root>
         <p class="st-property-scope-heading">${escape(scopeLabel(scope))}</p>
         ${!isPropertiesEnabled(runtime) ? '<p class="st-property-notice">Disabled in world settings. Saved properties remain dormant.</p>' : ''}
         ${rules.some(rule => !isPropertyRuleInScope(rule, scope)) ? legacyRuleNotice : ''}
         <ul class="st-property-rules" data-property-rules>${rulesMarkup(rules, editable)}</ul>
-        <div class="st-property-toolbar">${editable ? `${button('add-from-library', '+ Add Property')}${button('new-rule', '+ Custom')}` : ''}${button('preview', 'Preview / Test')}${isGM(runtime) ? button('open-library', 'Library') : ''}</div>
+        <div class="st-property-toolbar">${editable ? `${button('add-from-library', '+ Add Property')}${button('new-rule', '+ Custom')}` : ''}${button('preview', 'Preview / Test')}</div>
         <details class="st-property-details"><summary>More Details</summary><p class="st-property-hint">Item properties are independent copies of library templates. Passive rules require the source to be active. Triggered effects occur only at their configured event. AoE, Evade and Fire keep their existing settings.</p></details></section>`,
         render: (_event, dialog) => {
             const root = rootOf(dialog); if (!root) return;
             const refresh = () => { root.querySelector('[data-property-rules]').innerHTML = rulesMarkup(rules, editable); };
-            if (editable) void editRules(root, rules, refresh, runtime, scope);
+            if (editable) void editRules(root, rules, refresh, runtime, scope, item);
             root.addEventListener('click', event => {
                 const control = event.target.closest?.('[data-property-command]');
                 if (!control || !root.contains(control)) return;
                 const command = control.dataset.propertyCommand;
-                if (!['add-from-library', 'preview', 'open-library'].includes(command)) return;
+                if (!['add-from-library', 'preview'].includes(command)) return;
                 event.preventDefault(); event.stopPropagation();
                 void busy(control, async () => {
                     if (command === 'preview') { await showPropertiesPreview(item, runtime, rules); return; }
                     if (!editable || !isGM(runtime)) return;
-                    if (command === 'open-library') await showPropertiesLibrary({scope}, runtime);
-                    else { const additions = await showPropertiesLibrary({picker: true, scope}, runtime); if (additions?.length) { rules.push(...additions); refresh(); } }
+                    const additions = await showPropertyWizard({}, runtime, {scope, item});
+                    if (additions?.length) { rules.push(...additions); refresh(); }
                 }, runtime);
             });
         }, buttons: editable ? [{action: 'save', label: 'Save Properties', callback: () => validateRules(rules)}, {action: 'cancel', label: 'Cancel', callback: () => null}] : [{action: 'close', label: 'Close'}]}, runtime);

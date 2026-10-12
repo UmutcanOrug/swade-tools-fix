@@ -3,9 +3,9 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Experimental Properties & Effects (2.2.1)
+## Experimental Properties & Effects (2.2.2)
 
-Version 2.2.1 is available through the normal stable Latest update channel.
+Version 2.2.2 is available through the normal stable Latest update channel.
 Back up the world and update between sessions. The new Properties system
 remains **off by default**; existing AoE/Flame workflows are preserved.
 
@@ -19,7 +19,14 @@ Enable **Configure Settings → SWADE Tools → Experimental Properties & Effect
 Open **Properties & Effects Library** in those settings, or open a weapon,
 Edge or Ability's **Properties** tab and use the new **Properties & Effects ⚙**.
 
-The light compact editor includes 40 editable starting templates in two separate
+Adding a property opens a four-step light compact wizard: action/trigger,
+recipient/duration/stacking, conditions/resistance, then a complete review.
+The optional **Library** opens on the right and loads an independent draft;
+it is no longer the initial Add Property screen. **Add to Draft / Update Draft**
+does not approve an item: finish with the item's **Save Properties** button.
+Multi-rule presets retain all their rules, with a rule selector inside the wizard.
+
+The editor includes 40 editable starting templates in two separate
 libraries: Weapon / Power attack properties and Edge / Ability / Character
 passive properties. Item pickers stay in their own library, without a combined
 Show All view. The settings library has two tabs. Categorized Turkish/English
@@ -33,8 +40,15 @@ Supported effects include attack/damage modifiers, ranged/melee defense,
 best-only cover, minimum Strength, Soak and Gang-Up reduction; native attribute,
 skill and statistic effects; and conditions on Hit, Raise, applied damage or
 actual wounds. **Preview / Test** does not roll, consume resources or write
-actor data. Triggered Hit/Raise effects require the elected GM's **Apply
-Effects** in the attack card's closed **More Details** section. Damage/Wound
+actor data. Triggered Hit/Raise effects default to the elected GM's **Apply
+Effects** in the attack card's closed **More Details** section. A per-rule
+**Automatic Accept** checkbox in wizard step 2 enables approved Hit/Raise
+effects for new attacks after **Save Properties**, including native single fire
+and RoF. Resistance, ownership, outcome and duplicate-event checks still apply;
+old chat cards do not retroactively gain automatic effects. Mixed automatic/manual
+rules retain the remaining Apply button and the managed-effects Undo control.
+This does not automatically roll or apply weapon damage. Passive effects need
+no chat approval. Damage/Wound
 effects run only after native GM Apply Damage, including remaining Soak wounds.
 Resistance results and effect audit stay on that same card.
 
@@ -49,7 +63,9 @@ yet supported; existing vehicle attacks remain available.
 Before reverting to 2.1.20, **turn off Experimental Properties & Effects while
 this build is still installed**. This disables only its managed native effects,
 not AoE/On Fire or unrelated effects. Reload clients, then restore the old
-module files. See [Türkçe kurulum ve geri dönüş](PROPERTIES-TR.md).
+module files. New automatic-approval metadata is not understood by 2.2.1 or
+older; keep a pre-update world/library backup for downgrade.
+See [Türkçe kurulum ve geri dönüş](PROPERTIES-TR.md).
 
 ## Compact weapon controls and custom Shotgun damage (2.1.13)
 

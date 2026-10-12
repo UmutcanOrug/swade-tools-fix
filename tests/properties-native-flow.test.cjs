@@ -40,8 +40,8 @@ async function fixture(t,{enabled=true,cover=-4,nativeDodge=true}={}){
     global.canvas={scene:{id:'scene'},tokens:{get:id=>id===source.id?source:id===target.id?target:null},dimensions:{distance:1},
         grid:{distance:1,measurePath:([a,b])=>({distance:Math.hypot(a.x-b.x,a.y-b.y)/100})}};
     const {default:RollControl}=await moduleOf('class/RollControl.js');
-    const attack=(total=8)=>{
-        const message={id:'attack',rolls:[{total}],flags:{'swade-tools':{itemroll:item.id,userof:1,skill:'Shooting',rolltype:'skill',useactor:actor.id}}};
+    const attack=(total=8,existingMessage=null)=>{
+        const message=existingMessage??{id:'attack',rolls:[{total}],flags:{'swade-tools':{itemroll:item.id,userof:1,skill:'Shooting',rolltype:'skill',useactor:actor.id}}};
         const control=new RollControl(message,null,game.user);
         control.getActor=asToken=>asToken?source:actor;
         control.getItemOwner=()=>actor;
@@ -60,6 +60,52 @@ test('actual native single fire uses strongest custom/native Dodge and readied c
     assert.equal(control.propertiesInputs[0].target,f.target);
     assert.equal(control.propertiesInputs[0].hitKey,'1');
     assert.match(control.targetPrint[0].print,/Properties \/ Cover: -4/);
+});
+
+test('an automatically applied Vulnerable effect cannot turn its own native hit or damage link into a Raise',async t=>{
+    const f=await fixture(t,{nativeDodge:false,cover:0});
+    const {registerPropertyCandidate}=await moduleOf('services/PropertiesEffects.js');
+    const clone=value=>JSON.parse(JSON.stringify(value));
+    f.setRules(f.item,[{id:'vulnerable',name:'Vulnerable on Hit',action:'status',status:'vulnerable',trigger:'hit',
+        automaticAccept:true,automaticAcceptSince:1}]);
+    f.victim.effects=new Map();f.victim.statuses=new Set();
+    const gm={id:'gm',isGM:true,active:true};game.user=gm;game.users=new Map([[gm.id,gm]]);
+    const scene={id:'scene',tokens:new Map([[f.target.id,f.target.document]])};
+    game.scenes=new Map([[scene.id,scene]]);game.messages=new Map();
+    let ledger={version:1,candidates:{},events:{}};
+    const oldGet=game.settings.get;
+    game.settings.get=(scope,key)=>key==='propertiesEventLedger'?ledger:oldGet(scope,key);
+    game.settings.set=async(_scope,key,value)=>{assert.equal(key,'propertiesEventLedger');ledger=clone(value);};
+    f.victim.createEmbeddedDocuments=async(type,data)=>{
+        assert.equal(type,'ActiveEffect');
+        f.victim.system.status.isVulnerable=true;f.victim.statuses.add('vulnerable');
+        return data.map(raw=>{const effect={...clone(raw),id:'vulnerable-effect',parent:f.victim,active:true};
+            f.victim.effects.set(effect.id,effect);return effect;});
+    };
+    const before=f.attack(7),message=before.chat;
+    Object.assign(message,{timestamp:100,user:gm.id,isContentVisible:true,async update(data){
+        for(const [key,value]of Object.entries(data)){
+            const parts=key.split('.');let object=this;
+            for(const part of parts.slice(0,-1))object=object[part]??={};
+            object[parts.at(-1)]=clone(value);
+        }
+    }});
+    game.messages.set(message.id,message);
+    const documents=new Map([[f.actor.uuid,f.actor],[f.item.uuid,f.item],[f.target.document.uuid,f.target.document]]);
+    const runtime={gameRef:game,canvasRef:canvas,fromUuid:async uuid=>documents.get(uuid),
+        resolvePropertyCandidate:async()=>({outcome:'hit'}),statusEffects:[{id:'vulnerable',name:'Vulnerable',
+            changes:[{key:'system.status.isVulnerable',mode:5,value:'true'}]}]};
+    assert.equal(before.propertiesInputs[0].outcome,'hit');
+    const applied=await registerPropertyCandidate(before.propertiesInputs[0],runtime);
+    assert.equal(applied.status,'applied');
+    const rerender=f.attack(7,message);
+    assert.equal(rerender.propertiesInputs[0].outcome,'hit');
+    assert.match(rerender.targetPrint[0].print,/data-swadetools-raise=0/);
+    assert.doesNotMatch(rerender.targetPrint[0].print,/data-swadetools-raise=1/);
+    const next=f.attack(7,{...message,id:'next',flags:{'swade-tools':{...message.flags['swade-tools']}}});
+    assert.equal(next.propertiesInputs[0].outcome,'raise','a different attack benefits from existing Vulnerable normally');
+    message.flags['swade-tools'].gmmod=1;
+    assert.equal(f.attack(7,message).propertiesInputs[0].outcome,'raise','a genuine GM card correction recalculates the original card');
 });
 
 test('default-off keeps existing single-fire Dodge/cover behavior and stages no effect',async t=>{

@@ -1,6 +1,6 @@
-# Properties & Effects — 2.2.1
+# Properties & Effects — 2.2.2
 
-2.2.1 normal güncelleme kanalında ve ana daldadır. Yeni Properties sistemi
+2.2.2 normal güncelleme kanalında ve ana daldadır. Yeni Properties sistemi
 varsayılan kapalıdır. Canlı oyunun ortasında kurmayın. Önce Foundry'den dünyanın
 ayrıca yedeğini alın. Önceki 2.1.20 sürümü geri dönüş için durur; hazırlanan
 2.1.20 ZIP yalnız modül dosyalarının yedeğidir.
@@ -27,9 +27,27 @@ tüm bağlı istemciler yeniden başlatılmalı.
 2. Aynı yerde **Open Properties Library** kütüphaneyi açar.
 3. Silah/Edge/Ability item'ının **Properties** sekmesindeki **Properties & Effects ⚙**
    ile özellik ekleyin. Açık bir item ekranında düğme görünmüyorsa ekranı yeniden açın.
-4. **Add Property** kütüphaneden seçer; **Custom** yeni kural oluşturur.
-   **Save Properties** onayından önce değişiklikler taslaktır. **Preview / Test**
+4. Boş bir item'da doğrudan sihirbaz açılır. **Add Property / Custom** da
+   sihirbaz açar; hazır örnekler **Library** düğmesiyle sağdan açılır.
+   **Add to Draft / Update Draft** yalnız taslağa ekler. Sonrasında item ekranındaki
+   **Save Properties** onayından önce değişiklikler uygulanmaz. **Preview / Test**
    gerçek zar atmaz, kaynak harcamaz ve karakteri değiştirmez.
+
+Sihirbazın dört adımı: eylem/tetikleyici, hedef/süre/birleşme, koşullar/direnç
+ve son kontrol. Birden fazla kuralı olan şablonlar eksiksiz yüklenir; kural
+seçicisinden her biri ayrı düzenlenebilir. Geri/ileri geçişi ve iptal dünyaya
+özellik atamaz. Kütüphaneden başka şablon yüklemek düzenlenmiş taslağın üstüne
+yazacaksa önce onay ister.
+
+İkinci adımda Hit/Raise efektleri için **Automatic Accept** vardır; varsayılan
+kapalıdır. Açıp **Save Properties** yaptıktan sonraki yeni saldırılarda yetkili
+GM bağlıyken uygun efekt otomatik uygulanır. Direnç zarı ve güvenlik kontrolleri
+atlanmaz; eski saldırı kartları yeni açılan ayarı geriye dönük tetiklemez.
+Karışık özelliklerde yalnız otomatik olanlar uygulanır; kalanlar için chat'te
+**Apply Effects**, uygulananlar için **Undo Created Effects** kalır.
+Bu ayar silah hasarını kendiliğinden atmaz veya karaktere hasar basmaz.
+Pasif özellikler zaten etkin oldukları sürece çalışır; Damage Applied/Wound
+efektleri yine GM gerçekten hasarı uyguladıktan sonra çalışır.
 
 Kütüphanede iki ayrı liste vardır: **Weapon / Power** saldırı-isabet özellikleri
 ve **Edge / Ability / Character** sürekli karakter özellikleri. Item'dan açılan
@@ -49,7 +67,8 @@ onaylamalıdır. Oyuncunun kendi item flag'lerini değiştirmesi kuralları onay
   Değer −2, grup `cover`, stacking **Best**. Daha iyi siperle toplanmaz.
 - Zayıflatan silah: **Weakening Hit** → Strength −1 die step, 2 round.
   İsabetten sonra saldırı kartındaki **Effects · More Details → Apply Effects**
-  ile yetkili GM uygular. Direnç varsa zar ve sonuç aynı bölümde görünür.
+  ile yetkili GM uygular; sihirbazda Automatic Accept açıksa yeni isabetlerde
+  bu tıklama gerekmez. Direnç varsa zar ve sonuç aynı bölümde görünür.
 - Yarayla zehir: **Poison Wound** ancak GM hasarı gerçekten uygulayıp kalan
   yara oluştuğunda çalışır. Hasar önizlemesi veya tamamen emilmiş yara yetmez.
 
@@ -74,9 +93,9 @@ sonucuyla çelişen elle seçilmiş Hit/Raise yeni efekt için kabul edilmez.
 
 ## Güvenli geri dönüş
 
-Bu güncellemeden önce dünya/kütüphane yedeği alın. 2.2.1'in şablon liste bilgisi
-2.2.0 tarafından tanınmaz; özellikle 2.2.0'a dönmek için güncelleme öncesi
-dünya/kütüphane yedeğinizi kullanın. Yalnız modül ZIP'ini değiştirmek yeni
+Bu güncellemeden önce dünya/kütüphane yedeği alın. 2.2.2'nin otomatik onay
+bilgisi 2.2.1 ve daha eski sürümler tarafından tanınmaz; geri dönüş için
+güncelleme öncesi dünya/kütüphane yedeğinizi kullanın. Yalnız modül ZIP'ini değiştirmek yeni
 kütüphane verisini eski biçime çevirmez.
 
 1. Bu sürüm hâlâ kurulu iken **Experimental Properties & Effects** ayarını kapatın.

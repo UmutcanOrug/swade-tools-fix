@@ -21,7 +21,7 @@ export const PROPERTY_ACTIONS = Object.freeze(Object.fromEntries([
     ['statModifier', 'Statistic Modifier', 'effect', -20, 20]
 ].map(([id, label, kind, valueMin, valueMax]) => [id, Object.freeze({id, label, kind, valueMin, valueMax})])));
 
-const RULE_KEYS = new Set(['version', 'id', 'name', 'enabled', 'trigger', 'action', 'target', 'value', 'trait', 'skill', 'stat', 'status', 'duration', 'stack', 'group', 'frequency', 'conditions', 'resist']);
+const RULE_KEYS = new Set(['version', 'id', 'name', 'enabled', 'trigger', 'action', 'target', 'value', 'trait', 'skill', 'stat', 'status', 'duration', 'stack', 'group', 'frequency', 'conditions', 'resist', 'automaticAccept', 'automaticAcceptSince']);
 const PASSIVE_ACTIONS = Object.keys(PROPERTY_ACTIONS).filter(action => PROPERTY_ACTIONS[action].kind === 'passive');
 const OUTGOING = new Set(['attackMod', 'damageMod', 'minStrengthSteps']);
 const DEFENSIVE = new Set(['incomingRanged', 'incomingMelee', 'cover', 'soakMod', 'gangupIgnore']);
@@ -100,9 +100,18 @@ export const normalizeRule = (raw, {strict = true} = {}) => {
     const target = choice(raw.target, effect && trigger !== 'passive' ? 'target' : 'self', ['self', 'target'], 'Target');
     if (trigger === 'passive' && target !== 'self') throw new TypeError('Passive properties must target their bearer.');
     if (effect && trigger === 'passive' && (conditions.attackType !== 'any' || conditions.weaponType !== 'any' || conditions.minRange !== undefined || conditions.maxRange !== undefined || resistRaw.enabled === true)) throw new TypeError('Passive native effects cannot depend on an attack context or resistance.');
+    const automaticAccept = bool(raw.automaticAccept, false, 'Automatic Accept') && effect && ['hit', 'raise'].includes(trigger);
+    // The GM-owned library stamps this hidden field when an assignment is
+    // enabled or changed. A template/import cannot retroactively execute on
+    // old attack cards simply because their chat history is rendered again.
+    const automaticAcceptSince = number(raw.automaticAcceptSince, 0, 0, 8640000000000000, 'Automatic Accept Activation');
     return {
         version: PROPERTY_VERSION, id, name: text(raw.name, PROPERTY_ACTIONS[action].label, 100, 'Name'),
         enabled: bool(raw.enabled, true, 'Enabled'), trigger, action,
+        // Passive rules need no approval; actual damage/wound events already
+        // execute after the native GM damage action. Approval applies only to
+        // eligible hit/raise effects, never arbitrary data in a chat mirror.
+        automaticAccept, automaticAcceptSince: automaticAccept ? automaticAcceptSince : 0,
         target,
         value: number(raw.value, action === 'status' ? 1 : 0, PROPERTY_ACTIONS[action].valueMin, PROPERTY_ACTIONS[action].valueMax, 'Value'),
         trait, skill, stat, status,

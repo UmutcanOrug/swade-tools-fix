@@ -21,7 +21,7 @@ import { registerAoeFire } from './services/AoeFire.js';
 import { registerAoeActorControls } from './services/AoeActorConfig.js';
 import { registerAoeFireVisuals } from './services/AoeFireVisuals.js';
 import {registerPropertiesItemControls} from './services/PropertiesUI.js';
-import {registerPropertiesEffects, synchronizePropertyEffects} from './services/PropertiesEffects.js';
+import {registerPropertiesEffects, synchronizePropertyEffects, setPropertyCandidateResolver} from './services/PropertiesEffects.js';
 import {registerPropertiesChatControls} from './services/PropertiesChat.js';
 import {registerPropertiesPoolControls, resolveCurrentPropertyCandidate} from './services/PropertiesRollIntegration.js';
 
@@ -31,6 +31,7 @@ registerAoeChatControls();
 registerAoeActorControls();
 registerPropertiesItemControls();
 registerPropertiesEffects();
+setPropertyCandidateResolver(resolveCurrentPropertyCandidate);
 registerPropertiesChatControls({resolvePropertyCandidate:resolveCurrentPropertyCandidate});
 registerPropertiesPoolControls();
 

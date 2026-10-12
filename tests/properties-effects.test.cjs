@@ -75,6 +75,316 @@ const fixture = async (overrides = {}) => {
         settings, message, runtime, input, documents};
 };
 
+const automaticFixture = async (overrides = {}) => {
+    const f = await fixture({automaticAccept: true, automaticAcceptSince: 1, ...overrides});
+    f.calls.resolutions = 0;
+    f.runtime.resolvePropertyCandidate = async ({entry}) => {
+        f.calls.resolutions++; return {outcome: entry.outcome};
+    };
+    return f;
+};
+
+test('Automatic Accept applies only an approved eligible rule on primary GM staging without another click or card', async () => {
+    const f = await automaticFixture();
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(candidate.status, 'applied'); assert.equal(f.calls.create.length, 1);
+    assert.equal(f.calls.resolutions, 1); assert.equal(f.calls.rolls, 0); assert.equal(f.calls.cards, 0);
+    const record = Object.values(f.settings.propertiesEventLedger.events)[0];
+    assert.equal(record.acceptance, 'automatic'); assert.equal(record.actorUuid, f.victim.uuid);
+    assert.match(f.api.renderPropertyCandidates(f.message, f.runtime), /Undo Created Effects/);
+    assert.doesNotMatch(f.api.renderPropertyCandidates(f.message, f.runtime), /Apply Effects/);
+});
+
+test('mixed Automatic Accept and manual rules keep pending Apply and Undo together, then resolve only remaining effects', async () => {
+    const f = await automaticFixture({stack: 'sum'});
+    const manual = f.core.normalizeRule({...f.rule, id: 'manual', name: 'Manual Armor', action: 'statModifier', stat: 'armor',
+        value: -2, automaticAccept: false});
+    f.settings.propertiesLibrary.assignments[f.item.uuid].push(manual);
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(candidate.status, 'pending'); assert.equal(f.calls.create.length, 1);
+    assert.match(candidate.result, /Manual Armor: pending GM approval/);
+    const html = f.api.renderPropertyCandidates(f.message, f.runtime);
+    assert.match(html, /Apply Effects/); assert.match(html, /Undo Created Effects/);
+    await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(f.calls.create.length, 1, 'render replay does not auto-approve the manual rule');
+    const result = await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+    assert.equal(result.status, 'applied'); assert.equal(f.calls.create.length, 2);
+    assert.deepEqual(Object.values(f.settings.propertiesEventLedger.events).map(event => event.acceptance), ['automatic', 'manual']);
+    await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+    assert.equal(f.calls.create.length, 2);
+});
+
+test('old rules default to manual and forged Automatic Accept in player mirrors or item flags does not approve them', async () => {
+    const f = await fixture();
+    delete f.settings.propertiesLibrary.assignments[f.item.uuid][0].automaticAccept;
+    f.message.flags['swade-tools'].automaticAccept = true;
+    f.message.flags['swade-tools'].propertiesCandidates = [{automaticAccept: true, status: 'pending'}];
+    f.item.flags = {'swade-tools': {properties: [{...f.rule, automaticAccept: true}]}};
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(candidate.status, 'pending'); assert.equal(f.calls.create.length, 0);
+});
+
+test('historical, simultaneous and missing-timestamp cards never auto-apply a newly activated assignment', async () => {
+    for (const [activation, timestamp] of [[101, 100], [100, 100], [0, 100], [1, 0], [1, undefined]]) {
+        const f = await automaticFixture({automaticAcceptSince: activation});
+        f.message.timestamp = timestamp;
+        const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+        assert.equal(candidate.status, 'pending'); assert.equal(f.calls.create.length, 0);
+        assert.equal(f.calls.resolutions, 0, 'history remains manual without a fresh-resolution side effect');
+        const manual = await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+        assert.equal(manual.status, 'applied'); assert.equal(f.calls.create.length, 1,
+            'the activation boundary does not disable the GM manual approval fallback');
+    }
+    const fresh = await automaticFixture({automaticAcceptSince: 100});
+    fresh.message.timestamp = 101;
+    assert.equal((await fresh.api.registerPropertyCandidate(fresh.input, fresh.runtime)).status, 'applied');
+    assert.equal(fresh.calls.create.length, 1);
+});
+
+test('newly assigned automatic effect cannot retroactively execute on a previously unstaged old attack', async () => {
+    const f = await automaticFixture({automaticAcceptSince: 500});
+    f.message.timestamp = 100;
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(candidate.status, 'pending'); assert.equal(f.calls.create.length, 0);
+    await f.api.registerPropertyCandidate(f.input, {...f.runtime});
+    assert.equal(f.calls.create.length, 0, 'reloading/rendering a historical unprocessed attack stays manual');
+});
+
+test('automatic approval requires a trusted fresh-outcome resolver and rejects changed outcomes or resolver-side target changes', async () => {
+    for (const change of ['missing', 'miss', 'target', 'roll']) {
+        const f = await automaticFixture();
+        if (change === 'missing') delete f.runtime.resolvePropertyCandidate;
+        else f.runtime.resolvePropertyCandidate = async () => {
+            if (change === 'target') f.target.x = 123;
+            if (change === 'roll') f.message.rolls[0].total = 1;
+            return {outcome: change === 'miss' ? 'Miss' : 'Hit'};
+        };
+        const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+        assert.equal(candidate.status, 'pending'); assert.equal(f.calls.create.length, 0);
+        assert.equal(Object.keys(f.settings.propertiesEventLedger.events).length, 0);
+    }
+});
+
+test('a failing fresh resolver leaves a reviewable attack card without rejecting rendering or applying an effect', async () => {
+    const f = await automaticFixture();
+    f.runtime.resolvePropertyCandidate = async () => {throw new Error('Native lookup unavailable');};
+    let candidate;
+    await assert.doesNotReject(async () => {candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);});
+    assert.equal(candidate.status, 'review'); assert.match(candidate.result, /could not be verified/);
+    assert.match(f.api.renderPropertyCandidates(f.message, f.runtime), /GM review is required/);
+    assert.equal(f.calls.create.length, 0); assert.equal(f.calls.updates.length, 0); assert.equal(f.calls.rolls, 0);
+    assert.equal(Object.keys(f.settings.propertiesEventLedger.events).length, 0);
+    await assert.doesNotReject(f.api.registerPropertyCandidate(f.input, f.runtime));
+    assert.equal(f.calls.create.length, 0);
+});
+
+test('automatic and concurrent manual requests finish without serial-queue deadlock or duplicate native writes', async () => {
+    const f = await automaticFixture({stack: 'sum'});
+    let timer;
+    const staged = await Promise.race([
+        Promise.all(Array.from({length: 8}, () => f.api.registerPropertyCandidate(f.input, f.runtime))),
+        new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('Serial queue did not finish')), 1500);})
+    ]).finally(() => clearTimeout(timer));
+    await Promise.all(staged.map(candidate => f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime)));
+    assert.equal(f.calls.create.length, 1); assert.equal(Object.keys(f.settings.propertiesEventLedger.events).length, 1);
+});
+
+test('automatic replay and same-root Benny card preserve durable per-target event identity after a simulated reload', async () => {
+    const f = await automaticFixture({stack: 'sum'});
+    await f.api.registerPropertyCandidate(f.input, f.runtime);
+    const ledger = clone(f.settings.propertiesEventLedger);
+    f.settings.propertiesEventLedger = ledger;
+    await f.api.registerPropertyCandidate(f.input, {...f.runtime});
+    const reroll = {...f.message, id: 'reroll', timestamp: 200,
+        flags: {'swade-tools': {itemroll: f.item.id, propertiesRootId: f.message.id}},
+        async update(data) {for (const [key, value] of Object.entries(data)) setPath(this, key, clone(value));}};
+    f.game.messages.set(reroll.id, reroll);
+    const candidate = await f.api.registerPropertyCandidate({...f.input, message: reroll}, f.runtime);
+    assert.equal(candidate.status, 'applied'); assert.equal(f.calls.create.length, 1);
+    assert.equal(Object.keys(f.settings.propertiesEventLedger.events).length, 1);
+});
+
+test('automatic RoF-style per-hit and per-target frequencies deduplicate without dropping distinct targets', async () => {
+    for (const [frequency, expected] of [['hit', 3], ['target', 2]]) {
+        const f = await automaticFixture({frequency, stack: 'sum'});
+        const otherActor = {...f.victim, uuid: 'Scene.scene.Token.other.Actor.other', effects: new Map()};
+        // Test actor creation is bound to its own fixture owner; count calls
+        // while still checking the authoritative recipient provenance.
+        otherActor.createEmbeddedDocuments = async (_type, data) => {
+            f.calls.create.push([otherActor.uuid, clone(data)]); return [{...data[0], id: 'other-effect'}];
+        };
+        const other = {id: 'other', uuid: 'Scene.scene.Token.other', actor: otherActor};
+        f.scene.tokens.set(other.id, other); f.runtime.canvasRef.tokens.set(other.id, {document: other, actor: otherActor});
+        f.documents.set(otherActor.uuid, otherActor);
+        for (const [target, hitKey] of [[f.token, 'skill-1'], [f.token, 'skill-2'], [other, 'wild-die']]) {
+            await f.api.registerPropertyCandidate({...f.input, target, hitKey}, f.runtime);
+            await f.api.registerPropertyCandidate({...f.input, target, hitKey}, f.runtime);
+        }
+        assert.equal(f.calls.create.length, expected);
+        assert.equal(new Set(f.calls.create.map(call => call[0])).size, 2);
+    }
+});
+
+test('automatic resistance rolls once, posts no extra card and retains its outcome under re-render and manual Apply', async () => {
+    for (const [resistanceTotal, expectedStatus, creates] of [[6, 'resisted', 0], [2, 'applied', 1]]) {
+        const f = await automaticFixture({resist: {enabled: true, trait: 'vigor', modifier: -2, tn: 4}});
+        f.calls.resistanceTotal = resistanceTotal;
+        const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+        await f.api.registerPropertyCandidate(f.input, f.runtime);
+        await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+        assert.equal(candidate.status, expectedStatus); assert.equal(f.calls.rolls, 1);
+        assert.equal(f.calls.cards, 0); assert.equal(f.calls.create.length, creates);
+    }
+});
+
+test('automatic source/target/rule revalidation after resistance prevents changed authority from creating effects', async () => {
+    for (const change of ['rule', 'target', 'ownership', 'actor']) {
+        const f = await automaticFixture({resist: {enabled: true, trait: 'vigor', modifier: 0, tn: 4}});
+        f.runtime.CharRollClass = class {
+            addModifier() {}
+            async rollAtt() {
+                if (change === 'rule') f.settings.propertiesLibrary.assignments[f.item.uuid][0].automaticAccept = false;
+                if (change === 'target') f.target.x = 600;
+                if (change === 'ownership') f.actor.ownership.player = 0;
+                if (change === 'actor') f.scene.tokens.set('target', {...f.target, actor: {uuid: 'Actor.replaced'}});
+                return {total: 2, dice: [{results: [{result: 2}]}]};
+            }
+        };
+        const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+        assert.equal(candidate.status, 'review'); assert.equal(f.calls.create.length, 0);
+        assert.equal(Object.values(f.settings.propertiesEventLedger.events)[0].status, 'stale');
+    }
+});
+
+test('automatic acceptance never runs for player, secondary GM, disabled system, AoE, Fire or replaced scene target', async () => {
+    for (const mutate of [f => {f.game.user = f.player;},
+        f => {f.game.users.set('aaa', {id: 'aaa', isGM: true, active: true});},
+        f => {f.settings.propertiesEnabled = false;}, f => {f.message.flags.world = {aoeAttack: {}};},
+        f => {f.message.flags['swade-tools'].aoeFireDamage = {};},
+        f => {f.runtime.canvasRef.scene = {id: 'elsewhere'};},
+        f => {f.scene.tokens.set('target', {...f.target, actor: {uuid: 'Actor.wrong'}});}]) {
+        const f = await automaticFixture(); mutate(f);
+        assert.equal(await f.api.registerPropertyCandidate(f.input, f.runtime), null);
+        assert.equal(f.calls.create.length, 0); assert.equal(f.calls.rolls, 0);
+    }
+});
+
+test('automatic Raise effects do not execute on a Hit or Miss, but run once after a trusted Raise correction', async () => {
+    const f = await automaticFixture({trigger: 'raise', stack: 'sum'});
+    assert.equal((await f.api.registerPropertyCandidate(f.input, f.runtime)).status, 'ineligible');
+    assert.equal(f.calls.create.length, 0);
+    f.message.rolls[0].total = 12;
+    assert.equal((await f.api.registerPropertyCandidate({...f.input, outcome: 'Raise'}, f.runtime)).status, 'applied');
+    assert.equal(f.calls.create.length, 1);
+    f.message.rolls[0].total = 1;
+    assert.equal((await f.api.registerPropertyCandidate({...f.input, outcome: 'Miss'}, f.runtime)).status, 'review');
+    assert.equal(f.calls.create.length, 1, 'correction never silently deletes or repeats a managed effect');
+});
+
+test('pending manual remainder rejects outside target changes but does not recalculate its own automatic defense debuff', async () => {
+    const f = await automaticFixture({action: 'statModifier', stat: 'parry', value: -2, stack: 'sum'});
+    const manual = f.core.normalizeRule({...f.rule, id: 'manual', action: 'traitSteps', value: -1, automaticAccept: false});
+    f.settings.propertiesLibrary.assignments[f.item.uuid].push(manual);
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    f.runtime.resolvePropertyCandidate = async () => {throw new Error('Own managed effects do not retroactively change a resolved hit.');};
+    assert.equal((await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime)).status, 'applied');
+    assert.equal(f.calls.create.length, 2);
+
+    const shifted = await automaticFixture({stack: 'sum'});
+    shifted.settings.propertiesLibrary.assignments[shifted.item.uuid].push(shifted.core.normalizeRule({...shifted.rule,
+        id: 'manual', action: 'statModifier', stat: 'armor', value: -2, automaticAccept: false}));
+    const pending = await shifted.api.registerPropertyCandidate(shifted.input, shifted.runtime);
+    shifted.target.x = 500;
+    assert.equal((await shifted.api.applyRegisteredPropertyCandidate(shifted.message, pending.id, shifted.runtime)).status, 'stale');
+    assert.equal(shifted.calls.create.length, 1);
+});
+
+test('Undo of automatically created effects keeps the manual remainder pending without re-igniting removed effects', async () => {
+    const f = await automaticFixture({stack: 'sum'});
+    f.settings.propertiesLibrary.assignments[f.item.uuid].push(f.core.normalizeRule({...f.rule,
+        id: 'manual', name: 'Manual Armor', action: 'statModifier', stat: 'armor', value: -2, automaticAccept: false}));
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(await f.api.undoPropertyCandidate(f.message, candidate.id, f.runtime), true);
+    assert.equal(f.victim.effects.size, 0);
+    assert.equal(f.message.flags['swade-tools'].propertiesCandidates[0].status, 'pending');
+    await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(f.calls.create.length, 1, 'automatic event is durably undone and never repeated');
+    const html = f.api.renderPropertyCandidates(f.message, f.runtime);
+    assert.match(html, /Apply Effects/);
+    await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime);
+    assert.equal(f.calls.create.length, 2); assert.equal(f.victim.effects.size, 1);
+    assert.equal([...f.victim.effects.values()][0].name, 'Manual Armor');
+});
+
+test('editing remaining manual property configuration after an automatic application cannot silently approve the edited rule', async () => {
+    const f = await automaticFixture({stack: 'sum'});
+    f.settings.propertiesLibrary.assignments[f.item.uuid].push(f.core.normalizeRule({...f.rule,
+        id: 'manual', action: 'statModifier', stat: 'armor', value: -2, automaticAccept: false}));
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    f.settings.propertiesLibrary.assignments[f.item.uuid][1].automaticAccept = true;
+    const replay = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    assert.equal(replay.status, 'stale'); assert.equal(f.calls.create.length, 1);
+    assert.equal((await f.api.applyRegisteredPropertyCandidate(f.message, candidate.id, f.runtime)).status, 'stale');
+    assert.equal(f.calls.create.length, 1);
+});
+
+test('resolved-outcome getter freezes the trusted original hit after its own debuff without writes and also works for players', async () => {
+    const f = await automaticFixture({action: 'statModifier', stat: 'parry', value: -2});
+    assert.equal(f.api.getResolvedPropertyOutcome(f.input, f.runtime), null, 'an unprocessed attack has no frozen approval');
+    const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);
+    f.victim.system.stats = {parry: {value: 2}};
+    f.victim.statuses.add('vulnerable');
+    const saved = clone(f.settings.propertiesEventLedger), created = f.calls.create.length;
+    for (const user of [f.gm, f.player]) {
+        f.game.user = user;
+        assert.deepEqual(f.api.getResolvedPropertyOutcome(f.input, f.runtime), {hit: true, raise: false});
+    }
+    assert.deepEqual(f.settings.propertiesEventLedger, saved); assert.equal(f.calls.create.length, created);
+    f.game.user = f.gm;
+    assert.equal(await f.api.undoPropertyCandidate(f.message, candidate.id, f.runtime), true);
+    assert.equal(f.api.getResolvedPropertyOutcome(f.input, f.runtime), null, 'Undo removes the freeze once no resolved event remains');
+});
+
+test('resolved-outcome getter rejects pending, forged mirrors, changed roll signatures and the superseded Benny root', async () => {
+    const manual = await fixture();
+    await manual.api.registerPropertyCandidate(manual.input, manual.runtime);
+    assert.equal(manual.api.getResolvedPropertyOutcome(manual.input, manual.runtime), null);
+    manual.message.flags['swade-tools'].propertiesCandidates = [{outcome: {raise: true}, status: 'applied'}];
+    assert.equal(manual.api.getResolvedPropertyOutcome(manual.input, manual.runtime), null);
+
+    const f = await automaticFixture();
+    await f.api.registerPropertyCandidate(f.input, f.runtime);
+    f.message.flags['swade-tools'].gmmod = 4;
+    assert.equal(f.api.getResolvedPropertyOutcome(f.input, f.runtime), null, 'a GM-card correction unfreezes the real attack');
+    delete f.message.flags['swade-tools'].gmmod;
+    assert.deepEqual(f.api.getResolvedPropertyOutcome(f.input, f.runtime), {hit: true, raise: false});
+    const reroll = {...f.message, id: 'reroll', timestamp: 200,
+        flags: {'swade-tools': {itemroll: f.item.id, propertiesRootId: f.message.id}},
+        async update(data) {for (const [key, value] of Object.entries(data)) setPath(this, key, clone(value));}};
+    f.game.messages.set(reroll.id, reroll);
+    await f.api.registerPropertyCandidate({...f.input, message: reroll, outcome: 'Miss'}, f.runtime);
+    assert.equal(f.api.getResolvedPropertyOutcome(f.input, f.runtime), null, 'latest reroll supersedes the former message');
+});
+
+test('resolved-outcome getter requires exact scene token, actor, item and hit binding and never reads AoE or Fire outcomes', async () => {
+    for (const alter of [input => {input.hitKey = 'other';}, input => {input.actor = {...input.actor, uuid: 'Actor.other'};},
+        input => {input.item = {...input.item, uuid: 'Actor.attacker.Item.other'};},
+        input => {input.target = {document: {...input.target.document, uuid: 'Scene.scene.Token.other'}, actor: input.target.actor};}]) {
+        const f = await automaticFixture();
+        await f.api.registerPropertyCandidate(f.input, f.runtime);
+        const input = {...f.input}; alter(input);
+        assert.equal(f.api.getResolvedPropertyOutcome(input, f.runtime), null);
+    }
+    for (const change of [f => {f.settings.propertiesEnabled = false;},
+        f => {f.message.flags.world = {aoeAttack: {}};}, f => {f.message.flags['swade-tools'].aoeFireDamage = {};},
+        f => {f.message.isContentVisible = false;}, f => {f.runtime.canvasRef.scene = {id: 'other'};},
+        f => {f.scene.tokens.set('target', {...f.target, actor: {uuid: 'Actor.replaced'}});}]) {
+        const f = await automaticFixture();
+        await f.api.registerPropertyCandidate(f.input, f.runtime); change(f);
+        assert.equal(f.api.getResolvedPropertyOutcome(f.input, f.runtime), null);
+    }
+});
+
 test('GM confirmation applies one reversible native effect with exact source and duration', async () => {
     const f = await fixture();
     const candidate = await f.api.registerPropertyCandidate(f.input, f.runtime);

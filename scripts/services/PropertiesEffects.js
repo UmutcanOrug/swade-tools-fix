@@ -8,6 +8,13 @@ const TRAITS = new Set(['agility', 'smarts', 'spirit', 'strength', 'vigor']);
 const EFFECT_ACTIONS = new Set(['status', 'traitModifier', 'traitSteps', 'skillModifier', 'statModifier']);
 const queues = new WeakMap();
 const registrations = new WeakSet();
+let defaultCandidateResolver = null;
+// Startup supplies the native/RoF resolver after the module graph is loaded.
+// Keeping the dependency injected avoids an Effects -> RollControl cycle.
+export const setPropertyCandidateResolver = resolver => {
+    if (typeof resolver !== 'function') throw new TypeError('A property candidate resolver must be a function.');
+    defaultCandidateResolver = resolver;
+};
 const clone = value => JSON.parse(JSON.stringify(value));
 const values = collection => Array.from(collection?.contents ?? collection?.values?.() ?? collection ?? []);
 const gameOf = runtime => runtime.gameRef ?? runtime.game ?? globalThis.game;
@@ -81,6 +88,8 @@ const targetSignature = target => fingerprint({uuid: target.uuid, actorUuid: tar
         equipStatus: item.system?.equipStatus, swid: item.system?.swid}))});
 const rootIdOf = message => String(message?.flags?.[SCOPE]?.propertiesRootId ?? message?.id ?? '');
 const messageTime = message => number(message?.timestamp ?? message?._source?.timestamp);
+const acceptsAutomatically = (rule, message) => rule.automaticAccept === true &&
+    number(rule.automaticAcceptSince) > 0 && messageTime(message) > rule.automaticAcceptSince;
 const pruneLedger = (ledger, runtime) => {
     const messages = values(gameOf(runtime)?.messages), ids = new Set(messages.map(message => message.id));
     const roots = new Set(messages.map(rootIdOf));
@@ -184,7 +193,7 @@ const mirror = async (message, ledger) => {
 // Only a primary-GM combat integration can stage candidates. Chat flags are a
 // presentation mirror; the authoritative context and ledger are world settings
 // which player authors cannot rewrite with their own chat documents.
-export const registerPropertyCandidate = (input, runtime = {}) => serial(runtime, async () => {
+const stagePropertyCandidate = (input, runtime) => serial(runtime, async () => {
     if (!await contextIsValid(input, runtime)) return null;
     const {message, actor, item} = input, target = targetDocument(input.target);
     const outcome = normalizeOutcome(input.outcome), trigger = input.trigger ?? 'hit';
@@ -228,6 +237,58 @@ export const registerPropertyCandidate = (input, runtime = {}) => serial(runtime
     await saveLedger(ledger, runtime); await mirror(message, ledger);
     return entry;
 });
+
+export const registerPropertyCandidate = async (input, runtime = {}) => {
+    const entry = await stagePropertyCandidate(input, runtime);
+    // Never await a second serialized operation from inside the first one.
+    // The shared approval path reloads the authoritative ledger and validates
+    // signatures, source/target identity and current rules before it acts.
+    if (entry?.status === 'pending' && ['hit', 'raise'].includes(entry.trigger)) {
+        await applyCandidate(input.message, entry.id, runtime, true);
+        return ledgerOf(runtime).candidates[entry.id] ?? entry;
+    }
+    return entry;
+};
+
+// A successful property application can itself lower Parry or add a status
+// that would improve the old attack if it were calculated again on render.
+// Read the trusted original outcome, never the player-editable chat mirror.
+// This is read-only and also available to players so their damage links stay
+// consistent with the primary GM's already-resolved attack.
+export const getResolvedPropertyOutcome = (input = {}, runtime = {}) => {
+    const {message, actor, item} = input, target = targetDocument(input.target);
+    if (!isPropertiesEnabled(coreRuntime(runtime)) || !message?.id || message.isContentVisible === false || excluded(message) ||
+        !['weapon', 'power'].includes(item?.type) || !actor?.uuid || !item?.uuid ||
+        (item.actor?.uuid ?? item.parent?.uuid) !== actor.uuid || isAoeItem(item) ||
+        Object.values(item.system?.templates ?? {}).some(value => value === true) ||
+        !resolvePropertyTarget(target?.uuid, target?.actor?.uuid, runtime)) return null;
+    // This hot read runs once per native attack target on chat rendering.
+    // Do not clone the bounded (but potentially large) world ledger: this
+    // helper never modifies settings or any nested record.
+    let ledger;
+    try {ledger = gameOf(runtime)?.settings?.get(SCOPE, SETTING);} catch {return null;}
+    if (ledger?.version !== 1 || !ledger.candidates || typeof ledger.candidates !== 'object' || Array.isArray(ledger.candidates) ||
+        !ledger.events || typeof ledger.events !== 'object' || Array.isArray(ledger.events) ||
+        !ledger.attacks || typeof ledger.attacks !== 'object' || Array.isArray(ledger.attacks)) return null;
+    const rootId = rootIdOf(message);
+    if (ledger.attacks[rootId]?.messageId !== message.id) return null;
+    const signature = identitySignature(message), hitKey = String(input.hitKey ?? '0');
+    const entry = ['hit', 'raise'].map(trigger => {
+        const id = `candidate-${identityKey([message.id, target.uuid, hitKey, trigger])}`;
+        const candidate = Object.hasOwn(ledger.candidates, id) ? ledger.candidates[id] : null;
+        return candidate?.id === id && candidate.trigger === trigger ? candidate : null;
+    })
+        .find(candidate => candidate && ['hit', 'raise'].includes(candidate.trigger) && candidate.messageId === message.id &&
+            candidate.rootId === rootId && candidate.signature === signature && candidate.actorUuid === actor.uuid &&
+            candidate.itemUuid === item.uuid && candidate.hitKey === hitKey && candidate.targetUuid === target.uuid &&
+            candidate.targetActorUuid === target.actor.uuid);
+    if (!entry || !Object.values(ledger.events).some(event => event?.candidateId === entry.id &&
+        event.rootId === rootId && event.messageId === message.id && event.targetUuid === target.uuid &&
+        [actor.uuid, target.actor.uuid].includes(event.actorUuid) &&
+        ['claimed', 'applied', 'refreshed', 'resisted', 'alreadyActive', 'resolved', 'review', 'ineligible', 'stale'].includes(event.status) &&
+        entry.rules?.some(rule => rule.id === event.ruleId && rule.sourceUuid === event.sourceUuid))) return null;
+    return normalizeOutcome(entry.outcome);
+};
 
 const STATS = {toughness: 'system.stats.toughness.value', armor: 'system.stats.toughness.armor',
     parry: 'system.stats.parry.value', pace: 'system.pace.ground', running: 'system.pace.running.mod',
@@ -324,12 +385,13 @@ const resistance = async (rule, actor, runtime) => {
         critical, rollData};
 };
 
-const executeEvent = async (entry, message, actor, item, target, runtime, ledger, input = {}) => {
-    const rules = matchingRules(actor, item, entry.trigger, entry.outcome, {item, ...entry.context}, runtime);
+const executeEvent = async (entry, message, actor, item, target, runtime, ledger, input = {}, automaticOnly = false) => {
+    const approvedRules = matchingRules(actor, item, entry.trigger, entry.outcome, {item, ...entry.context}, runtime)
+        .filter(rule => !entry.rules || entry.rules.some(saved => saved.id === rule.id && saved.sourceUuid === rule.sourceUuid &&
+            saved.fingerprint === fingerprint(rule)));
+    const rules = approvedRules.filter(rule => !automaticOnly || acceptsAutomatically(rule, message));
     const results = [];
     for (const rule of rules) {
-        if (entry.rules && !entry.rules.some(saved => saved.id === rule.id && saved.sourceUuid === rule.sourceUuid &&
-            saved.fingerprint === fingerprint(rule))) continue;
         const recipient = rule.target === 'self' ? actor : target.actor;
         const key = eventKeyOf(entry, rule, recipient.uuid), existing = ledger.events[key];
         if (existing) {results.push(existing); continue;}
@@ -338,18 +400,24 @@ const executeEvent = async (entry, message, actor, item, target, runtime, ledger
         }
         const record = {key, rootId: entry.rootId, messageId: message.id, candidateId: entry.id,
             ruleId: rule.id, sourceUuid: rule.sourceUuid, name: rule.name,
-            actorUuid: recipient.uuid, targetUuid: target.uuid, createdEffectIds: [], status: 'claimed'};
+            actorUuid: recipient.uuid, targetUuid: target.uuid, createdEffectIds: [], status: 'claimed',
+            acceptance: automaticOnly ? 'automatic' : 'manual'};
         // Claim before awaiting dice or document creation. Retrying a failed
         // operation never repeats the resistance roll or an already-created AE.
         ledger.events[key] = record; await saveLedger(ledger, runtime);
         try {
             if (entry.trigger === 'wound' && number(input.wounds) <= 0) {record.status = 'ineligible'; continue;}
+            const targetBeforeResistance = targetSignature(target);
             const resist = await resistance(rule, recipient, runtime);
             if (resist) {record.resistance = resist; await saveLedger(ledger, runtime);}
             if (resist?.pending) {record.status = 'review'; record.reason = resist.reason; continue;}
             if (resist?.resisted) {record.status = 'resisted'; continue;}
             if (!await contextIsValid({message, actor, item, target}, runtime) ||
-                identitySignature(message) !== entry.signature) {record.status = 'stale'; continue;}
+                identitySignature(message) !== entry.signature || targetSignature(target) !== targetBeforeResistance ||
+                !matchingRules(actor, item, entry.trigger, entry.outcome, {item, ...entry.context}, runtime).some(current =>
+                    current.id === rule.id && current.sourceUuid === rule.sourceUuid && fingerprint(current) === fingerprint(rule))) {
+                record.status = 'stale'; continue;
+            }
             const siblings = existingEffects(recipient, rule);
             if (rule.action === 'status' && recipient.statuses?.has?.(rule.status) && !siblings.length) {
                 record.status = 'alreadyActive'; continue;
@@ -386,16 +454,26 @@ const executeEvent = async (entry, message, actor, item, target, runtime, ledger
         }
         finally {await saveLedger(ledger, runtime); results.push(record);}
     }
-    entry.status = results.some(result => result.status === 'review' || result.status === 'claimed') ? 'review' :
-        results.some(result => result.status === 'applied' || result.status === 'refreshed') ? 'applied' :
-            results.some(result => result.status === 'resisted') ? 'resisted' : 'resolved';
-    entry.result = results.map(result => `${result.name}: ${result.status}${result.resistance?.total != null
-        ? ` (${result.resistance.total} vs ${result.resistance.tn})` : ''}`).join('; ');
+    const allResults = approvedRules.map(rule => ledger.events[eventKeyOf(entry, rule,
+        rule.target === 'self' ? actor.uuid : target.actor.uuid)]).filter(Boolean);
+    const pending = approvedRules.filter(rule => !ledger.events[eventKeyOf(entry, rule,
+        rule.target === 'self' ? actor.uuid : target.actor.uuid)]);
+    entry.status = pending.length ? 'pending' :
+        allResults.some(result => ['review', 'claimed', 'stale'].includes(result.status)) ? 'review' :
+            allResults.some(result => result.status === 'applied' || result.status === 'refreshed') ? 'applied' :
+                allResults.some(result => result.status === 'resisted') ? 'resisted' : 'resolved';
+    entry.result = [...allResults.map(result => `${result.name}: ${result.status}${result.resistance?.total != null
+        ? ` (${result.resistance.total} vs ${result.resistance.tn})` : ''}`),
+    ...pending.map(rule => `${rule.name}: pending GM approval`)].join('; ');
+    // Automatic effects may alter derived target defenses. Freeze that state
+    // for the remaining manual rules, without allowing unrelated later moves
+    // or defense changes to silently borrow the already-resolved approval.
+    entry.targetSignature = targetSignature(target);
     await saveLedger(ledger, runtime); await mirror(message, ledger);
     return {status: entry.status, results};
 };
 
-export const applyRegisteredPropertyCandidate = (message, candidateId, runtime = {}) => serial(runtime, async () => {
+const applyCandidate = (message, candidateId, runtime, automaticOnly = false) => serial(runtime, async () => {
     if (!enabled(runtime)) return null;
     const ledger = ledgerOf(runtime), entry = ledger.candidates[candidateId];
     if (!entry || entry.messageId !== message?.id || entry.status === 'ineligible' || excluded(message)) return null;
@@ -408,17 +486,42 @@ export const applyRegisteredPropertyCandidate = (message, candidateId, runtime =
     const [actor, item] = await Promise.all([documentOf(entry.actorUuid, runtime), documentOf(entry.itemUuid, runtime)]);
     const target = resolvePropertyTarget(entry.targetUuid, entry.targetActorUuid, runtime);
     if (!await contextIsValid({message, actor, item, target}, runtime)) return null;
+    const currentRules = matchingRules(actor, item, entry.trigger, entry.outcome, {item, ...entry.context}, runtime);
+    if (entry.rules?.some(saved => !currentRules.some(rule => saved.id === rule.id && saved.sourceUuid === rule.sourceUuid &&
+        saved.fingerprint === fingerprint(rule)))) {
+        entry.status = 'stale'; entry.result = 'Property configuration changed; GM review of this attack is required.';
+        await saveLedger(ledger, runtime); await mirror(message, ledger); return {status: 'stale'};
+    }
+    if (automaticOnly && !currentRules
+        .some(rule => acceptsAutomatically(rule, message) && entry.rules?.some(saved => saved.id === rule.id &&
+            saved.sourceUuid === rule.sourceUuid && saved.fingerprint === fingerprint(rule)))) return null;
     const anyResolved = Object.values(ledger.events).some(event => event.candidateId === entry.id);
-    if (!anyResolved && entry.targetSignature !== targetSignature(target)) {
+    if ((!anyResolved || entry.status === 'pending') && entry.targetSignature !== targetSignature(target)) {
         entry.status = 'stale'; entry.result = 'Target defenses or placement changed; review the current attack.';
         await saveLedger(ledger, runtime); await mirror(message, ledger); return {status: 'stale'};
     }
-    if (runtime.resolvePropertyCandidate) {
-        const current = await runtime.resolvePropertyCandidate({message, actor, item, target, entry});
-        if (!current || JSON.stringify(normalizeOutcome(current.outcome)) !== JSON.stringify(entry.outcome)) return {status: 'stale'};
+    const resolveCandidate = runtime.resolvePropertyCandidate ?? defaultCandidateResolver;
+    if (automaticOnly && !resolveCandidate) return null;
+    if (resolveCandidate && !anyResolved) {
+        const beforeResolve = targetSignature(target);
+        let current;
+        try {current = await resolveCandidate({message, actor, item, target, entry}, runtime);}
+        catch {
+            // A native rule lookup or another module may be unavailable. Keep
+            // the attack card usable, but never infer approval or retry dice.
+            entry.status = 'review';
+            entry.result = 'Current attack could not be verified. No new effects were applied; GM review is required.';
+            await saveLedger(ledger, runtime); await mirror(message, ledger);
+            return {status: 'review'};
+        }
+        if (!current || JSON.stringify(normalizeOutcome(current.outcome)) !== JSON.stringify(entry.outcome) ||
+            identitySignature(message) !== entry.signature || targetSignature(target) !== beforeResolve) return {status: 'stale'};
     }
-    return executeEvent(entry, message, actor, item, target, runtime, ledger);
+    return executeEvent(entry, message, actor, item, target, runtime, ledger, {}, automaticOnly);
 });
+
+export const applyRegisteredPropertyCandidate = (message, candidateId, runtime = {}) =>
+    applyCandidate(message, candidateId, runtime);
 
 // Called only after native GM Apply Damage/Soak has actually changed the
 // victim. It never runs from card rendering, damage previews or dice rolls.
@@ -461,7 +564,16 @@ export const undoPropertyCandidate = (message, candidateId, runtime = {}) => ser
         }
         record.status = 'undone';
     }
-    entry.status = 'undone'; entry.result = 'Only effects created by this application were removed.';
+    const [sourceActor, sourceItem] = await Promise.all([documentOf(entry.actorUuid, runtime), documentOf(entry.itemUuid, runtime)]);
+    const pending = (sourceActor?.uuid === entry.actorUuid && sourceItem?.uuid === entry.itemUuid ?
+        matchingRules(sourceActor, sourceItem, entry.trigger, entry.outcome, {item: sourceItem, ...entry.context}, runtime) : [])
+        .filter(rule => entry.rules?.some(saved => saved.id === rule.id && saved.sourceUuid === rule.sourceUuid &&
+            saved.fingerprint === fingerprint(rule)))
+        .filter(rule => !ledger.events[eventKeyOf(entry, rule, rule.target === 'self' ? sourceActor.uuid : target.actor.uuid)]);
+    entry.status = pending.length ? 'pending' : 'undone';
+    entry.result = 'Only effects created by this application were removed.' +
+        (pending.length ? ` Still pending GM approval: ${pending.map(rule => rule.name).join(', ')}.` : '');
+    entry.targetSignature = targetSignature(target);
     await saveLedger(ledger, runtime); await mirror(message, ledger); return true;
 });
 
