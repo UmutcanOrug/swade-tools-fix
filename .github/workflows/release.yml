@@ -55,6 +55,8 @@ jobs:
           release_args=()
           if [[ "$version" == *-* ]]; then
             release_args+=(--prerelease --latest=false)
+          else
+            release_args+=(--latest)
           fi
           gh release create "$GITHUB_REF_NAME" \
             "swade-tools-${version}.zip" \

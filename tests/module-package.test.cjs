@@ -54,6 +54,7 @@ test('release workflow runs tests and uses the current manifest version', () => 
     assert.match(workflow, /git archive HEAD/);
     assert.match(workflow, /gh release create/);
     assert.match(workflow, /if \[\[ "\$version" == \*-\* \]\]; then\s+release_args\+=\(--prerelease --latest=false\)/);
+    assert.match(workflow, /else\s+release_args\+=\(--latest\)/);
     assert.match(workflow, /"\$\{release_args\[@\]\}"/);
     assert.ok(fs.existsSync(path.join(root, 'RELEASE-NOTES.md')));
 });

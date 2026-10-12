@@ -3,15 +3,17 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
-## Experimental Properties & Effects (2.2.0-test.1)
+## Experimental Properties & Effects (2.2.0)
 
-This is an opt-in GitHub prerelease, not the stable Latest release. Back up
-the world and test a copy between sessions. The new system is **off by default**.
+Version 2.2.0 is available through the normal stable Latest update channel.
+Back up the world and update between sessions. The new Properties system
+remains **off by default**; existing AoE/Flame workflows are preserved.
 
-Install this test version from Foundry's **Install Module → Manifest URL**:
-`https://github.com/UmutcanOrug/swade-tools-fix/releases/download/v2.2.0-test.1/module.json`
-The stable Latest endpoint stays on 2.1.20; its normal update button does not
-select this prerelease.
+Update the installed stable module normally, or use Foundry's
+**Install Module → Manifest URL**:
+`https://github.com/UmutcanOrug/swade-tools-fix/releases/latest/download/module.json`
+If a prerelease was installed using a version-pinned manifest, switch back
+to this stable manifest. The 2.1.20 release remains available for rollback.
 
 Enable **Configure Settings → SWADE Tools → Experimental Properties & Effects**.
 Open **Properties & Effects Library** in those settings, or open a weapon,

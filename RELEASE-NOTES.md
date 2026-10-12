@@ -1,10 +1,12 @@
-## SWADE Tools 2.2.0-test.1 — Opt-in Properties & Effects Library
+## SWADE Tools 2.2.0 — Opt-in Properties & Effects Library
 
-OPT-IN PRERELEASE — stable Latest remains 2.1.20. Back up the world, test a
-copy, and reload all clients. Experimental Properties & Effects defaults to OFF.
+NORMAL STABLE UPDATE — promotes the tested 2.2.0-test.1 implementation to
+the main branch and Latest channel. Back up the world and reload all clients.
+Experimental Properties & Effects remains OFF by default. The 2.1.20 release
+and source backup remain available for rollback.
 
-Foundry Install Module → Manifest URL:
-https://github.com/UmutcanOrug/swade-tools-fix/releases/download/v2.2.0-test.1/module.json
+Use Foundry's normal module Update, or Install Module → Manifest URL:
+https://github.com/UmutcanOrug/swade-tools-fix/releases/latest/download/module.json
 
 - Added a compact light Properties editor on weapon, Edge, Ability and other
   supported item sheets, plus a settings Library. Includes 40 customizable

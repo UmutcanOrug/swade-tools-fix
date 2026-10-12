@@ -1,25 +1,25 @@
-# Properties & Effects — GitHub test sürümü
+# Properties & Effects — 2.2.0
 
-Bu paket 2.2.0-test.1 test sürümüdür; kararlı Latest sürümü 2.1.20 olarak kalır.
-Canlı oyunun ortasında kurmayın. Önce Foundry'den dünyanın ayrıca yedeğini alın
-ve mümkünse dünya kopyasında deneyin. Hazırlanan 2.1.20 ZIP yalnız modül
-dosyalarının yedeğidir.
+2.2.0 normal güncelleme kanalında ve ana daldadır. Yeni Properties sistemi
+varsayılan kapalıdır. Canlı oyunun ortasında kurmayın. Önce Foundry'den dünyanın
+ayrıca yedeğini alın. Önceki 2.1.20 sürümü geri dönüş için durur; hazırlanan
+2.1.20 ZIP yalnız modül dosyalarının yedeğidir.
 
 ## Foundry'den kurulum
 
-Foundry ana ekranında **Add-on Modules → Install Module → Manifest URL** alanına:
+Mevcut kararlı kurulumda Foundry ana ekranından modülü normal **Update**
+düğmesiyle güncelleyin. Yeni kurulumda **Add-on Modules → Install Module → Manifest URL** alanına:
 
-`https://github.com/UmutcanOrug/swade-tools-fix/releases/download/v2.2.0-test.1/module.json`
+`https://github.com/UmutcanOrug/swade-tools-fix/releases/latest/download/module.json`
 
-bağlantısını girin. Kararlı sürümün normal Update düğmesi bu test sürümünü seçmez.
-Mevcut kurulumun değiştirilmesi gerekiyorsa önce dünya yedeğini ve aşağıdaki
-geri dönüş adımlarını hazırlayın. Kurulumdan sonra tüm GM ve oyuncular yeniden yüklesin.
+bağlantısını girin. Sürüme sabitlenmiş manifestle test sürümünü kurduysanız
+yukarıdaki normal kanal manifestine dönün. Kurulumdan sonra tüm GM ve oyuncular
+yeniden yüklesin.
 
 Yerel paketi kurarken Foundry kapalı olsun. Mevcut `modules/swade-tools`
 klasörünü ayrı bir yerde saklayın; ZIP içeriğini yeni `modules/swade-tools`
 klasörüne açın. `module.json` bu klasörün doğrudan içinde olmalı. Foundry ve
-tüm bağlı istemciler yeniden başlatılmalı. Bu test paketi kararlı sürümün
-otomatik güncelleme kanalına dağıtılmıyor.
+tüm bağlı istemciler yeniden başlatılmalı.
 
 ## Açılış
 
