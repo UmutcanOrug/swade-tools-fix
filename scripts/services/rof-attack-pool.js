@@ -552,13 +552,16 @@ const shotgunAttackBonus = Number(shotgunProfile?.attackBonus ?? 0);
 const weaponMinimumStrengthSides = parseMinimumStrength(
   weapon.system?.minStr
 );
+const propertyStrengthSides = !isInlineAoe && typeof rofServices.getPropertyStrength === "function"
+  ? rofServices.getPropertyStrength(effectiveStrengthSides,actingActor,weapon,undefined,
+      {nativeStrengthSources:minimumStrengthEdges.map(entry=>entry.uuid)}) : effectiveStrengthSides;
 const minimumStrengthPenalty =
   !mountedVehicle &&
   Number.isFinite(weaponMinimumStrengthSides) &&
-  Number.isFinite(effectiveStrengthSides) &&
-  effectiveStrengthSides < weaponMinimumStrengthSides
+  Number.isFinite(propertyStrengthSides) &&
+  propertyStrengthSides < weaponMinimumStrengthSides
     ? -Math.ceil(
-        (weaponMinimumStrengthSides - effectiveStrengthSides) / 2
+        (weaponMinimumStrengthSides - propertyStrengthSides) / 2
       )
     : 0;
 const minimumStrengthSummary = Number.isFinite(
@@ -567,7 +570,7 @@ const minimumStrengthSummary = Number.isFinite(
   ? mountedVehicle
     ? `Mounted on ${mountedVehicle.name}; Min Str penalty 0`
     : `Min Str d${weaponMinimumStrengthSides}; ` +
-      `${effectiveStrengthLabel}; penalty ${minimumStrengthPenalty}`
+      `${effectiveStrengthLabel}${propertyStrengthSides!==effectiveStrengthSides ? `; Properties effective d${propertyStrengthSides}` : ""}; penalty ${minimumStrengthPenalty}`
   : `Min Str not set; ${effectiveStrengthLabel}; penalty 0`;
 
 const readResourceNumber = (value) => {
@@ -964,6 +967,9 @@ const calledShotPenalty =
 // Native SWADE Tools accepts resolved formulas, not raw @data references.
 // Resolve data here without rolling damage dice; each target rolls its own.
 const damageModifier = hasInlineSetup ? preparedInlineDamageModifier : String(setup.damageModifier ?? "").trim();
+const propertyAttackBonus = !isInlineAoe ? Number(rofServices.getPropertyCombatModifiers?.({
+  actor:actingActor,item:weapon,attackType:"ranged",
+})?.totals?.attackMod ?? 0) : 0;
 const commonModifier =
   woundPenalty +
   fatiguePenalty +
@@ -974,6 +980,7 @@ const commonModifier =
   otherModifier +
   multiActionPenalty +
   inlinePreparedModifier +
+  propertyAttackBonus +
   aoeSituationalPenalty +
   shotgunAttackBonus +
   calledShotPenalty;
@@ -1399,6 +1406,7 @@ const modifierParts = [
     theDropAttackBonus
   }`,
   `Other ${otherModifier >= 0 ? "+" : ""}${otherModifier}`,
+  ...(propertyAttackBonus ? [`Properties: Attack ${propertyAttackBonus>=0 ? "+" : ""}${propertyAttackBonus}`] : []),
   ...(hasInlineSetup ? [
     `Multi-Action ${multiActionPenalty >= 0 ? "+" : ""}${multiActionPenalty}`,
     ...inlineModifierEntries.filter((modifier) => modifier.label !== "Mod.")
@@ -1776,6 +1784,12 @@ const collectTargetAttackProfile = (targetToken) => {
   const additionalMods = [];
   const coverCandidates = [];
   const ignoredMods = [];
+  const propertyTarget = !isInlineAoe ? rofServices.getPropertyTargetModifiers?.({
+    actor:actingActor,item:weapon,target:targetToken,range:distance,attackType:"ranged",
+  }) : null;
+  if (propertyTarget?.attackDelta) additionalMods.push({label:"Properties: Target Attack",value:propertyTarget.attackDelta});
+  if (propertyTarget?.incoming) additionalMods.push({label:"Properties: Incoming Ranged",value:propertyTarget.incoming});
+  if (propertyTarget?.cover<0) coverCandidates.push({label:"Properties: Cover",value:propertyTarget.cover});
 
   const isProne = hasTokenStatus(targetToken, "prone");
   if (isProne && distance >= 3) {
@@ -2378,11 +2392,14 @@ if (resolvedAssignments.length) {
     `;
   }).join("");
 
+  const propertiesPool=!isInlineAoe ? rofServices.propertyPoolData?.({actor:actingActor,item:weapon,
+    token:selectedToken,assignments:resolvedAssignments}) : null;
   await attackPoolMessage.update({
     content: renderAttackPoolCard({
       targetRows: `<small>Targets:</small>${resolutionRows}`,
       targetDetails: `<strong>Target Resolution</strong>${resolutionDetails}`,
     }),
+    ...(propertiesPool ? {"flags.swade-tools.propertiesPool":propertiesPool} : {}),
   });
 }
 
@@ -2521,11 +2538,17 @@ const combineDamageModifiers = (...values) => {
 
 const rollSwadeToolsDamage = async (assignment) => {
   const dialogPromise = waitForSwadeToolsDialog();
+  const propertiesSource=!isInlineAoe ? rofServices.propertySourceForTarget?.({
+    message:attackPoolMessage,actor:actingActor,item:weapon,target:assignment.targetToken,
+    outcome:assignment.outcome,hitKey:assignment.result.id,attackType:"ranged",range:assignment.targetProfile?.distance,
+  }) : null;
   if (hasInlineSetup) {
     await game.swadetools.item(weaponOwner, weapon.id, actingActor, {damageOnly:true,
       ...(isInlineShotgun ? {damageOverride:assignment.targetProfile.shotgunDamage} : {}),
+      ...(propertiesSource ? {propertiesSource} : {}),
     });
-  } else await game.swadetools.item(weaponOwner, weapon.id);
+  } else if (propertiesSource) await game.swadetools.item(weaponOwner,weapon.id,actingActor,{propertiesSource});
+  else await game.swadetools.item(weaponOwner, weapon.id);
   const dialogInfo = await dialogPromise;
 
   if (!dialogInfo?.root) {

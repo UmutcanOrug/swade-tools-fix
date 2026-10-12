@@ -12,6 +12,7 @@ import { prepareNativeShotgunAttack, applyNativeShotgunProfile } from '../servic
 import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js';
 import { isPowerAoeItem, getPowerAoeSettings, POWER_AOE_SHAPES } from '../services/AoeItemFlags.js';
 import { runPowerAoe } from '../services/PowerAoeCast.js';
+import {canUsePropertiesCombat} from '../services/PropertiesCombat.js';
 
 export default class ItemDialog {
     constructor(actor,itemId,operator=null,options={}){
@@ -979,6 +980,22 @@ export default class ItemDialog {
     } */
 
     async processItemFormDialog(html,charRoll,actionType,modifierOverride,preparedWeaponDamage){
+        const source=this.options.propertiesSource;
+        if (actionType==='damage' && source?.version===1 && canUsePropertiesCombat(this.item) &&
+            source.actorUuid===this.actor?.uuid && source.itemUuid===this.item?.uuid){
+            const parts=String(source.targetUuid).split('.');
+            const target=parts.length===4 && parts[0]==='Scene' && parts[2]==='Token' && parts[1]===canvas.scene?.id
+                ? canvas.tokens?.get?.(parts[3]) : null;
+            if (!target || target.actor?.uuid!==source.targetActorUuid){
+                ui.notifications.warn('The original Properties target is unavailable. Reopen the attack.');
+                return false;
+            }
+            charRoll.addFlag('propertiesSource',source);
+            charRoll.addFlag('propertiesRootId',source.rootId);
+            charRoll.useTarget(target.id);
+            charRoll.propertiesTarget=target;
+            charRoll.propertiesRange=source.range;
+        }
         const weaponPanel=!this.damageOnly && this.item.type==='weapon';
         const powerAoeDamage=actionType==='damage' && this.item.type==='power' && isPowerAoeItem(this.item);
         if (weaponPanel){

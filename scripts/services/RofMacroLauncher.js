@@ -5,6 +5,7 @@ import {withSuppressedAoeAutomation} from './AoeAnimationService.js';
 import * as shotgunRules from './ShotgunRules.js';
 import {nativeWeaponDamageFormula} from './WeaponDamageModifier.js';
 import {getRange as getNativeRange} from '../gb.js';
+import * as propertyCombat from './PropertiesCombat.js';
 
 const ROF_SCRIPT_PATH =
     'modules/swade-tools/scripts/services/rof-attack-pool.js';
@@ -139,7 +140,7 @@ export const launchRofMacro = async (actor,item,vehicle=null,options={}) => {
             weaponActor:item.actor ?? item.parent ?? firingActor,
             vehicle,
             rofServices:{isAoeItem,getAoeItemSettings,isLegacyGrenadeItem,aoeResource,getNativeRange,
-                withSuppressedAoeAutomation,nativeWeaponDamageFormula,...aoeLauncher,...shotgunRules},
+                withSuppressedAoeAutomation,nativeWeaponDamageFormula,...aoeLauncher,...shotgunRules,...propertyCombat},
             ...(Object.hasOwn(options ?? {},'setup') ? {rofSetup:{
                 weaponId:item.id,
                 itemUuid:item.uuid,

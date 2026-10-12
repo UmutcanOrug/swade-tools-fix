@@ -17,8 +17,11 @@ test('Foundry manifest points to existing files and the versioned release', () =
     assert.equal(manifest.id, 'swade-tools');
     assert.equal(manifest.compatibility.minimum, '13');
     assert.equal(manifest.compatibility.verified, '13');
-    assert.match(manifest.download, new RegExp(`/v${manifest.version}/swade-tools-${manifest.version}\\.zip$`));
-    assert.match(manifest.manifest, /\/releases\/latest\/download\/module\.json$/);
+    const releases = 'https://github.com/UmutcanOrug/swade-tools-fix/releases';
+    assert.equal(manifest.download, `${releases}/download/v${manifest.version}/swade-tools-${manifest.version}.zip`);
+    assert.equal(manifest.manifest, manifest.version.includes('-')
+        ? `${releases}/download/v${manifest.version}/module.json`
+        : `${releases}/latest/download/module.json`);
     const files = [...manifest.esmodules, ...manifest.styles,
         ...manifest.languages.map(language => language.path),
         ...manifest.packs.map(pack => pack.path)];
@@ -50,5 +53,7 @@ test('release workflow runs tests and uses the current manifest version', () => 
     assert.match(workflow, /test "\$version" = "\$manifest_version"/);
     assert.match(workflow, /git archive HEAD/);
     assert.match(workflow, /gh release create/);
+    assert.match(workflow, /if \[\[ "\$version" == \*-\* \]\]; then\s+release_args\+=\(--prerelease --latest=false\)/);
+    assert.match(workflow, /"\$\{release_args\[@\]\}"/);
     assert.ok(fs.existsSync(path.join(root, 'RELEASE-NOTES.md')));
 });

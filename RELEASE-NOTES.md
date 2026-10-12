@@ -1,3 +1,50 @@
+## SWADE Tools 2.2.0-test.1 — Opt-in Properties & Effects Library
+
+OPT-IN PRERELEASE — stable Latest remains 2.1.20. Back up the world, test a
+copy, and reload all clients. Experimental Properties & Effects defaults to OFF.
+
+Foundry Install Module → Manifest URL:
+https://github.com/UmutcanOrug/swade-tools-fix/releases/download/v2.2.0-test.1/module.json
+
+- Added a compact light Properties editor on weapon, Edge, Ability and other
+  supported item sheets, plus a settings Library. Includes 40 customizable
+  starting templates, English/Turkish multiword search, categories, favorites,
+  duplicate/edit/custom rules and validated JSON import/export.
+- Rules are strict declarative data, not arbitrary scripts. GM-owned world
+  assignments approve exact full item UUIDs; player item flags are not authority.
+  Library edits do not retroactively modify saved item assignments. Imported
+  assignments require a separate explicit confirmation.
+- Added contextual outgoing attack/damage modifiers and per-target defenses
+  to ordinary single-fire and RoF workflows. Cover takes the strongest eligible
+  custom/native protection without counting Dodge twice. Native Brawny/Soldier
+  bonuses already counted by each workflow are not counted again.
+- Added native reversible attribute die steps/modifiers, skill/stat modifiers
+  and conditions, passive or triggered by Hit/Raise/applied damage/actual wounds.
+  Preview has no dice, resources or actor writes. Native equipment lifecycle
+  controls passives; native combat expiry controls timed triggered effects.
+- Hit/Raise effects use primary-GM approval in a closed More Details section
+  on the original attack card. Resistance and the result audit stay on the same
+  card. Undo removes only effects created by that application. Existing active
+  conditions are not taken over or removed by the new system.
+- Durable per-root/per-target/per-hit deduplication prevents repeated effect
+  applications across Benny/Soak cards, reloads and clicks. Current source,
+  target, ownership and outcome bindings are checked again before writes.
+  History is bounded and fails closed instead of forgetting live deduplication.
+- Existing AoE/Flame workflows remain separate and unchanged. This build does
+  not add custom property triggers to AoE, vehicle/operator on-hit automation,
+  arbitrary code, complete official Edge semantics, or Edge-grant automation.
+  Manually overridden RoF outcomes inconsistent with numeric results are
+  ineligible for new effects. Native attacks themselves remain unchanged.
+- Turning the new setting off disables only Properties-managed native effects.
+  Do that before restoring the 2.1.20 module backup. No live world was accessed
+  or modified during development; the source backup does not back up world data.
+
+All 575 module tests pass. The separate rollback-helper checks also pass.
+Automated regression, production single-fire/RoF calculation, authority,
+resistance, deduplication and lifecycle checks pass. Local browser QA used the
+installed Foundry V13 DialogV2 and HTML sanitizer. Existing Fire damage, GM
+attack corrections and manual grenade deviation browser checks also pass.
+
 ## SWADE Tools 2.1.20 — Native Fire Damage, Tweaks Layout & Reliable Flames
 
 Back up the world and update between sessions. Reload all connected clients,

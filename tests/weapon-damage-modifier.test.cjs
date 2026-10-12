@@ -5,7 +5,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const scripts = path.resolve(__dirname, '../scripts');
 const helper = import(pathToFileURL(path.join(scripts, 'services/WeaponDamageModifier.js')).href);
-const stripImports = text => text.replace(/^import[^\n]+;\r?\n/gm, '');
+const properties = {...require('../scripts/services/PropertiesCombat.js'), ...require('../scripts/services/PropertiesEffects.js'),
+    isPropertiesEnabled: require('../scripts/services/PropertiesRules.js').isPropertiesEnabled};
+const stripImports = text => text.replace(/^import\s[\s\S]*?;\r?\n/gm, '');
 const gb = {
     trans: value => value, systemSetting: () => true, realInt: value => Number(value) || 0,
     findAttr: () => false, stringDiceMod: value => /^[+-]/.test(value) ? value : `+${value}`,
@@ -13,6 +15,7 @@ const gb = {
     stringMod: value => value < 0 ? String(value) : `+${value}`, setting: () => false
 };
 const classFor = (name, bindings) => {
+    bindings = {...properties, ...bindings};
     const source = stripImports(fs.readFileSync(path.join(scripts, `class/${name}.js`), 'utf8'))
         .replace(`export default class ${name}`, `class ${name}`);
     return Function(...Object.keys(bindings), `${source}\nreturn ${name};`)(...Object.values(bindings));
@@ -166,8 +169,9 @@ const targetFunction = (control, item, prepareWeaponDamageModifier, calls) => {
         useTarget(target) { this.record.target = target; } raiseDmg() { this.record.raise = true; }
         async rollBaseDamage(formula) { this.record.damage = formula; } display() { this.record.display = true; }
     }
-    return Function('item', 'gangup', 'gb', 'ItemRoll', 'Char', 'prepareWeaponDamageModifier',
-        `${assignment};return this.targetFunction;`).call(control, item, 0, gb, CaptureItemRoll, class {}, prepareWeaponDamageModifier);
+    control.propertiesInputs = [];
+    return Function('item', 'gangup', 'gb', 'ItemRoll', 'Char', 'prepareWeaponDamageModifier', 'canvas', ...Object.keys(properties),
+        `${assignment};return this.targetFunction;`).call(control, item, 0, gb, CaptureItemRoll, class {}, prepareWeaponDamageModifier, {tokens: {get: () => null}}, ...Object.values(properties));
 };
 
 test('actual native Hit damage restores frozen modifier from chat, keeps Raise, and rejects corrupt formulas', async () => {
@@ -185,9 +189,9 @@ test('actual native Hit damage restores frozen modifier from chat, keeps Raise, 
 });
 
 test('actual native Benny reroll keeps Damage Mod/The Drop and rerolls its augmented formula without another bonus', async () => {
-    const f = fixture(), flags = { weaponDamageModifier: '1d6+4', weaponTheDrop: true, itemroll: f.item.id }, patches = [];
+    const f = fixture(), flags = { weaponDamageModifier: '1d6+4', weaponTheDrop: true, itemroll: f.item.id, useactor: f.actor.id }, patches = [];
     const Control = classFor('RollControl', { gb: { ...gb, raiseCount: () => 0 }, Char: class { hasEdgeSetting() { return false; } } });
-    global.game = { user: { _id: 'player', id: 'player' } }; f.actor.items = new Map([[f.item.id, f.item]]);
+    global.game = { user: { _id: 'player', id: 'player' }, actors: new Map([[f.actor.id, f.actor]]) }; f.actor.items = new Map([[f.item.id, f.item]]);
     global.CONFIG = { Dice: { SwadeRoll: class {
         constructor(formula) { this.formula = formula; this.terms = [{}]; this.total = 7; }
         async evaluate() {} async toMessage() { patches.push(this.formula); return { update: async patch => patches.push(patch) }; }

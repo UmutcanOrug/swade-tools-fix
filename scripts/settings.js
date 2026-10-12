@@ -2,8 +2,33 @@ import SettingName from './class/SettingName.js';
 import SettingRules from './class/SettingRules.js';
 import SettingCustom from './class/SettingCustom.js';
 import * as gb from './gb.js';
+import {PropertiesLibraryMenu} from './services/PropertiesUI.js';
+import {synchronizePropertyEffects} from './services/PropertiesEffects.js';
 
 export const registerSettings=async()=>{
+
+    const synchronizeProperties = () => {
+        void synchronizePropertyEffects().catch(error => console.error('SWADE Tools | Properties synchronization failed', error));
+    };
+    game.settings.register(gb.moduleName, 'propertiesEnabled', {
+        name: 'Experimental Properties & Effects',
+        hint: 'Enable the searchable Properties library and GM-approved rules for weapons, Edges and Abilities. Existing AoE and Flame workflows stay unchanged. Disabled by default.',
+        default: false, scope: 'world', type: Boolean, config: true,
+        onChange: synchronizeProperties
+    });
+    game.settings.register(gb.moduleName, 'propertiesLibrary', {
+        default: {version: 1, presets: [], assignments: {}, favorites: []},
+        scope: 'world', type: Object, config: false, onChange: synchronizeProperties
+    });
+    game.settings.register(gb.moduleName, 'propertiesEventLedger', {
+        default: {version: 1, candidates: {}, events: {}},
+        scope: 'world', type: Object, config: false
+    });
+    game.settings.registerMenu(gb.moduleName, 'propertiesLibraryMenu', {
+        name: 'Properties & Effects Library', label: 'Open Properties Library',
+        hint: 'Search, customize and organize reusable weapon, Edge and Ability properties.',
+        icon: 'fas fa-book-open', type: PropertiesLibraryMenu, restricted: true
+    });
 
     game.settings.register(gb.moduleName, 'unifiedRofExperimental', {
         name: 'Experimental Unified RoF',

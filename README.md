@@ -3,6 +3,48 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
+## Experimental Properties & Effects (2.2.0-test.1)
+
+This is an opt-in GitHub prerelease, not the stable Latest release. Back up
+the world and test a copy between sessions. The new system is **off by default**.
+
+Install this test version from Foundry's **Install Module → Manifest URL**:
+`https://github.com/UmutcanOrug/swade-tools-fix/releases/download/v2.2.0-test.1/module.json`
+The stable Latest endpoint stays on 2.1.20; its normal update button does not
+select this prerelease.
+
+Enable **Configure Settings → SWADE Tools → Experimental Properties & Effects**.
+Open **Properties & Effects Library** in those settings, or open a weapon,
+Edge or Ability's **Properties** tab and use the new **Properties & Effects ⚙**.
+
+The light compact editor includes 40 editable starting templates, categorized
+Turkish/English search, favorites, custom rules, duplication and JSON import/
+export. Adding a template creates an independent item rule; later library
+edits do not silently change existing actors. GM-approved rules are stored
+against the full item UUID. A copied item requires fresh GM approval.
+
+Supported effects include attack/damage modifiers, ranged/melee defense,
+best-only cover, minimum Strength, Soak and Gang-Up reduction; native attribute,
+skill and statistic effects; and conditions on Hit, Raise, applied damage or
+actual wounds. **Preview / Test** does not roll, consume resources or write
+actor data. Triggered Hit/Raise effects require the elected GM's **Apply
+Effects** in the attack card's closed **More Details** section. Damage/Wound
+effects run only after native GM Apply Damage, including remaining Soak wounds.
+Resistance results and effect audit stay on that same card.
+
+This first build integrates ordinary single fire and RoF. Existing AoE/Flame
+settings, Evade, fire checks, damage and animation pipelines remain separate
+and unchanged. It is not a complete implementation of every official Edge:
+complex abilities, automatic Edge grants and arbitrary script rules are not
+offered. A manually overridden RoF outcome that disagrees with the numeric
+roll is not eligible for new effects. Vehicle/operator on-hit effects are not
+yet supported; existing vehicle attacks remain available.
+
+Before reverting to 2.1.20, **turn off Experimental Properties & Effects while
+this build is still installed**. This disables only its managed native effects,
+not AoE/On Fire or unrelated effects. Reload clients, then restore the old
+module files. See [Türkçe kurulum ve geri dönüş](PROPERTIES-TR.md).
+
 ## Compact weapon controls and custom Shotgun damage (2.1.13)
 
 Weapon panels have separate **Mod.** (attack) and **Damage Mod.** fields.

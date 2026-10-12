@@ -6,6 +6,9 @@ const {pathToFileURL} = require('node:url');
 const {panel} = require('./weapon-panel.test.cjs');
 const scripts = path.resolve(__dirname, '../scripts');
 const service = () => import(pathToFileURL(path.join(scripts,'services/PowerAoeCast.js')).href);
+const properties = {...require('../scripts/services/PropertiesCombat.js'), ...require('../scripts/services/PropertiesEffects.js'),
+    isPropertiesEnabled: require('../scripts/services/PropertiesRules.js').isPropertiesEnabled};
+const noImports = source => source.replace(/^import\s[\s\S]*?;\r?\n/gm, '');
 
 const fixture = (options = {}) => {
     const events=[],notices=[],rolls=[];
@@ -149,9 +152,9 @@ test('native PP bookkeeping keeps failed→Benny contract and never charges AoE 
 });
 
 test('actual native target selection respects empty areas, scene identity and missing tokens',async()=>{
-    const source=fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8')
-        .replace(/^import .*;\r?\n/gm,'').replace('export default class RollControl','class RollControl');
-    const Control=Function('gb',`${source}\nreturn RollControl;`)({trans:key=>key,mainGM:()=>false});
+    const source=noImports(fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8'))
+        .replace('export default class RollControl','class RollControl');
+    const Control=Function('gb',...Object.keys(properties),`${source}\nreturn RollControl;`)({trans:key=>key,mainGM:()=>false},...Object.values(properties));
     const token={id:'target',actor:{}};
     global.canvas={scene:{id:'scene'},tokens:{get:id=>id==='target'?token:null}};
     const chain={append(){return this;},on(){return this;},ready(){return this;}};
@@ -170,12 +173,12 @@ test('actual native target selection respects empty areas, scene identity and mi
 });
 
 test('native Power Benny preserves the area and remaining PP without recreating a template',async()=>{
-    const source=fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8')
-        .replace(/^import .*;\r?\n/gm,'').replace('export default class RollControl','class RollControl');
+    const source=noImports(fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8'))
+        .replace('export default class RollControl','class RollControl');
     const calls=[],patches=[],spent=[];
-    const Control=Function('gb','Char','withSuppressedAoeAutomation',`${source}\nreturn RollControl;`)(
+    const Control=Function('gb','Char','withSuppressedAoeAutomation',...Object.keys(properties),`${source}\nreturn RollControl;`)(
         {trans:key=>key,raiseCount:()=>0},class {spendPP(...args){spent.push(args);}},
-        async(items,fn)=>{calls.push('guard');return fn();});
+        async(items,fn)=>{calls.push('guard');return fn();},...Object.values(properties));
     const item={id:'burst'},actor={items:new Map([['burst',item]])};
     global.game={user:{_id:'player',id:'player'}};global.ChatMessage={getSpeaker:()=>({})};
     global.Hooks={call(){calls.push('native-hook');}};
@@ -217,9 +220,9 @@ test('failed/critical/invalid/underfunded Power corrections cannot trigger extra
 });
 
 test('actual native Power target gate honors GM correction only for new area cards',()=>{
-    const source=fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8')
-        .replace(/^import .*;\r?\n/gm,'').replace('export default class RollControl','class RollControl');
-    const Control=Function('gb',`${source}\nreturn RollControl;`)({raiseCount:(total,tn)=>Math.floor((total-tn)/4)});
+    const source=noImports(fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8'))
+        .replace('export default class RollControl','class RollControl');
+    const Control=Function('gb',...Object.keys(properties),`${source}\nreturn RollControl;`)({raiseCount:(total,tn)=>Math.floor((total-tn)/4)},...Object.values(properties));
     for(const [area,critical,expected] of [[true,false,false],[true,true,true],[false,false,true]]){
         const control=new Control({rolls:[{total:3}],flags:{'swade-tools':{userof:1,...(area?{powerAoe:{}}:{})}}},{},'player');
         control.gmmod=2;control.isCritical=()=>critical;
@@ -228,11 +231,11 @@ test('actual native Power target gate honors GM correction only for new area car
 });
 
 test('deleted synthetic power caster never falls back to another token or base actor',()=>{
-    const source=fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8')
-        .replace(/^import .*;\r?\n/gm,'').replace('export default class RollControl','class RollControl');
+    const source=noImports(fs.readFileSync(path.join(scripts,'class/RollControl.js'),'utf8'))
+        .replace('export default class RollControl','class RollControl');
     const warnings=[];global.game={scenes:{get:()=>({tokens:{get:()=>null}})}};
     global.ui={notifications:{warn:message=>warnings.push(message)}};
-    const Control=Function(`${source}\nreturn RollControl;`)();
+    const Control=Function(...Object.keys(properties),`${source}\nreturn RollControl;`)(...Object.values(properties));
     const control=new Control({rolls:[{}],flags:{'swade-tools':{powerAoe:{sceneId:'scene',sourceTokenId:'deleted'},usetoken:'deleted'}}},{},'player');
     assert.equal(control.getActor(),null);assert.equal(control.findActor(),false);assert.equal(warnings.length,1);
     delete global.game;delete global.ui;

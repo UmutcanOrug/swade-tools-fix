@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const scripts = path.resolve(__dirname, '../scripts');
+const properties = {...require('../scripts/services/PropertiesCombat.js'), ...require('../scripts/services/PropertiesEffects.js'),
+    isPropertiesEnabled: require('../scripts/services/PropertiesRules.js').isPropertiesEnabled};
 
 // Load the real service with only gb's transitive Foundry UI imports replaced.
 // All other helpers are the production modules; no game/server is contacted.
@@ -31,7 +33,7 @@ const fixture = (range = 1) => {
     owner.items.set(item.id, item); owner.activeTokens = [source];
     const tokens = new Map([[source.id, source], [target.id, target]]);
     const targets = new Set([target]);
-    global.game = { user: { id: 'player', _id: 'player', targets }, settings: { get: () => true }, modules: new Map() };
+    global.game = { user: { id: 'player', _id: 'player', targets }, actors: new Map([[owner.id, owner], [enemy.id, enemy]]), settings: { get: (_scope, key) => key !== 'propertiesEnabled' }, modules: new Map() };
     global.canvas = { scene: { id: 'scene' }, dimensions: { distance: 1 }, tokens: {
         controlled: [], placeables: [source, target], get: id => tokens.get(id)
     } };
@@ -217,7 +219,7 @@ test('profile application preserves mode/source/target flags but adds attack bon
     assert.equal(applyNativeShotgunProfile(rollStub(), { ok: true, enabled: false }), false);
 });
 
-const noImports = source => source.replace(/^import[^\n]+;\r?\n/gm, '');
+const noImports = source => source.replace(/^import\s[\s\S]*?;\r?\n/gm, '');
 test('actual ItemRoll override retains damage modifiers/AP/Raise and does not mutate the item', async () => {
     const source = noImports(fs.readFileSync(path.join(scripts, 'class/ItemRoll.js'), 'utf8'))
         .replace('export default class ItemRoll', 'class ItemRoll');
@@ -226,7 +228,7 @@ test('actual ItemRoll override retains damage modifiers/AP/Raise and does not mu
         addModifier(value) { (this.mods ??= []).push(value); }
         async rollDamage(...args) { this.args = args; }
     }
-    const ItemRoll = Function('CharRoll', 'gb', `${source}\nreturn ItemRoll;`)(Base, { trans: value => value });
+    const ItemRoll = Function('CharRoll', 'gb', ...Object.keys(properties), `${source}\nreturn ItemRoll;`)(Base, { trans: value => value }, ...Object.values(properties));
     const f = fixture(); f.owner.system = {}; f.item.system.actions.dmgMod = '+1';
     const roll = new ItemRoll(f.owner, f.item);
     await roll.rollBaseDamage('2d6+4');
@@ -248,10 +250,11 @@ const loadTargetFunction = (control, item, api, calls) => {
         async rollBaseDamage(formula) { this.record.damage = formula; }
         display() { this.record.displayed = true; }
     }
-    return Function('item', 'gangup', 'gb', 'ItemRoll', 'Char', 'prepareNativeShotgunDamageForTarget', 'applyNativeShotgunProfile',
+    control.propertiesInputs = [];
+    return Function('item', 'gangup', 'gb', 'ItemRoll', 'Char', 'prepareNativeShotgunDamageForTarget', 'applyNativeShotgunProfile', ...Object.keys(properties),
         `${assignment};return this.targetFunction;`).call(control, item, 0, {
             trans: value => value, setting: () => false
-        }, ItemRoll, class {}, api.prepareNativeShotgunDamageForTarget, api.applyNativeShotgunProfile);
+        }, ItemRoll, class {}, api.prepareNativeShotgunDamageForTarget, api.applyNativeShotgunProfile, ...Object.values(properties));
 };
 
 test('actual native target damage branch remeasures recorded source, preserves Raise and never consumes again', async () => {
@@ -293,12 +296,12 @@ test('native target branch keeps explicit additional damage actions and ordinary
 
 test('actual native Benny reroll copies shotgun mode/barrels/source flags without repeating resource preparation', async () => {
     const f = fixture(), flags = { shotgunMode: 'shot', shotgunBothBarrels: true,
-        shotgunSourceTokenUuid: f.source.document.uuid, itemroll: f.item.id };
+        shotgunSourceTokenUuid: f.source.document.uuid, itemroll: f.item.id, useactor: f.owner.id };
     const source = noImports(fs.readFileSync(path.join(scripts, 'class/RollControl.js'), 'utf8'))
         .replace('export default class RollControl', 'class RollControl');
-    const Control = Function('gb', 'Char', `${source}\nreturn RollControl;`)(
+    const Control = Function('gb', 'Char', ...Object.keys(properties), `${source}\nreturn RollControl;`)(
         { raiseCount: () => 0, stringMod: value => String(value), trans: value => value },
-        class { hasEdgeSetting() { return false; } });
+        class { hasEdgeSetting() { return false; } }, ...Object.values(properties));
     let updated;
     global.CONFIG = { Dice: { SwadeRoll: class {
         constructor(formula) { this.formula = formula; this.terms = [{}]; this.total = 8; }

@@ -5,8 +5,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 const service = import(pathToFileURL(path.resolve(__dirname, '../scripts/services/AoeFireDamage.js')).href);
+const properties = {...require('../scripts/services/PropertiesCombat.js'), ...require('../scripts/services/PropertiesEffects.js'),
+    isPropertiesEnabled: require('../scripts/services/PropertiesRules.js').isPropertiesEnabled};
 const rollControlSource = fs.readFileSync(path.resolve(__dirname, '../scripts/class/RollControl.js'), 'utf8')
-    .replace(/^import .*;\r?\n/gm, '').replace('export default class RollControl', 'class RollControl') + '\nRollControl;';
+    .replace(/^import\s[\s\S]*?;\r?\n/gm, '').replace('export default class RollControl', 'class RollControl') + '\nRollControl;';
 
 const html = () => ({chunks: [], append(text) { this.chunks.push(text); return this; },
     find() { return this; }, on() { return this; }, ready() { return this; }, css() { return this; }});
@@ -54,7 +56,7 @@ const fixture = async (total = 18) => {
         isHeavyArmor: () => false, isHeavyWeapon: item => item?.system?.isHeavyWeapon === true,
         getArmorArea: owner => owner.system.stats.toughness.armor,
         actorIsJoker: () => true, mainGM: () => true};
-    const context = {game, canvas, gb, Char, CharRoll, getAoeFireDamageTarget: message =>
+    const context = {...properties, game, canvas, gb, Char, CharRoll, getAoeFireDamageTarget: message =>
         getAoeFireDamageTarget(message, {gameRef: game, canvasRef: canvas}),
         ui: {notifications: {warn: text => calls.warnings.push(text), error: text => calls.warnings.push(text),
             info: text => calls.warnings.push(text)},

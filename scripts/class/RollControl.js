@@ -7,6 +7,10 @@ import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js
 import { withSuppressedAoeAutomation } from '../services/AoeAnimationService.js';
 import { settlePowerAoeCorrection } from '../services/PowerAoeCast.js';
 import { getAoeFireDamageTarget } from '../services/AoeFireDamage.js';
+import {canUsePropertiesCombat, getPropertyTargetModifiers, getPropertySoakModifier,
+    propertyAttackType, propertySourceForTarget} from '../services/PropertiesCombat.js';
+import {registerPropertyCandidate, renderPropertyCandidates, applyPropertiesForEvent} from '../services/PropertiesEffects.js';
+import {isPropertiesEnabled} from '../services/PropertiesRules.js';
 
 export default class RollControl {
     
@@ -22,6 +26,7 @@ export default class RollControl {
         this.soakFunction;
         this.titleshow=false;
         this.gmmod=0;
+        this.propertiesInputs=[];
         this.usegmtarget=false;
 
         this.user=user;
@@ -470,6 +475,7 @@ export default class RollControl {
     }
 
    async findTargets(){
+        this.propertiesInputs=[];
         if (this.chat.flags["swade-tools"]?.itemroll || this.rolltype=='soak' ||
             this.chat.flags['swade-tools']?.aoeFireDamage){
 
@@ -741,6 +747,9 @@ export default class RollControl {
 
             }
         }
+        for (const input of this.propertiesInputs) await registerPropertyCandidate(input);
+        const effects=renderPropertyCandidates(this.chat);
+        if (effects && !this.html.find('.swadetools-properties-chat').length) this.html.append(effects);
     }
 
 
@@ -953,10 +962,17 @@ export default class RollControl {
 
    
         let char=new Char(target.actor);
+        const propertiesAttackType=propertyAttackType(this.getActor(),item,skill);
+        let propertiesRange;
+        let properties=getPropertyTargetModifiers({actor:this.getActor(),item,target,
+            message:this.chat,attackType:propertiesAttackType});
         /// range, gangup
 
         if (!powertype){
         let targetRange=gb.getRange(this.getActor(true,true),target)*canvas.dimensions.distance; /// use Grid Scale for distance (but not for gang up)
+        propertiesRange=targetRange;
+        properties=getPropertyTargetModifiers({actor:this.getActor(),item,target,
+            message:this.chat,attackType:propertiesAttackType,range:targetRange});
 
        // console.log(targetRange);
        
@@ -984,14 +1000,18 @@ export default class RollControl {
 
                         let reason='';
                        // let char=new Char(target.actor);
+                        let nativeGangupIgnore=0;
                         if (char.hasEdgeSetting('Improved Block')){
                             gangup-=2
+                            nativeGangupIgnore=2;
                             reason=` (${gb.settingKeyName('Improved Block')})`
                         } else if (char.hasEdgeSetting('Block')){
                             gangup-=1
+                            nativeGangupIgnore=1;
                             reason=` (${gb.settingKeyName('Block')})`
                         }
 
+                        gangup-=Math.max(0,properties.totals.gangupIgnore-nativeGangupIgnore);
                         if (gangup<0){
                             gangup=0;
                         }
@@ -1011,7 +1031,16 @@ export default class RollControl {
             
 
            
-            if (char.hasEdgeSetting('Dodge')){
+            if (properties.cover<0){
+                const equippedCover=gb.setting('autoCover') ? target.actor.items
+                    .filter(entry=>entry.system?.equipStatus==3 && Number(entry.system?.cover)<0)
+                    .map(entry=>Number(entry.system.cover)) : [];
+                const bestCover=Math.min(properties.cover,char.hasEdgeSetting('Dodge') ? -2 : 0,...equippedCover);
+                targetNumber-=bestCover;
+                targetInfo+=`<li>Properties / Cover: ${bestCover}</li>`;
+            }
+
+            if (char.hasEdgeSetting('Dodge') && !(properties.cover<0)){
                 targetNumber+=2;
                 targetInfo+=`<li>${gb.settingKeyName('Dodge')}: -2`
             }
@@ -1076,7 +1105,7 @@ export default class RollControl {
                     }
                 })
     
-                if (finalcover<0){
+                if (finalcover<0 && !(properties.cover<0)){
                     let coverBonus=Math.abs(finalcover);
                     targetNumber+=coverBonus;
                     targetInfo+=`<li>${itemname}: -${coverBonus}`
@@ -1147,6 +1176,12 @@ export default class RollControl {
     }
 
 
+    const propertiesAdjustment=properties.attackDelta+properties.incoming;
+    if (propertiesAdjustment){
+        targetNumber-=propertiesAdjustment;
+        targetInfo+=`<li>Properties: ${propertiesAdjustment>0 ? '+' : ''}${propertiesAdjustment}</li>`;
+    }
+
     if (powertype!='template' && char.is('isVulnerable')){
         targetInfo+=`<li>${target.name} ${gb.trans('IsVulnerable')}: +2</li>`;
          targetNumber-=2;
@@ -1189,6 +1224,11 @@ export default class RollControl {
         if (rof>1){
            
             addTarget='rof';
+        }
+
+        if (canUsePropertiesCombat(item,this.chat) && Number(this.chat.flags['swade-tools'].userof ?? 1)<2){
+            this.propertiesInputs.push({message:this.chat,actor:this.getActor(),item,target,
+                outcome:addTarget,hitKey:String(rofnumb),attackType:propertiesAttackType,range:propertiesRange});
         }
 
         print+=`<div class="swadetools-targetwrap  swadetools-term-${addTarget}">`
@@ -1326,6 +1366,19 @@ export default class RollControl {
             }
 
             charRoll.useTarget(targetid);
+            if (canUsePropertiesCombat(item,this.chat)){
+                const propertyTarget=canvas.tokens.get(targetid);
+                const propertyInput=this.propertiesInputs.find(input=>input.target.id===targetid);
+                const propertySource=propertySourceForTarget({message:this.chat,actor:this.getActor(),item,
+                    target:propertyTarget,outcome:raiseDmg ? 'raise' : 'hit',hitKey:propertyInput?.hitKey ?? '1',
+                    attackType:propertyInput?.attackType ?? propertyAttackType(this.getActor(),item),range:propertyInput?.range});
+                if (propertySource){
+                charRoll.addFlag('propertiesSource',propertySource);
+                charRoll.addFlag('propertiesRootId',propertySource.rootId);
+                charRoll.propertiesTarget=propertyTarget;
+                charRoll.propertiesRange=propertySource.range;
+                }
+            }
             if (shotgunDamage) applyNativeShotgunProfile(charRoll,{...shotgunDamage,action:'damage'});
             if (raiseDmg){
                 charRoll.raiseDmg();
@@ -1631,6 +1684,11 @@ export default class RollControl {
                 }
 
                 charRoll.addModifier(tactor.system.attributes.vigor?.soakBonus,gb.trans('DamageApplicator.SoakModifier','SWADE'),);
+                const propertyItem=isPropertiesEnabled() && this.chat.flags['swade-tools']?.itemroll &&
+                    !this.chat.flags['swade-tools']?.aoeFireDamage
+                    ? this.getItemOwner()?.items?.get?.(this.chat.flags['swade-tools'].itemroll) : null;
+                const propertySoak=getPropertySoakModifier(tactor,propertyItem,this.chat);
+                if (propertySoak) charRoll.addModifier(propertySoak,'Properties: Soak');
                 
 
                 if((gb.settingKeyName('Unarmored Hero') || gb.systemSetting('unarmoredHero')) && tactor.system.wildcard && 
@@ -1644,6 +1702,10 @@ export default class RollControl {
                 charRoll.addFlavor(gb.trans('DoSoak'))
                 
                 charRoll.addFlag('usetarget',target.id);
+                if (this.chat.flags['swade-tools']?.propertiesSource){
+                    charRoll.addFlag('propertiesSource',this.chat.flags['swade-tools'].propertiesSource);
+                    charRoll.addFlag('propertiesRootId',this.chat.flags['swade-tools'].propertiesRootId);
+                }
                 if (this.chat.flags['swade-tools']?.aoeFireDamage){
                     charRoll.addFlag('aoeFireDamage',this.chat.flags['swade-tools'].aoeFireDamage);
                     charRoll.addFlag('aoeFireSoakActorUuid',tactor.uuid);
@@ -1685,6 +1747,7 @@ export default class RollControl {
 
 
             let char=new Char(target.actor);
+            let appliedPropertyWounds=0;
 
           //  console.log(target);
           //  console.log(raisecount);
@@ -1696,23 +1759,25 @@ export default class RollControl {
                 } else
                 if (char.is('isShaken')){
                     if (!char.hasAbilitySetting('Hardy')){
-                        char.applyWounds(1);
+                        await char.applyWounds(1);
+                        appliedPropertyWounds=1;
                     } else {
                         ui.notifications.info(`${target.actor.name} ${gb.trans('HardyWarn')}`)
                     }
                     
                 } else {
-                    char.on('isShaken');
+                    await char.on('isShaken');
                 }
             } else if (raisecount>0){
                 
                
-                char.applyWounds(raisecount);
+                await char.applyWounds(raisecount);
+                appliedPropertyWounds=raisecount;
                 
                 if (char.isVehicle()){
                     await char.outOfControl();
                 } else {                    
-                    char.on('isShaken');
+                    await char.on('isShaken');
 
                     /* if (gb.setting('grittyDamage')){
                         await char.rollTable(game.tables.get(gb.setting('grittyDamage')));
@@ -1730,6 +1795,24 @@ export default class RollControl {
                 }
                 
             }
+            if (raisecount>=0) await this.applyPropertyDamageEvents(target,appliedPropertyWounds);
+        }
+    }
+
+    async applyPropertyDamageEvents(target,wounds){
+        const source=this.chat.flags?.['swade-tools']?.propertiesSource;
+        if (!source || source.version!==1 || source.targetUuid!==target.document?.uuid ||
+            source.targetActorUuid!==target.actor?.uuid) return;
+        try {
+            const [actor,item]=await Promise.all([fromUuid(source.actorUuid),fromUuid(source.itemUuid)]);
+            if (!canUsePropertiesCombat(item,this.chat)) return;
+            const input={message:this.chat,actor,item,target,outcome:source.outcome,
+                hitKey:source.hitKey,attackType:source.attackType,range:source.range,damageApplied:true,wounds};
+            await applyPropertiesForEvent({...input,trigger:'damageApplied'});
+            if (wounds>0) await applyPropertiesForEvent({...input,trigger:'wound'});
+        } catch (error){
+            console.error('SWADE Tools | Damage applied, but Properties effects need GM review',error);
+            ui.notifications.warn('Damage was applied. Properties effects could not finish; review the target effects before retrying.');
         }
     }
 
@@ -1834,7 +1917,13 @@ export default class RollControl {
         let edgebonus=false;
         let oldroll=this.chat.rolls[0];
         let flavor=this.chat.flavor;
-        let chatflags=this.chat.flags['swade-tools'];
+        let chatflags={...this.chat.flags['swade-tools']};
+        const propertyItem=isPropertiesEnabled() && chatflags.itemroll && !chatflags.aoeFireDamage
+            ? this.getItemOwner()?.items?.get?.(chatflags.itemroll) : null;
+        if (canUsePropertiesCombat(propertyItem,this.chat)){
+            chatflags.propertiesRootId=chatflags.propertiesRootId ?? this.chat.id;
+            delete chatflags.propertiesCandidates;
+        }
 
 
      //  console.log(this.chat.flags);

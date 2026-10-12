@@ -2,6 +2,7 @@
 import BasicRoll from './BasicRoll.js';
 import * as gb from './../gb.js';
 import Char from './Char.js';
+import {getPropertyStrength} from '../services/PropertiesCombat.js';
 
 
 export default class CharRoll extends BasicRoll{
@@ -359,7 +360,7 @@ export default class CharRoll extends BasicRoll{
 
         if (this.item && this.item.type=='weapon' && skillName==gb.setting('shootingSkill')){
             let minstr=gb.getMinStr(this.item)
-            let actorstr=gb.getStrForMinStr(this.actor)
+            let actorstr=getPropertyStrength(gb.getStrForMinStr(this.actor),this.actor,this.item,this.flagUpdate)
             //console.log(minstr);
             if (minstr>actorstr){
                 let penal=0-((minstr-actorstr)/2)
@@ -779,7 +780,7 @@ export default class CharRoll extends BasicRoll{
         if (this.item.type=='weapon' && weaponDamage.includes(`@str`)){
            // let minStr=gb.getMinStr(this.item)
            // gb.log(minStr,'minstr');
-            let actorStr=gb.getStrForMinStr(this.actor);
+            let actorStr=getPropertyStrength(gb.getStrForMinStr(this.actor),this.actor,this.item,this.flagUpdate);
            // gb.log(actorStr,'actorstr');
             if (actorStr<gb.getMinStr(this.item)){
                 weaponDamage=weaponDamage.replaceAll(/d\d+/g,`d${actorStr}`)
@@ -835,7 +836,7 @@ export default class CharRoll extends BasicRoll{
         }
 
 
-        if (this.item.type=='weapon' && gb.getMinStr(this.item)>gb.getStrForMinStr(this.actor)){
+        if (this.item.type=='weapon' && gb.getMinStr(this.item)>getPropertyStrength(gb.getStrForMinStr(this.actor),this.actor,this.item,this.flagUpdate)){
             this.addFlavor(`<div>${gb.trans('UnderMinStr')}</div>`,true);
         }
 

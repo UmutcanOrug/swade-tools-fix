@@ -20,11 +20,19 @@ import { registerAoeEvadeAuthority, registerAoeEvadeControls } from './services/
 import { registerAoeFire } from './services/AoeFire.js';
 import { registerAoeActorControls } from './services/AoeActorConfig.js';
 import { registerAoeFireVisuals } from './services/AoeFireVisuals.js';
+import {registerPropertiesItemControls} from './services/PropertiesUI.js';
+import {registerPropertiesEffects, synchronizePropertyEffects} from './services/PropertiesEffects.js';
+import {registerPropertiesChatControls} from './services/PropertiesChat.js';
+import {registerPropertiesPoolControls, resolveCurrentPropertyCandidate} from './services/PropertiesRollIntegration.js';
 
 registerAoeItemControls();
 registerShotgunItemControls();
 registerAoeChatControls();
 registerAoeActorControls();
+registerPropertiesItemControls();
+registerPropertiesEffects();
+registerPropertiesChatControls({resolvePropertyCandidate:resolveCurrentPropertyCandidate});
+registerPropertiesPoolControls();
 
 
 //// NEXT TODO -> Scale and Size (see about Swat and Stomp - ignore scale)
@@ -142,6 +150,8 @@ Hooks.on('ready',async()=>{
 
      
   await registerSettings();
+    registerPropertiesEffects();
+    await synchronizePropertyEffects();
     foundryIsReady=true;
 
 

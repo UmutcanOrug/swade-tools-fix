@@ -14,12 +14,13 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   rollData={},reviewActions=['continue'],choosePool='use-reroll',targetCover=0,targetIllumination=false,
   targetDistance=5,mutate=null,flags={},assignedOutcome='miss',aoe=false,noTargets=false,
   placements=null,afterPrepare=null,quantity=20,ammoManagement=true,
-  nativeRange=null,sceneDistance=1,ignoreRange=false,targetCount=1}={}) {
+  nativeRange=null,sceneDistance=1,ignoreRange=false,targetCount=1,properties=null}={}) {
   const shotgunRules=await import(pathToFileURL(path.join(services,'ShotgunRules.js')));
   const {nativeWeaponDamageFormula}=await import(pathToFileURL(path.join(services,'WeaponDamageModifier.js')));
   const aoeFlags=await import(pathToFileURL(path.join(services,'AoeItemFlags.js')));
   const {aoeResource}=await import(pathToFileURL(path.join(services,'AoeResourceService.js')));
   const {withSuppressedAoeAutomation}=await import(pathToFileURL(path.join(services,'AoeAnimationService.js')));
+  const propertyCombat=await import(pathToFileURL(path.join(services,'PropertiesCombat.js')));
   const events=[],notices=[],prompts=[],reviews=[],cards=[],assignments=[];
   const nativeCalls=[],nativeMessages=[],aoeCalls=[],preparations=[],hookHandlers=new Map();let hookId=0;
   const Hooks={call(){},on(name,handler){const id=++hookId;hookHandlers.set(id,{name,handler});return id;},off(_name,id){hookHandlers.delete(id);}};
@@ -48,6 +49,7 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   const inlineSetup={weaponId:weapon.id,itemUuid:weapon.uuid,actorUuid:actor.uuid,weaponActorUuid:actor.uuid,
     trait,rof:2,recoil:false,consumeAmmo:true,calledShot:'Torso',otherModifierFormula:'0',aoe,...setup};
   if(mutate)mutate({actor,weapon,skill,inlineSetup,token,target});
+  const propertyLibrary={version:1,presets:[],favorites:[],assignments:properties ? properties({actor,weapon,target}) : {}};
   const targets=Array.from({length:targetCount},(_unused,index)=>index===0?target:{
     ...target,id:`target-${index}`,name:`Target ${index+1}`,document:{...target.document,uuid:`Scene.scene.Token.target-${index}`}
   });
@@ -64,7 +66,8 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   }
   const game={user:{id:'gm',isGM:true,bennies:0,targets:new Set(noTargets?[]:targets)},
     modules:new Map([['swade-tools',{active:true}]]),
-    settings:{get(_ns,key){return key==='shootingSkill'?'Shooting':key==='ignoreRange'?ignoreRange:key==='ammoManagement'&&ammoManagement;}},
+    settings:{get(_ns,key){return key==='propertiesEnabled'?Boolean(properties):key==='propertiesLibrary'?propertyLibrary:
+      key==='shootingSkill'?'Shooting':key==='ignoreRange'?ignoreRange:key==='ammoManagement'&&ammoManagement;}},
     i18n:{localize:key=>key},messages:{get:id=>nativeMessages.find(message=>message.id===id)},
     swadetools:{async item(owner,id,operator,options){events.push('native-damage');nativeCalls.push({owner,id,operator,options});
       const raise={checked:false},mod={value:'0'},called={value:'Torso',options:['None','Torso','Head'].map(value=>({value}))};
@@ -91,6 +94,9 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
     ChatMessage:{getSpeaker:input=>input,async create(data){const message={...data,id:'pool',async update(change){Object.assign(this,change);}};cards.push(message);return message;}},
     fromUuid:async()=>null,setTimeout(callback,ms){if(ms<=100)callback();return 1;},clearTimeout(){}};
   dependencies.scope.rofServices={...shotgunRules,...aoeFlags,aoeResource,withSuppressedAoeAutomation,nativeWeaponDamageFormula,
+    ...Object.fromEntries(['getPropertyCombatModifiers','getPropertyTargetModifiers','propertyPoolData','propertySourceForTarget']
+      .map(name=>[name,context=>propertyCombat[name](context,{game})])),
+    getPropertyStrength:(base,actualActor,item,flags,runtime={})=>propertyCombat.getPropertyStrength(base,actualActor,item,flags,{...runtime,game}),
     isAoeItem:item=>item.flags?.['swade-tools']?.aoeEnabled===true,
     ...(typeof nativeRange==='function'?{getNativeRange:nativeRange}:{}),
     async prepareAoePoolPoints(context){events.push('prepare-aoe');preparations.push(context);
@@ -121,6 +127,30 @@ test('inline RoF skips only the initial setup and preserves review plus target a
   assert.equal(s.reviews.length,1);assert.equal(s.assignments.length,2);assert.equal(s.cards.length,1);
   assert.deepEqual(s.events.filter(event=>event.startsWith('ammo:')),['ammo:5']);
   assert.equal(s.weapon.system.currentShots,45);
+});
+
+test('actual RoF pipeline adds custom attack once, uses strongest target cover and binds each damage to its usable die',async()=>{
+  const s=await runPool({assignedOutcome:'hit',targetCover:-4,ignoreRange:true,
+    mutate({target}){
+      target.actor.uuid='Actor.victim';target.document.actor=target.actor;
+      target.actor.items.push({id:'custom-dodge',uuid:'Actor.victim.Item.custom-dodge',type:'ability',name:'Custom Dodge',system:{}});
+    },
+    properties:({weapon})=>({[weapon.uuid]:[{id:'attack',action:'attackMod',value:1}],
+      'Actor.victim.Item.custom-dodge':[{id:'dodge',action:'cover',value:-2,stack:'best',group:'cover'}]})});
+  assert.deepEqual(s.assignments.map(assignment=>assignment.result.total),[10,8]);
+  assert.ok(s.assignments.every(assignment=>assignment.targetProfile.total===-4));
+  const pool=s.cards[0]['flags.swade-tools.propertiesPool'];
+  assert.deepEqual(pool.assignments.map(assignment=>assignment.hitKey),['skill-0','skill-1']);
+  assert.ok(s.nativeCalls.every(call=>call.options.propertiesSource.rootId==='pool'));
+  assert.deepEqual(s.nativeCalls.map(call=>call.options.propertiesSource.hitKey),['skill-0','skill-1']);
+  assert.ok(s.nativeCalls.every(call=>call.options.propertiesSource.targetActorUuid==='Actor.victim'));
+});
+
+test('enabled Properties rules never enter the existing combined AoE RoF pipeline',async()=>{
+  const s=await runPool({aoe:true,noTargets:true,properties:({weapon})=>({
+    [weapon.uuid]:[{id:'attack',action:'attackMod',value:20}]})});
+  assert.ok(s.aoeCalls.every(call=>call.options.poolAttack.baseModifier===0));
+  assert.equal(s.cards[0]['flags.swade-tools.propertiesPool'],undefined);
 });
 
 test('every RoF workflow window uses the native light parchment theme without changing global settings',async()=>{

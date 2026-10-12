@@ -1,5 +1,6 @@
 import CharRoll from "./CharRoll.js";
 import * as gb from './../gb.js';
+import {getPropertyCombatModifiers} from '../services/PropertiesCombat.js';
 
 export default class ItemRoll extends CharRoll{
     constructor(actor,item){
@@ -142,6 +143,11 @@ export default class ItemRoll extends CharRoll{
                 this.addModifier(el.value,`${el.label} (${gb.trans('GlobalMod.Attack','SWADE')})`);
             });
         }
+        if (!this.propertiesAttackApplied){
+            const properties=getPropertyCombatModifiers({actor:this.actor,item:this.item,flags:this.flagUpdate});
+            if (properties.totals.attackMod) this.addModifier(properties.totals.attackMod,'Properties: Attack');
+            this.propertiesAttackApplied=true;
+        }
     }
 
     addDmgMod(){
@@ -162,6 +168,12 @@ export default class ItemRoll extends CharRoll{
             this.actor?.system?.stats?.globalMods?.damage.forEach(el => {
                 this.addModifier(el.value,`${el.label} (${gb.trans('GlobalMod.Damage','SWADE')})`);
             });
+        }
+        if (!this.propertiesDamageApplied){
+            const properties=getPropertyCombatModifiers({actor:this.actor,item:this.item,flags:this.flagUpdate,
+                target:this.propertiesTarget,range:this.propertiesRange});
+            if (properties.totals.damageMod) this.addModifier(properties.totals.damageMod,'Properties: Damage');
+            this.propertiesDamageApplied=true;
         }
     }
     ///

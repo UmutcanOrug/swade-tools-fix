@@ -1,0 +1,100 @@
+/* Deliberately scoped: native item forms and AoE dialogs keep their own theme. */
+.swadetools-properties-dialog {
+    --color-text-primary: #29251c;
+    --color-text-secondary: #655e4c;
+    --color-text-emphatic: #16130e;
+    --color-text-light-highlight: #16130e;
+    --color-form-label: #29251c;
+    --color-form-hint: #655e4c;
+    --color-form-field: #29251c;
+    --color-form-field-hover: #16130e;
+    --color-form-field-focus: #16130e;
+    --color-form-field-placeholder: #79705c;
+    --color-bg-input: #ddd8c8;
+    --input-text-color: #29251c;
+    --input-placeholder-color: #79705c;
+    --input-background-color: #ddd8c8;
+    color: #29251c;
+}
+.swadetools-properties-dialog .window-content {
+    background: #eee8d7;
+    color: #29251c;
+    padding: 12px;
+    overflow-y: auto;
+    max-height: min(790px, calc(100vh - 95px));
+}
+.swadetools-properties-dialog .dialog-content { gap: 0; }
+.swadetools-properties-dialog .dialog-form { gap: 10px; }
+.swadetools-properties-dialog .form-footer { flex-wrap: wrap; gap: 6px; }
+.swadetools-properties-dialog .st-properties { display: flex; flex-direction: column; gap: 9px; min-width: 0; color: #29251c; }
+.swadetools-properties-dialog .st-properties :is(input, select, textarea) {
+    color: #29251c;
+    background: #ddd8c8;
+    border: 1px solid #a69e8c;
+    border-radius: 3px;
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    height: 30px;
+    padding: 3px 6px;
+    box-shadow: inset 0 1px 3px #0000000e;
+}
+.swadetools-properties-dialog .st-properties textarea { height: auto; resize: vertical; }
+.swadetools-properties-dialog .st-properties input::placeholder { color: #79705c; opacity: 1; }
+.swadetools-properties-dialog .st-properties input[type="checkbox"] { width: 15px; height: 15px; flex: 0 0 15px; margin: 0; padding: 0; accent-color: #9b4e1d; }
+.swadetools-properties-dialog :is(button, .form-footer button) {
+    color: #29251c;
+    background: #e2dccb;
+    border: 1px solid #a69e8c;
+    box-shadow: none;
+    border-radius: 3px;
+    height: 29px;
+    min-height: 29px;
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 22px;
+    font-weight: 600;
+}
+.swadetools-properties-dialog button:hover { background: #d6cbb2; border-color: #7e603d; }
+.swadetools-properties-dialog button:disabled { opacity: .5; cursor: default; }
+.swadetools-properties-dialog .st-property-search { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 7px; }
+.swadetools-properties-dialog .st-property-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.swadetools-properties-dialog .st-property-toolbar > button { width: auto; flex: 0 0 auto; }
+.swadetools-properties-dialog .st-property-toolbar [data-property-count] { color: #655e4c; font-size: 11px; margin-right: auto; }
+.swadetools-properties-dialog .st-property-list { list-style: none; padding: 0; margin: 0; max-height: min(410px, 48vh); overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 6px; }
+.swadetools-properties-dialog .st-property-preset { padding: 8px; border: 1px solid #b9b09b; border-radius: 4px; background: #f5f0e3; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.swadetools-properties-dialog .st-property-preset-heading { display: flex; justify-content: space-between; gap: 8px; }
+.swadetools-properties-dialog .st-property-preset-heading strong { font-size: 14px; }
+.swadetools-properties-dialog .st-property-category { color: #655e4c; border: 1px solid #c4bba6; border-radius: 8px; padding: 0 6px; font-size: 10px; white-space: nowrap; align-self: flex-start; }
+.swadetools-properties-dialog .st-property-preset-description { font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.swadetools-properties-dialog .st-properties small { color: #655e4c; font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+.swadetools-properties-dialog .st-property-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.swadetools-properties-dialog .st-property-row-actions > button { width: auto; flex: 0 0 auto; min-width: 28px; }
+.swadetools-properties-dialog .st-property-rules { padding: 0; margin: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; max-height: 340px; overflow-y: auto; }
+.swadetools-properties-dialog .st-property-rule { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #b9b09b; border-radius: 3px; padding: 7px; background: #f5f0e3; }
+.swadetools-properties-dialog .st-property-rule.is-disabled .st-property-rule-copy { opacity: .5; }
+.swadetools-properties-dialog .st-property-rule-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.swadetools-properties-dialog .st-property-rule-copy strong { font-size: 13px; overflow-wrap: anywhere; }
+.swadetools-properties-dialog .st-property-empty { padding: 18px 10px; color: #655e4c; font-size: 12px; text-align: center; }
+.swadetools-properties-dialog .st-property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.swadetools-properties-dialog .st-property-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: #29251c; min-width: 0; }
+.swadetools-properties-dialog .st-property-check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: #29251c; cursor: pointer; }
+.swadetools-properties-dialog .st-property-hint { color: #655e4c; font-size: 11px; line-height: 1.4; margin: 0; }
+.swadetools-properties-dialog .st-property-notice { background: #fff0cc; border-left: 3px solid #b37920; color: #67491c; padding: 6px 8px; font-size: 12px; margin: 0; }
+.swadetools-properties-dialog .st-property-error { color: #9c251b; font-size: 12px; margin: 0; }
+.swadetools-properties-dialog .st-property-details { border-top: 1px solid #c2b8a2; padding-top: 6px; }
+.swadetools-properties-dialog .st-property-details > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #54442e; }
+.swadetools-properties-dialog .st-property-details[open] > :not(summary) { margin-top: 8px; }
+.swadetools-properties-dialog [hidden] { display: none !important; }
+.swadetools-properties-dialog .st-property-total { display: flex; justify-content: space-between; border-bottom: 1px solid #c2b8a2; padding: 5px; font-size: 12px; }
+.swadetools-properties-dialog .st-property-total strong { color: #27632f; }
+.swadetools-properties-dialog .st-property-tag { color: #746c5c; font-size: 10px; font-weight: 400; }
+.swadetools-properties-dialog .st-property-tag.is-applied { color: #27632f; }
+.st-properties-sheet-control { display: flex; align-items: center; gap: 6px; }
+.st-properties-sheet-control > span:first-child { flex: 1; font-weight: 600; }
+.st-properties-sheet-control > [data-swade-tools-properties-count] { font-size: 11px; opacity: .75; }
+.st-properties-sheet-control > button { width: 26px; height: 26px; min-height: 26px; line-height: 22px; flex: 0 0 26px; padding: 0; }
+@media (max-width: 560px) {
+    .swadetools-properties-dialog .st-property-search { grid-template-columns: minmax(0, 1fr) 120px; }
+    .swadetools-properties-dialog .st-property-rule { flex-wrap: wrap; }
+}

@@ -138,7 +138,7 @@ export default class Char {
         }
        entity.update({[data]:val}); */
 
-       this.updateData({[data]:val});
+       return this.updateData({[data]:val});
     }
 
 
@@ -254,7 +254,7 @@ export default class Char {
         }
 
     //   console.log(dataupdate);
-       entity.update(dataupdate);
+       return entity.update(dataupdate);
         }
     }
 
@@ -299,7 +299,7 @@ export default class Char {
         let actualwounds=gb.realInt(this.data('wounds.value'))+gb.realInt(wounds);
        // let maxwounds=this.actor.data.data.wounds.max
 
-       this.update('wounds.value',actualwounds);
+       return this.update('wounds.value',actualwounds);
       // console.log(actualwounds);
       //  this.actor.update({'data.wounds.value':actualwounds});
         /* if(actualwounds>=maxwounds){

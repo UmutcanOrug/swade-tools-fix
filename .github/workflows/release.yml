@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Verify AoE workflows
+      - name: Verify module workflows
         shell: bash
         run: node --test tests/*.test.cjs
 
@@ -52,9 +52,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          release_args=()
+          if [[ "$version" == *-* ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             "swade-tools-${version}.zip" \
             "module.json#module.json" \
             --verify-tag \
             --title "SWADE Tools ${version}" \
-            --notes-file "$RUNNER_TEMP/release-notes.md"
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "${release_args[@]}"
