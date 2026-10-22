@@ -145,6 +145,43 @@ test('signed directional pool payloads preserve rotation and reject missing or t
         {...options, attackPoint: {x: 100, y: 100}})), /directional AoE pool placement/);
 });
 
+test('custom circle RoF points use configured radius and cancel size changes before any resource mutation', async () => {
+    const {prepareAoePoolPoints} = await launcher, s = fixture();
+    s.item.flags['swade-tools'].aoeTemplateShape = 'custom';
+    s.item.flags['swade-tools'].aoeCustomShape = {type:'circle',distance:3.25,width:1,angle:90};
+    s.globals.canvas.scene.grid.distance = 5;
+    const input = {actor:s.operator,item:s.item,weaponOwner:s.owner,token:s.token,candidates:s.candidates,setup:{aoe:true}};
+    const points = await withGlobals(s.globals, () => prepareAoePoolPoints(input));
+    assert.equal(points.length,2);assert.equal(s.crosshairs[0].distance,16.25);
+    assert.deepEqual(s.mutations,[]);
+    s.globals.Sequencer.Crosshair.show = async () => {
+        s.item.flags['swade-tools'].aoeCustomShape.distance = 10;
+        return {x:100,y:100};
+    };
+    assert.deepEqual(await withGlobals(s.globals, () => prepareAoePoolPoints(input)),[]);
+    assert.deepEqual(s.mutations,[]);assert.match(s.notices.at(-1),/settings changed during placement/);
+});
+
+test('custom directional pool signatures bind rotation and dimensions to the exact item configuration', async () => {
+    const api=await launcher,s=fixture();
+    s.item.flags['swade-tools'].aoeTemplateShape='custom';
+    s.item.flags['swade-tools'].aoeCustomShape={type:'rect',distance:8,width:2.5,angle:90};
+    const options={operatorActor:s.operator,token:s.token,poolAttack:s.poolAttack(),skipConsumption:true,
+        attackPoint:{x:100,y:100,direction:45},attackSetup:{aoe:true}};
+    const {getAoeItemSettings}=await import(pathToFileURL(path.resolve(__dirname,'../scripts/services/AoeItemFlags.js')).href);
+    const expectedSettings=JSON.stringify(getAoeItemSettings(s.item));
+    const scope=await withGlobals(s.globals,()=>api.resolveAoeLaunchScope(s.operator,s.item,options));
+    const context={item:s.item,weaponOwner:s.owner,operatorActor:s.operator,token:s.token,point:scope.attackPoint};
+    assert.equal(api.isTrustedAoePoolAttack(scope.poolAttack,context),true);
+    assert.equal(api.isTrustedAoePoolAttack(scope.poolAttack,{...context,point:{...scope.attackPoint,direction:0}}),false);
+    s.item.flags['swade-tools'].aoeCustomShape.width=3;
+    assert.equal(api.isTrustedAoePoolAttack(scope.poolAttack,context),false);
+    await assert.rejects(withGlobals(s.globals,()=>api.resolveAoeLaunchScope(s.operator,s.item,
+        {...options,expectedAoeSettings:expectedSettings})),/settings changed after pool placement/);
+    await assert.rejects(withGlobals(s.globals,()=>api.resolveAoeLaunchScope(s.operator,s.item,
+        {...options,attackPoint:{x:100,y:100}})),/directional AoE pool placement/);
+});
+
 test('AoE preplacement accepts every pool point without rolls, resources, dialogs or templates', async () => {
     const {prepareAoePoolPoints} = await launcher;
     const s = fixture({vehicle: true});

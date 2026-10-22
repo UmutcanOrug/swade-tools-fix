@@ -3,6 +3,7 @@ import { getAoeTargetResult, withAoeTargetResult } from './AoeTargetResults.js';
 import { getAoeActorFlammability } from './AoeActorConfig.js';
 import { getAoeOnFireEffectData, AOE_ON_FIRE_ICON } from './AoeFireVisuals.js';
 import { createAoeFireDamageCard } from './AoeFireDamage.js';
+import { isAoeTemplateDirectional } from './AoeItemFlags.js';
 
 const SCOPE = 'swade-tools';
 const FLAG = 'aoeBurning';
@@ -70,7 +71,7 @@ const eligibleHit = (message, targetUuid) => {
     if (!state?.targets?.some(target => target.uuid === targetUuid)) return false;
     const total = Number(state.baseTotal) + Number(state.gmModifier ?? 0);
     const successful = Number.isFinite(total) && total >= 4 && !state.criticalFailure && !state.naturalOneFailure;
-    if (!successful && (!state.deviationResolved || ['cone', 'scone', 'stream'].includes(state.shape))) return false;
+    if (!successful && (!state.deviationResolved || isAoeTemplateDirectional(state.shape, state.customShape))) return false;
     if (state.autoEvade && getAoeTargetResult(message.flags?.world?.aoeEvadeResults, targetUuid)?.evaded !== false) return false;
     return true;
 };

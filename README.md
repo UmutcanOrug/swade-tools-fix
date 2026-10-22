@@ -3,9 +3,32 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
+## Custom AoE shapes (2.2.3)
+
+Open the item's **Properties → Enable AoE ⚙ → Template Shape → Custom Shape**.
+Weapons and powers can choose Circle, Cone, Line or Rectangle, then configure
+radius, length/width or cone angle as appropriate. Dimensions are **grid squares**
+(decimals supported), converted to the current scene's distance units. This is
+a configurable primitive template, not a freehand polygon editor.
+
+Token-origin and free directional placement retain their usual behavior;
+mouse wheel rotates free shapes. Rectangle uses native rotatable rectangular
+geometry, keeping the requested length and width. Standard SWADE templates
+remain unchanged. Custom cones follow Foundry's cone/grid template settings.
+Native single attacks, AoE RoF points and power casting use the same saved
+custom configuration. Rerolls retain the original area without another ammo
+or PP charge. Custom circles retain GM blast deviation; failed directional
+templates have no effect and do not gain grenade scatter. Evade/Fire remain
+under their existing item options.
+
+Back up the world and reload all clients after updating normally. A 2.2.2
+module-file backup was retained separately. Before a source-only downgrade,
+change custom items back to a standard template; older builds do not understand
+Custom Shape. A module ZIP is not a world-data backup.
+
 ## Experimental Properties & Effects (2.2.2)
 
-Version 2.2.2 is available through the normal stable Latest update channel.
+Properties & Effects is included in the normal stable Latest update channel.
 Back up the world and update between sessions. The new Properties system
 remains **off by default**; existing AoE/Flame workflows are preserved.
 

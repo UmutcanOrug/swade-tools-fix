@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const services = path.resolve(__dirname, '../scripts/services');
 const load = name => import(pathToFileURL(path.join(services, name)).href);
+const defaultCustomShape = { type: 'circle', distance: 2, width: 1, angle: 90 };
 
 // A small DOM fixture exercises actual module UI code without connecting to
 // the user's Foundry session or depending on a browser installation.
@@ -203,15 +204,16 @@ test('Power AoE shapes and origins use safe defaults and save only validated set
     const item = makeItem(makeActor('caster'), {
         type: 'power', name: 'Burst', system: { actions: { trait: 'Aetherics' }, templates: { cone: true }, pp: 2 }
     });
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster', customShape: defaultCustomShape });
     for (const shape of POWER_AOE_SHAPES) {
-        assert.deepEqual(await savePowerAoeSettings(item, { shape, consumeMode: 'ammo', skill: 'Shooting' }), { shape, origin: 'caster' });
-        assert.deepEqual(getPowerAoeSettings(item), { shape, origin: 'caster' });
+        assert.deepEqual(await savePowerAoeSettings(item, { shape, consumeMode: 'ammo', skill: 'Shooting' }), { shape, origin: 'caster', customShape: defaultCustomShape });
+        assert.deepEqual(getPowerAoeSettings(item), { shape, origin: 'caster', customShape: defaultCustomShape });
         assert.deepEqual(item.updates.at(-1), {
-            'flags.swade-tools.aoePowerShape': shape, 'flags.swade-tools.aoePowerOrigin': 'caster'
+            'flags.swade-tools.aoePowerShape': shape, 'flags.swade-tools.aoePowerOrigin': 'caster',
+            ...(shape === 'custom' ? {'flags.swade-tools.aoeCustomShape': defaultCustomShape} : {})
         });
     }
-    assert.deepEqual(await savePowerAoeSettings(item, { shape: 'cone', origin: 'free' }), { shape: 'cone', origin: 'free' });
+    assert.deepEqual(await savePowerAoeSettings(item, { shape: 'cone', origin: 'free' }), { shape: 'cone', origin: 'free', customShape: defaultCustomShape });
     assert.equal(getPowerAoeSettings(item).origin, 'free');
     await savePowerAoeSettings(item, { shape: 'stream' });
     assert.equal(getPowerAoeSettings(item).origin, 'free'); // Older callers do not reset an explicitly saved origin.
@@ -226,13 +228,13 @@ test('Power AoE shapes and origins use safe defaults and save only validated set
     assert.equal(item.updates.length, changes);
     item.flags['swade-tools'].aoePowerShape = 'invalid-imported-shape';
     item.flags['swade-tools'].aoePowerOrigin = 'invalid-imported-origin';
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'cone', origin: 'caster', customShape: defaultCustomShape });
     item.system.templates = {};
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'medium', origin: 'caster' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'medium', origin: 'caster', customShape: defaultCustomShape });
     item.system.templates = { scone: true };
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'scone', origin: 'caster' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'scone', origin: 'caster', customShape: defaultCustomShape });
     item.system.templates = { stream: true };
-    assert.deepEqual(getPowerAoeSettings(item), { shape: 'stream', origin: 'caster' });
+    assert.deepEqual(getPowerAoeSettings(item), { shape: 'stream', origin: 'caster', customShape: defaultCustomShape });
     await assert.rejects(savePowerAoeSettings(makeItem(makeActor('weapon')), { shape: 'small' }), /eligible AoE power/);
 });
 
@@ -241,6 +243,7 @@ test('saved AoE settings default from item and update flags without changing its
     const item = makeItem(makeActor('owner'));
     assert.deepEqual(getAoeItemSettings(item), {
         skill: 'Gunnery', blastSize: 'large', shape: 'large', origin: 'token', autoEvade: false, evadeModifier: -2,
+        customShape: defaultCustomShape,
         fire: {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6},
         consume: true, consumeMode: 'ammo', damageAction: '', ammoCost: 1
     });
@@ -250,6 +253,7 @@ test('saved AoE settings default from item and update flags without changing its
     assert.equal(item.system.actions.trait, 'Gunnery');
     assert.deepEqual(getAoeItemSettings(item), {
         skill: 'Gunnery', blastSize: 'small', shape: 'small', origin: 'token', autoEvade: false, evadeModifier: -2,
+        customShape: defaultCustomShape,
         fire: {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6},
         consume: false, consumeMode: 'none', damageAction: 'he', ammoCost: 2
     });
@@ -330,6 +334,148 @@ test('native cone flags are recognized only as explicit geometry, and bad import
     assert.equal(settings.shape, 'cone'); assert.equal(settings.origin, 'token');
     assert.equal(settings.autoEvade, false); assert.equal(settings.evadeModifier, 20);
     assert.deepEqual(settings.fire, {enabled: false, initialIntensity: 3, maxIntensity: 3, ignitionThreshold: 6});
+});
+
+test('custom shape settings normalize finite bounded dimensions and imported fields independently', async () => {
+    const { normalizeAoeCustomShape, getAoeCustomShape, isAoeTemplateDirectional } = await load('AoeItemFlags.js');
+    assert.deepEqual(normalizeAoeCustomShape(), defaultCustomShape);
+    assert.deepEqual(normalizeAoeCustomShape(null), defaultCustomShape);
+    assert.deepEqual(normalizeAoeCustomShape([]), defaultCustomShape);
+    const raw = { type: 'ray', distance: '2.5', width: -2, angle: 400 };
+    assert.deepEqual(normalizeAoeCustomShape(raw), { type: 'ray', distance: 2.5, width: 1, angle: 90 });
+    assert.deepEqual(raw, { type: 'ray', distance: '2.5', width: -2, angle: 400 });
+    for (const type of ['circle', 'cone', 'ray', 'rect']) {
+        assert.deepEqual(normalizeAoeCustomShape({ type, distance: 0.1, width: 1000, angle: 360 }, { strict: true }),
+            { type, distance: 0.1, width: 1000, angle: 360 });
+        assert.equal(isAoeTemplateDirectional('custom', { type }), type !== 'circle');
+    }
+    for (const shape of ['cone', 'scone', 'stream']) assert.equal(isAoeTemplateDirectional(shape), true);
+    for (const shape of ['small', 'medium', 'large']) assert.equal(isAoeTemplateDirectional(shape), false);
+    for (const bad of [null, [], 1, 'circle', { type: null }, { type: 'polygon' }, { distance: NaN },
+        { distance: Infinity }, { distance: '' }, { distance: true }, { distance: 0.09 },
+        { width: 1001 }, { angle: 0.9 }, { angle: 361 }]) {
+        assert.throws(() => normalizeAoeCustomShape(bad, { strict: true }), /Custom Shape/);
+    }
+    const item = makeItem(makeActor('imported'), {flags: {'swade-tools': {aoeCustomShape: {
+        type: '"><script>', distance: 'bad', width: 4.5, angle: -20
+    }}}});
+    const normalized = getAoeCustomShape(item);
+    assert.deepEqual(normalized, { type: 'circle', distance: 2, width: 4.5, angle: 90 });
+    normalized.width = 10;
+    assert.equal(getAoeCustomShape(item).width, 4.5);
+});
+
+test('weapon and power custom shape saves are atomic, preserve presets and reject invalid dimensions without updates', async () => {
+    const { saveAoeItemSettings, savePowerAoeSettings, getAoeItemSettings, getPowerAoeSettings } = await load('AoeItemFlags.js');
+    for (const type of ['weapon', 'power']) {
+        const item = makeItem(makeActor(`custom-${type}`), {type});
+        const save = settings => type === 'power' ? savePowerAoeSettings(item, settings) : saveAoeItemSettings(item, settings);
+        const read = () => type === 'power' ? getPowerAoeSettings(item) : getAoeItemSettings(item);
+        const system = structuredClone(item.system);
+        const customShape = { type: 'rect', distance: 5.5, width: 2.25, angle: 90 };
+        await save({ shape: 'custom', customShape });
+        assert.equal(item.updates.length, 1);
+        assert.deepEqual(item.updates[0]['flags.swade-tools.aoeCustomShape'], customShape);
+        assert.equal(read().shape, 'custom');
+        assert.deepEqual(read().customShape, customShape);
+        await save({ shape: 'small' });
+        assert.equal(Object.hasOwn(item.updates[1], 'flags.swade-tools.aoeCustomShape'), false);
+        assert.deepEqual(read().customShape, customShape);
+        await save({ shape: 'custom' });
+        assert.deepEqual(read().customShape, customShape);
+        const count = item.updates.length;
+        for (const bad of [null, [], { type: 'polygon' }, { distance: -1 }, { width: Infinity }, { angle: 400 }]) {
+            await assert.rejects(save({ shape: 'custom', customShape: bad }), /Custom Shape/);
+        }
+        await assert.rejects(save({ shape: 'medium', customShape: { distance: NaN } }), /Custom Shape/);
+        assert.equal(item.updates.length, count);
+        assert.deepEqual(item.system, system);
+        item.isOwner = false;
+        await assert.rejects(save({ shape: 'custom', customShape }), /own/);
+        assert.equal(item.updates.length, count);
+    }
+});
+
+const customShapeForm = (shapeName, shapeValue = 'medium') => {
+    const form = new Element('form');
+    const shape = new Element('select'); shape.setAttribute('name', shapeName); shape.value = shapeValue;
+    const container = new Element('div'); container.dataset.aoeCustomShape = '';
+    form.append(shape, container);
+    const groups = {}, fields = {};
+    for (const [key, name, value] of [['type', 'Type', 'circle'], ['distance', 'Distance', 2],
+        ['width', 'Width', 1], ['angle', 'Angle', 90]]) {
+        const group = new Element('div'); group.dataset.aoeCustomField = key;
+        const label = new Element('label');
+        if (key === 'distance') label.dataset.aoeCustomDistanceLabel = '';
+        const field = new Element(key === 'type' ? 'select' : 'input');
+        field.setAttribute('name', `aoeCustom${name}`); field.value = String(value); field.valueAsNumber = Number(value);
+        group.append(label, field); container.append(group);
+        groups[key] = group; fields[key] = field;
+    }
+    return {form, shape, container, groups, fields};
+};
+
+test('custom shape controls reveal only relevant fields and selecting shapes or canceling never writes', async () => {
+    platform();
+    const { showAoeItemSettings } = await load('AoeItemConfig.js');
+    for (const type of ['weapon', 'power']) {
+        const item = makeItem(makeActor(`ui-${type}`), {type});
+        const fixture = customShapeForm(type === 'power' ? 'aoePowerShape' : 'aoeTemplateShape');
+        foundry.applications.api.DialogV2.prompt = async options => {
+            assert.match(options.content, /<option value="custom" >Custom Shape/);
+            assert.match(options.content, /Radius \(grid squares\)/);
+            assert.match(options.content, /Cone Angle \(degrees\)/);
+            options.render(null, {element: fixture.form});
+            const {shape, container, groups, fields} = fixture;
+            assert.equal(container.hidden, true);
+            for (const field of Object.values(fields)) assert.equal(field.disabled, true);
+            shape.value = 'custom'; await shape.emit('change');
+            assert.equal(container.hidden, false);
+            assert.equal(groups.distance.hidden, false); assert.equal(fields.distance.disabled, false);
+            assert.equal(groups.width.hidden, true); assert.equal(fields.width.disabled, true);
+            assert.equal(groups.angle.hidden, true); assert.equal(fields.angle.disabled, true);
+            assert.equal(groups.distance.querySelector('label').textContent, 'Radius (grid squares)');
+            fields.type.value = 'cone'; await fields.type.emit('change');
+            assert.equal(groups.angle.hidden, false); assert.equal(fields.angle.disabled, false);
+            assert.equal(groups.width.hidden, true);
+            assert.equal(groups.distance.querySelector('label').textContent, 'Length (grid squares)');
+            for (const kind of ['ray', 'rect']) {
+                fields.type.value = kind; await fields.type.emit('change');
+                assert.equal(groups.width.hidden, false); assert.equal(fields.width.disabled, false);
+                assert.equal(groups.angle.hidden, true); assert.equal(fields.angle.disabled, true);
+            }
+            shape.value = 'medium'; await shape.emit('change');
+            assert.equal(container.hidden, true);
+            for (const field of Object.values(fields)) assert.equal(field.disabled, true);
+            assert.equal(fields.type.value, 'rect');
+            assert.equal(item.updates.length, 0);
+            return null;
+        };
+        await showAoeItemSettings(item.actor, item);
+        assert.equal(item.updates.length, 0);
+    }
+});
+
+test('custom shape UI saves each weapon and power type while ignoring disabled unrelated dimensions', async () => {
+    const { messages } = platform();
+    const { showAoeItemSettings } = await load('AoeItemConfig.js');
+    for (const type of ['weapon', 'power']) for (const customType of ['circle', 'cone', 'ray', 'rect']) {
+        const item = makeItem(makeActor(`saved-${type}-${customType}`), {type});
+        foundry.applications.api.DialogV2.prompt = async options => options.ok.callback(null, {form: {elements: {
+            aoeTemplateShape: {value: 'custom'}, aoePowerShape: {value: 'custom'},
+            aoePowerOrigin: {value: 'free'}, aoeTemplateOrigin: {value: 'free'},
+            aoeCustomType: {value: customType}, aoeCustomDistance: {valueAsNumber: 3.25},
+            aoeCustomWidth: {valueAsNumber: ['ray', 'rect'].includes(customType) ? 1.5 : NaN},
+            aoeCustomAngle: {valueAsNumber: customType === 'cone' ? 75 : NaN},
+            aoeDamageAction: {value: ''}, aoeConsumeItem: {checked: false},
+            aoeConsumeAmmo: {checked: true}, aoeAmmoCost: {valueAsNumber: 1}
+        }}});
+        await showAoeItemSettings(item.actor, item);
+        assert.equal(item.updates.length, 1);
+        assert.deepEqual(item.getFlag('swade-tools', 'aoeCustomShape'), {type: customType, distance: 3.25,
+            width: ['ray', 'rect'].includes(customType) ? 1.5 : 1, angle: customType === 'cone' ? 75 : 90});
+    }
+    assert.equal(messages.filter(([kind]) => kind === 'error').length, 0);
 });
 
 test('inventory shows only one explosion shortcut for enabled items and no row options', async () => {

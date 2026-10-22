@@ -5,6 +5,7 @@ import { recordAoeFireHit } from './AoeFire.js';
 import { collectAoeTemplateTargets } from './AoeGeometry.js';
 import { getAoeTargetResult } from './AoeTargetResults.js';
 import { renderAoeTargetSummary, renderAoeResolutionDetails } from './AoeResultSummary.js';
+import { isAoeTemplateDirectional } from './AoeItemFlags.js';
 export { renderAoeResolutionDetails };
 
 const registeredDocuments = new WeakSet();
@@ -17,7 +18,7 @@ const contextOf = runtime => ({gameRef: runtime.gameRef ?? globalThis.game,
     fromUuid: runtime.fromUuid ?? globalThis.fromUuid});
 const notify = (runtime, text) => (runtime.notifications ?? globalThis.ui?.notifications)?.warn(text);
 const sceneIdOf = uuid => String(uuid ?? '').match(/^Scene\.([^.]+)\./)?.[1];
-const isDirectional = state => ['cone', 'scone', 'stream'].includes(state?.shape);
+const isDirectional = state => isAoeTemplateDirectional(state?.shape, state?.customShape);
 const canDamage = state => getAoeAttackOutcome(state).success ||
     (!isDirectional(state) && state?.deviationResolved === true);
 export const isAoeChatTransactionPending = (message, key = 'aoeResolving') => {

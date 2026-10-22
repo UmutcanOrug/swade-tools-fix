@@ -1,3 +1,5 @@
+import { isAoeTemplateDirectional } from './AoeItemFlags.js';
+
 const CHANNEL = 'module.swade-tools';
 const PROTOCOL = 'swade-tools.aoe-authority.v1';
 const ACTIONS = new Set(['evade', 'fireHit']);
@@ -52,7 +54,7 @@ export const validateAoeAuthorityContext = async (payload, requesterId, runtime 
     if (benny && (!Number.isFinite(Number(benny.expiresAt)) || Date.now() < Number(benny.expiresAt))) return null;
     const total = Number(state.baseTotal) + Number(state.gmModifier ?? 0);
     const success = Number.isFinite(total) && total >= 4 && !state.criticalFailure && !state.naturalOneFailure;
-    const directional = ['cone', 'scone', 'stream'].includes(state.shape);
+    const directional = isAoeTemplateDirectional(state.shape, state.customShape);
     if (!success && (!state.deviationResolved || directional)) return null;
     const [owner, operator, item, target] = await Promise.all([
         fromUuid(state.weaponActorUuid), fromUuid(state.operatorActorUuid),

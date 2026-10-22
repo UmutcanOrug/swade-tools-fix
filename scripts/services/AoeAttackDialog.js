@@ -57,7 +57,8 @@ export const buildAoeAttackDialogContent = ({item, weaponOwner, operatorActor, a
     const ap = action?.ap ?? item.system?.ap ?? 0;
     const shape = String(settings.shape ?? settings.blastSize ?? 'medium');
     const templateLabel = ({small: 'Small Blast Template', medium: 'Medium Blast Template', large: 'Large Blast Template',
-        scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template'})[shape] ?? 'Medium Blast Template';
+        scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template',
+        custom: `Custom ${({circle: 'Circle', cone: 'Cone', ray: 'Line', rect: 'Rectangle'})[settings.customShape?.type] ?? 'Shape'}`})[shape] ?? 'Medium Blast Template';
     const consumeMode = settings.consumeMode ?? (settings.consume ? 'ammo' : 'none');
     const consumeLabel = consumeMode === 'item' ? 'Consume Item' : 'Ammunition';
     return `<div class="swadetools-dialog-item">

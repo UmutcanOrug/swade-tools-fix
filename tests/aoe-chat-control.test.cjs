@@ -74,15 +74,62 @@ async function fixture({gm = true, vehicle = false, total = 3,
 }
 
 test('failed cone and stream attacks never expose or accept blast deviation', async () => {
-    for (const shape of ['cone', 'scone', 'stream']) {
+    for (const settings of [
+        ...['cone', 'scone', 'stream'].map(shape => ({shape})),
+        ...['cone', 'ray', 'rect'].map(type => ({shape: 'custom',
+            customShape: {type, distance: 6, width: 2, angle: 60}})),
+    ]) {
         const s = await fixture({total: 3});
-        Object.assign(s.state, {shape, origin: 'token'});
+        Object.assign(s.state, settings, {origin: 'token'});
         assert.equal(s.api.renderAoeDeviationControls(s.state), '');
         assert.equal(await s.api.resolveAoeChatDeviation(s.message, s.runtime), false);
         s.state.deviationResolved = true;
         assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false,
             'A stale blast flag must never turn a failed cone into damage');
         assert.doesNotMatch(s.api.renderAoeAttackTargets(s.state.targets, s.state), /data-aoe-damage-target/);
+        assert.equal(s.calls.length, 0);
+    }
+});
+
+test('custom circle keeps explicit GM deviation with its frozen radius and no resource consumption', async () => {
+    const s = await fixture({total: 3});
+    const customShape = {type: 'circle', distance: 4.5, width: 2, angle: 60};
+    Object.assign(s.state, {shape: 'custom', customShape, origin: 'free'});
+    s.template.distance = 4.5;
+    persistSanitizedCard(s, {durableRegions: true});
+    const picks = withDeviationPicker(s);
+    s.item.system.currentShots = 5;
+    s.item.system.quantity = 3;
+    assert.match(s.api.renderAoeDeviationControls(s.state), /data-aoe-resolve-deviation/);
+    assert.equal(await s.api.rollAoeChatTargetDamage(s.message, s.target.uuid, s.runtime), false);
+    assert.equal(await s.api.resolveAoeChatDeviation(s.message, s.runtime), true);
+    assert.equal(picks.length, 1);
+    assert.equal(picks[0].t, 'circle');
+    assert.equal(picks[0].distance, 4.5);
+    assert.equal(s.template.distance, 4.5, 'Deviation moves the confirmed custom area, never resizes it');
+    assert.deepEqual(s.message.flags.world.aoeAttack.customShape, customShape);
+    assert.equal(s.message.flags.world.aoeAttack.success, false);
+    assert.equal(s.message.flags.world.aoeAttack.deviationResolved, true);
+    assert.match(s.message.content, /Victim: Blast/);
+    assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+    assert.equal(s.item.system.currentShots, 5);
+    assert.equal(s.item.system.quantity, 3);
+    assert.equal(await s.api.resolveAoeChatDeviation(s.message, s.runtime), false);
+    assert.equal(s.calls.filter(value => value[0] === 'damage').length, 1);
+});
+
+test('GM corrections retain custom directional behavior without auto-deviation or damage', async () => {
+    for (const type of ['cone', 'ray', 'rect']) {
+        const s = await fixture({total: 3});
+        Object.assign(s.state, {shape: 'custom', origin: 'free',
+            customShape: {type, distance: 6, width: 2, angle: 60}});
+        assert.equal(await s.api.applyAoeGmModifier(s.message, '+1', s.runtime), true);
+        assert.match(s.message.content, /Victim: Hit/);
+        assert.equal(s.calls.length, 0);
+        assert.equal(await s.api.applyAoeGmModifier(s.message, '0', s.runtime), true);
+        assert.match(s.message.content, /Victim: Miss/);
+        assert.doesNotMatch(s.message.content, /data-aoe-resolve-deviation|data-aoe-damage-target/);
+        assert.equal(s.changes.at(-1)['flags.world.pendingDeviation'], false);
         assert.equal(s.calls.length, 0);
     }
 });

@@ -1,5 +1,5 @@
 /** Place a native SWADE Power area without changing the user's target selection. */
-import { getPowerAoeSettings } from './AoeItemFlags.js';
+import { getPowerAoeSettings, getAoeCustomShape, normalizeAoeCustomShape } from './AoeItemFlags.js';
 import { collectAoeTemplateTargets } from './AoeGeometry.js';
 
 const SHAPES = Object.freeze({
@@ -12,6 +12,9 @@ const SHAPES = Object.freeze({
 });
 const LABELS = Object.freeze({small: 'Small Blast', medium: 'Medium Blast', large: 'Large Blast',
     scone: 'Small Cone', cone: 'Cone', stream: 'Stream'});
+const CUSTOM_LABELS = Object.freeze({circle: 'Custom Circle', cone: 'Custom Cone',
+    ray: 'Custom Line', rect: 'Custom Rectangle'});
+const CUSTOM_CONE_PATCH = Symbol.for('swade-tools.custom-cone-geometry');
 let previewSequence = 0;
 const pointOf = value => {
     const point = value?.document ?? value;
@@ -37,10 +40,55 @@ export const getNumericPowerRange = item => {
     return /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : null;
 };
 
-export const buildPowerAoeTemplateData = ({actor, item, shape, source, target, scene, user,
+/** Dimensions are grid squares here; conversion to scene units happens once in the builder. */
+export const resolveAoeTemplateShape = (shape, customShape) => {
+    if (shape !== 'custom') {
+        const preset = SHAPES[shape];
+        if (!preset) throw new Error('Choose a supported Power AoE template.');
+        return {...preset, label: LABELS[shape], directional: preset.t !== 'circle'};
+    }
+    const custom = normalizeAoeCustomShape(customShape, {strict: true});
+    // A native Foundry rectangle is an axis-aligned diagonal bounding box. A ray is a
+    // rotatable rectangle and therefore preserves both requested dimensions while aiming.
+    const data = {t: custom.type === 'rect' ? 'ray' : custom.type, distance: custom.distance,
+        label: CUSTOM_LABELS[custom.type], directional: custom.type !== 'circle', customType: custom.type,
+        customShape: {...custom}};
+    if (['ray', 'rect'].includes(custom.type)) data.width = custom.width;
+    if (custom.type === 'cone') data.angle = custom.angle;
+    return data;
+};
+
+/**
+ * SWADE 5.x's positive-angle cone override uses the old core argument order. Only
+ * our flagged custom cones use the installed core implementation; rounded SWADE
+ * presets and every other module's templates retain their original implementation.
+ */
+export const registerCustomAoeTemplateGeometry = (runtime = {}) => {
+    const configRef = runtime.configRef ?? globalThis.CONFIG;
+    const baseTemplateClass = runtime.baseTemplateClass ?? globalThis.foundry?.canvas?.placeables?.MeasuredTemplate;
+    const prototype = configRef?.MeasuredTemplate?.objectClass?.prototype;
+    if (!prototype || typeof prototype._computeShape !== 'function' ||
+        typeof baseTemplateClass?.getConeShape !== 'function') return false;
+    if (Object.hasOwn(prototype, CUSTOM_CONE_PATCH)) return true;
+    const original = prototype._computeShape;
+    Object.defineProperty(prototype, '_computeShape', {configurable: true, writable: true, value: function(...args) {
+        const document = this.document;
+        const flags = document?.flags?.['swade-tools'];
+        if (document?.t === 'cone' && flags?.templateType === 'custom' && flags?.customShapeType === 'cone' &&
+            (flags.powerAoeTemplate === true || flags.weaponAoeTemplate === true) &&
+            Number.isFinite(Number(document.distance)) && Number(document.distance) > 0 &&
+            Number.isFinite(Number(document.direction)) && Number(document.angle) >= 1 && Number(document.angle) <= 360) {
+            return baseTemplateClass.getConeShape(Number(document.distance), Number(document.direction), Number(document.angle));
+        }
+        return original.apply(this, args);
+    }});
+    Object.defineProperty(prototype, CUSTOM_CONE_PATCH, {value: true});
+    return true;
+};
+
+export const buildPowerAoeTemplateData = ({actor, item, shape, customShape, source, target, scene, user,
     originMode = 'caster', direction: freeDirection = 0}) => {
-    const preset = SHAPES[shape];
-    if (!preset) throw new Error('Choose a supported Power AoE template.');
+    const preset = resolveAoeTemplateShape(shape, shape === 'custom' ? customShape ?? getAoeCustomShape(item) : undefined);
     const sceneDistance = Number(scene?.grid?.distance);
     if (!(sceneDistance > 0)) throw new Error('The scene grid distance must be greater than zero.');
     if (!pointOf(source) || !pointOf(target)) throw new Error('The Power AoE position could not be read.');
@@ -60,8 +108,12 @@ export const buildPowerAoeTemplateData = ({actor, item, shape, source, target, s
             originMode: directional ? originMode : 'free', user: user?.id}},
     };
     // SWADE's rounded cone width is a count of grid squares; a ray width is a scene distance.
-    if (preset.width !== undefined) data.width = preset.t === 'cone' ? preset.width : preset.width * sceneDistance;
+    if (preset.width !== undefined) data.width = preset.t === 'cone' && shape !== 'custom'
+        ? preset.width : preset.width * sceneDistance;
     if (preset.angle !== undefined) data.angle = preset.angle;
+    if (shape === 'custom') Object.assign(data.flags['swade-tools'], {
+        customShapeType: preset.customType, customShape: {...preset.customShape}
+    });
     return data;
 };
 
@@ -136,7 +188,7 @@ const destroyPreview = (preview, baseTemplateClass, configRef) => {
  * Return null when placement is cancelled. Invalid context and document failures throw English errors.
  * The caller owns casting/PP and chat cards; this service never rolls, spends resources, or targets tokens.
  */
-const placeNativeAoeTemplate = async ({actor, item, token, shape, origin: explicitOrigin,
+const placeNativeAoeTemplate = async ({actor, item, token, shape, customShape, origin: explicitOrigin,
     weapon = false, createDocument = true}, runtime = {}) => {
     const canvasRef = runtime.canvasRef ?? globalThis.canvas;
     const gameRef = runtime.gameRef ?? globalThis.game;
@@ -161,18 +213,23 @@ const placeNativeAoeTemplate = async ({actor, item, token, shape, origin: explic
     if (!configRef?.MeasuredTemplate?.documentClass || !configRef?.MeasuredTemplate?.objectClass) {
         throw new Error('The native SWADE template classes are unavailable.');
     }
-    if (!SHAPES[shape]) throw new Error('Choose a supported Power AoE template.');
+    const preset = resolveAoeTemplateShape(shape, shape === 'custom' ? customShape ?? getAoeCustomShape(item) : undefined);
+    const customSnapshot = preset.customShape;
+    if (shape === 'custom' && preset.t === 'cone' &&
+        !registerCustomAoeTemplateGeometry({configRef, baseTemplateClass})) {
+        throw new Error('The native custom cone geometry is unavailable.');
+    }
     const scene = canvasRef.scene;
     const sourceToken = resolveSourceToken(actor, token, canvasRef);
     const source = centerOf(sourceToken);
-    const directional = SHAPES[shape].t !== 'circle';
+    const directional = preset.directional;
     const originMode = explicitOrigin ?? getPowerAoeSettings(item).origin;
     const freeOrigin = directional && originMode === 'free';
     const user = gameRef.user;
     const initialTarget = {x: source.x + Number(canvasRef.grid?.size ?? scene.grid.size ?? 100), y: source.y};
     let direction = 0;
     const buildData = target => {
-        const value = buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
+        const value = buildPowerAoeTemplateData({actor, item, shape, customShape: customSnapshot, source, target, scene, user,
             originMode, direction});
         if (weapon) {
             delete value.flags['swade-tools'].powerAoeTemplate;
@@ -234,7 +291,7 @@ const placeNativeAoeTemplate = async ({actor, item, token, shape, origin: explic
             t: 'circle', distance: radius, distanceMin: radius, distanceMax: radius,
             lockDrag: true, lockManualRotation: true, gridHighlight: !directional,
             borderColor: '#ff6b35', fillColor: '#ff6b35', fillAlpha: 0.2,
-            label: {text: `${item.name} - ${directional && !freeOrigin ? 'Aim ' : ''}${LABELS[shape]}${freeOrigin ? ' (Mouse Wheel: Rotate)' : ''}`},
+            label: {text: `${item.name} - ${directional && !freeOrigin ? 'Aim ' : ''}${preset.label}${freeOrigin ? ' (Mouse Wheel: Rotate)' : ''}`},
             snap: {position: directional && !freeOrigin ? 0 : ((constRef?.GRID_SNAPPING_MODES?.CENTER ?? 1) |
                 (constRef?.GRID_SNAPPING_MODES?.VERTEX ?? 2)), resolution: 1},
             location: {obj: sourceToken, showRange: !directional || freeOrigin,
@@ -294,19 +351,19 @@ const placeNativeAoeTemplate = async ({actor, item, token, shape, origin: explic
 export const placePowerAoeTemplate = (input, runtime = {}) => placeNativeAoeTemplate(input, runtime);
 
 /** Preview a weapon cone/stream without spending ammunition or creating a persistent document. */
-export const placeWeaponAoeTemplatePoint = async ({actor, item, token, shape, origin = 'token'}, runtime = {}) => {
-    if (!['scone', 'cone', 'stream'].includes(shape)) throw new Error('Choose a directional weapon template.');
+export const placeWeaponAoeTemplatePoint = async ({actor, item, token, shape, customShape, origin = 'token'}, runtime = {}) => {
+    if (!['scone', 'cone', 'stream', 'custom'].includes(shape)) throw new Error('Choose a directional weapon template.');
     if (!['token', 'free'].includes(origin)) throw new Error('Choose a valid weapon template origin.');
-    const result = await placeNativeAoeTemplate({actor, item, token, shape, origin: origin === 'token' ? 'caster' : 'free',
+    const result = await placeNativeAoeTemplate({actor, item, token, shape, customShape, origin: origin === 'token' ? 'caster' : 'free',
         weapon: true, createDocument: false}, runtime);
     return result ? {...result.point, direction: result.geometry.direction, geometry: result.geometry,
         targetIds: result.targetIds} : null;
 };
 
 /** Build the same native weapon geometry for a trusted RoF pool projectile. */
-export const buildWeaponAoeTemplateData = ({actor, item, shape, source, target, scene, user, origin = 'token', direction = 0}) => {
+export const buildWeaponAoeTemplateData = ({actor, item, shape, customShape, source, target, scene, user, origin = 'token', direction = 0}) => {
     if (!['token', 'free'].includes(origin)) throw new Error('Choose a valid weapon template origin.');
-    const data = buildPowerAoeTemplateData({actor, item, shape, source, target, scene, user,
+    const data = buildPowerAoeTemplateData({actor, item, shape, customShape, source, target, scene, user,
         originMode: origin === 'token' ? 'caster' : 'free', direction});
     delete data.flags['swade-tools'].powerAoeTemplate;
     data.flags['swade-tools'].weaponAoeTemplate = true;

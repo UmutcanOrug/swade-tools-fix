@@ -73,3 +73,86 @@ test('unsupported or invalid AoE geometry never guesses a target area', async ()
     assert.equal(tokenOverlapsAoeTemplate(cone, token('test', 0, 0), {sceneDistance: 0}), false);
     assert.equal(tokenOverlapsAoeTemplate(cone, {actor: {}}), false);
 });
+
+test('flagged custom cones use fresh native flat/grid cone geometry without changing SWADE presets', async () => {
+    const {getAoeTemplatePolygon, collectAoeTemplateTargets} = await service;
+    const oldFoundry = globalThis.foundry;
+    const calls = [];
+    globalThis.foundry = {canvas: {placeables: {MeasuredTemplate: class {
+        static getConeShape(distance, direction, angle) {
+            calls.push([distance, direction, angle]);
+            // A flat native 90-degree cone has end corners beyond the round cone's radius.
+            return {points: [0, 0, 400, -400, 400, 400, 0, 0]};
+        }
+    }}}};
+    try {
+        const area = {t: 'cone', x: 100, y: 100, direction: 0, distance: 20, angle: 90,
+            flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone', weaponAoeTemplate: true}},
+            object: {shape: {points: [0, 0, -50, -10, -50, 10]}}}; // Stale native render must not override the fresh document.
+        const options = {gridSize: 100, sceneDistance: 5};
+        assert.deepEqual(getAoeTemplatePolygon(area, options), [
+            {x: 100, y: 100}, {x: 500, y: -300}, {x: 500, y: 500}, {x: 100, y: 100}]);
+        assert.deepEqual(collectAoeTemplateTargets(area, [token('flat-corner', 480, 450, 10, 10),
+            token('behind', 0, 80, 20, 20), token('past-end', 510, 90, 10, 10)], options).map(value => value.id),
+        ['flat-corner']);
+        assert.ok(calls.length > 0);
+        for (const args of calls) assert.deepEqual(args, [20, 0, 90]);
+        calls.length = 0;
+        assert.equal(getAoeTemplatePolygon(cone).length, 62);
+        assert.deepEqual(calls, []);
+    } finally {
+        if (oldFoundry === undefined) delete globalThis.foundry;
+        else globalThis.foundry = oldFoundry;
+    }
+});
+
+test('full-angle custom cones preserve exact native circular overlap, including edge touches', async () => {
+    const {tokenOverlapsAoeTemplate, getAoeTemplatePolygon} = await service;
+    const oldFoundry = globalThis.foundry;
+    globalThis.foundry = {canvas: {placeables: {MeasuredTemplate: class {
+        static getConeShape(distance, direction, angle) {
+            assert.equal(distance, 4); assert.equal(direction, 270); assert.equal(angle, 360);
+            return {x: 0, y: 0, radius: 400};
+        }
+    }}}};
+    try {
+        const area = {t: 'cone', x: 100, y: 100, direction: 270, distance: 4, angle: 360,
+            flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone', powerAoeTemplate: true}}};
+        assert.equal(tokenOverlapsAoeTemplate(area, token('edge', 500, 90, 20, 20)), true);
+        assert.equal(tokenOverlapsAoeTemplate(area, token('outside', 501, 90, 20, 20)), false);
+        assert.equal(tokenOverlapsAoeTemplate(area, token('behind-origin', -200, 80, 20, 20)), true);
+        assert.equal(getAoeTemplatePolygon(area).length, 120);
+    } finally {
+        if (oldFoundry === undefined) delete globalThis.foundry;
+        else globalThis.foundry = oldFoundry;
+    }
+});
+
+test('custom rectangle ray geometry preserves exact length and width while rotating for partial-overlap targets', async () => {
+    const {collectAoeTemplateTargets} = await service;
+    const area = {t: 'ray', x: 100, y: 100, direction: 90, distance: 20, width: 10,
+        flags: {'swade-tools': {templateType: 'custom', customShapeType: 'rect', weaponAoeTemplate: true}}};
+    const options = {gridSize: 100, sceneDistance: 5};
+    assert.deepEqual(collectAoeTemplateTargets(area, [token('partial-edge', 190, 300, 40, 40),
+        token('past-length', 90, 501, 20, 20), token('too-wide', 201, 300, 20, 20),
+        token('inside', 90, 300, 20, 20)], options).map(value => value.id), ['partial-edge', 'inside']);
+});
+
+test('custom cone target geometry does not replace a failing live native scene calculation with a guessed sector', async () => {
+    const {collectAoeTemplateTargets} = await service;
+    const oldFoundry = globalThis.foundry, oldCanvas = globalThis.canvas;
+    globalThis.foundry = {canvas: {placeables: {MeasuredTemplate: class {
+        static getConeShape() { throw new Error('Native grid geometry failed'); }
+    }}}};
+    globalThis.canvas = {ready: true, scene: {id: 'scene'}};
+    try {
+        const area = {t: 'cone', x: 0, y: 0, direction: 0, distance: 4, angle: 90,
+            flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone', weaponAoeTemplate: true}}};
+        assert.throws(() => collectAoeTemplateTargets(area, [token('inside', 100, 0)]), /Native grid geometry failed/);
+    } finally {
+        if (oldFoundry === undefined) delete globalThis.foundry;
+        else globalThis.foundry = oldFoundry;
+        if (oldCanvas === undefined) delete globalThis.canvas;
+        else globalThis.canvas = oldCanvas;
+    }
+});

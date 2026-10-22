@@ -1,3 +1,33 @@
+## SWADE Tools 2.2.3 — Custom AoE Shapes
+
+Normal stable update. Back up the world and reload GM/player clients.
+
+- Added Custom Shape to weapon and power AoE Settings. Choose Circle, Cone,
+  Line or Rectangle, with conditional radius, length, width and cone-angle
+  controls. Dimensions use grid squares, including decimal values, and scale
+  to the active scene. Imported values are bounded; invalid saves do not write.
+- Preserved existing template presets and stored custom values when switching
+  away. Cancel and selection changes never save item settings automatically.
+- Shared custom geometry across native weapon AoE, RoF point preparation and
+  power casting. Free directional placement retains wheel rotation. Rectangle
+  keeps exact length/width during rotation; custom cones use current core
+  geometry without changing native SWADE rounded cones or unrelated templates.
+- Custom circles keep normal GM blast deviation. Missed custom cones, lines
+  and rectangles cannot trigger blast scatter, damage or ignition through a
+  stale deviation flag. Existing Evade/Fire and authority guards stay in place.
+- Attack cards retain their custom configuration and geometry for Benny/GM
+  corrections. RoF placement cancels changes to custom dimensions before
+  resource commitment; signed pool contexts also bind the custom settings.
+- All 645 module tests pass. Real Foundry DialogV2/sanitizer checks cover both
+  settings panels; installed core geometry and PIXI checks verify cone angles,
+  unchanged presets and exact rectangle dimensions during rotation. Existing
+  GM correction, grenade deviation and Fire damage-card browser checks pass.
+
+2.2.2 module sources were backed up separately. Older releases do not support
+Custom Shape: return affected items to a standard shape before a source-only
+downgrade, or restore the pre-update world backup. Existing Properties settings
+are unchanged by this update.
+
 ## SWADE Tools 2.2.2 — Wizard-first Properties & Automatic Accept
 
 Normal stable update. Back up the world/library, then update and reload all

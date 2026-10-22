@@ -20,6 +20,7 @@ import { registerAoeEvadeAuthority, registerAoeEvadeControls } from './services/
 import { registerAoeFire } from './services/AoeFire.js';
 import { registerAoeActorControls } from './services/AoeActorConfig.js';
 import { registerAoeFireVisuals } from './services/AoeFireVisuals.js';
+import {registerCustomAoeTemplateGeometry} from './services/PowerAoeTemplate.js';
 import {registerPropertiesItemControls} from './services/PropertiesUI.js';
 import {registerPropertiesEffects, synchronizePropertyEffects, setPropertyCandidateResolver} from './services/PropertiesEffects.js';
 import {registerPropertiesChatControls} from './services/PropertiesChat.js';
@@ -29,6 +30,7 @@ registerAoeItemControls();
 registerShotgunItemControls();
 registerAoeChatControls();
 registerAoeActorControls();
+Hooks.on('canvasInit', () => registerCustomAoeTemplateGeometry());
 registerPropertiesItemControls();
 registerPropertiesEffects();
 setPropertyCandidateResolver(resolveCurrentPropertyCandidate);
@@ -71,6 +73,7 @@ var foundryIsReady=false;
 
 Hooks.on('ready',async()=>{
 
+    registerCustomAoeTemplateGeometry();
     registerAoeEvadeAuthority();
     registerAoeAuthority();
     registerAoeEvadeControls();

@@ -142,10 +142,40 @@ test('misses and evaded targets never ignite; auto-Evade requires a settled fail
 });
 
 test('failed cones cannot use a forged deviation flag to ignite victims', async () => {
-    const s = await fixture({flammability: 'flammable'});
-    s.state.baseTotal = 2; s.state.shape = 'cone'; s.state.deviationResolved = true;
+    for (const settings of [
+        {shape: 'cone'},
+        ...['cone', 'ray', 'rect'].map(type => ({shape: 'custom',
+            customShape: {type, distance: 6, width: 2, angle: 60}})),
+    ]) {
+        const s = await fixture({flammability: 'flammable'});
+        Object.assign(s.state, settings, {baseTotal: 2, deviationResolved: true});
+        assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).allowed, false);
+        assert.equal(s.calls.length, 0);
+    }
+});
+
+test('custom circles ignite only after their failed blast has a GM-resolved location', async () => {
+    const s = await fixture({flammability: 'flammable', dice: [5]});
+    Object.assign(s.state, {baseTotal: 2, shape: 'custom',
+        customShape: {type: 'circle', distance: 4.5, width: 2, angle: 60}});
     assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).allowed, false);
     assert.equal(s.calls.length, 0);
+    s.state.deviationResolved = true;
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+    assert.deepEqual(rolls(s), ['1d6']);
+    assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+    assert.deepEqual(rolls(s), ['1d6'], 'Repeated custom blast requests must not reroll ignition');
+});
+
+test('successful custom directional attacks use the normal once-per-target ignition flow', async () => {
+    for (const type of ['cone', 'ray', 'rect']) {
+        const s = await fixture({flammability: 'flammable', dice: [5]});
+        Object.assign(s.state, {shape: 'custom',
+            customShape: {type, distance: 6, width: 2, angle: 60}});
+        assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+        assert.equal((await s.api.recordAoeFireHitAsGm(s.context, s.runtime)).status, 'not-ignited');
+        assert.deepEqual(rolls(s), ['1d6']);
+    }
 });
 
 test('unconfigured flammability defaults to Flammable and automatically saves its check on the attack with no prompt or card', async () => {

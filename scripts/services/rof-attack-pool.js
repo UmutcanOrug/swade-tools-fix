@@ -1546,9 +1546,14 @@ if (isInlineAoe) {
   const poolId = attackPoolMessage.id;
   let completed = 0;
   for (const placement of aoePlacements) {
+    if (JSON.stringify(rofServices.getAoeItemSettings(weapon)) !== initialAoeSettings) {
+      ui.notifications.warn('AoE settings changed during the volley. Remaining projectiles were not resolved; GM: review the already-spent ammunition.');
+      break;
+    }
     const candidate = usableResults[placement.candidateIndex];
     const launched = await rofServices.launchAoeMacro(actingActor, weapon, {
       operatorActor:actingActor,token:selectedToken,skipConsumption:true,attackPoint:placement.attackPoint,
+      expectedAoeSettings:initialAoeSettings,
       attackSetup:{...setup,damageModifier},poolAttack:{rawRoll:candidate.roll,baseModifier:candidate.modifier,
         criticalFailure:attackPool.criticalFailure,candidateIndex:placement.candidateIndex,poolId,
         weaponUuid:weapon.uuid,weaponActorUuid:weaponOwner.uuid,operatorActorUuid:actingActor.uuid,

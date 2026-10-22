@@ -13,7 +13,7 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
   ownerPermission=true,shots=50,dice=[9,7,4],globalMods={},skillEffects=[],traitMod='',trademark=0,
   rollData={},reviewActions=['continue'],choosePool='use-reroll',targetCover=0,targetIllumination=false,
   targetDistance=5,mutate=null,flags={},assignedOutcome='miss',aoe=false,noTargets=false,
-  placements=null,afterPrepare=null,quantity=20,ammoManagement=true,
+  placements=null,afterPrepare=null,afterProjectile=null,quantity=20,ammoManagement=true,
   nativeRange=null,sceneDistance=1,ignoreRange=false,targetCount=1,properties=null}={}) {
   const shotgunRules=await import(pathToFileURL(path.join(services,'ShotgunRules.js')));
   const {nativeWeaponDamageFormula}=await import(pathToFileURL(path.join(services,'WeaponDamageModifier.js')));
@@ -102,7 +102,8 @@ async function runPool({inline=true,setup={},weaponRof=3,trait='Shooting',rapidF
     async prepareAoePoolPoints(context){events.push('prepare-aoe');preparations.push(context);
       if(afterPrepare)afterPrepare({actor,weapon});
       return placements??context.candidates.map((_candidate,candidateIndex)=>({candidateIndex,attackPoint:{x:100+candidateIndex*100,y:100}}));},
-    async launchAoeMacro(actualActor,item,options){events.push('aoe-projectile');aoeCalls.push({actualActor,item,options});return true;},
+    async launchAoeMacro(actualActor,item,options){events.push('aoe-projectile');aoeCalls.push({actualActor,item,options});
+      await afterProjectile?.({actor,weapon,options});return true;},
   };
   await new AsyncFunction(...Object.keys(dependencies),source)(...Object.values(dependencies));
   return{actor,weapon,skill,token,targets,events,notices,prompts,reviews,cards,assignments,queue,nativeCalls,nativeMessages,aoeCalls,preparations};
@@ -190,6 +191,16 @@ test('inline damage data references are resolved before native damage without ro
       assert.ok(s.nativeMessages.every(message=>message.modifier.includes('2') && !message.modifier.includes('@')));
     }
   }
+});
+
+test('AoE pool never changes custom dimensions midway through an already-paid volley',async()=>{
+  const original={type:'rect',distance:6,width:2,angle:90};
+  const s=await runPool({aoe:true,noTargets:true,flags:{aoeTemplateShape:'custom',aoeCustomShape:original},
+    afterProjectile({weapon}){weapon.flags['swade-tools'].aoeCustomShape={...original,width:5};}});
+  assert.equal(s.aoeCalls.length,1,'remaining preplaced projectiles must not silently use new dimensions');
+  assert.deepEqual(JSON.parse(s.aoeCalls[0].options.expectedAoeSettings).customShape,original);
+  assert.equal(s.weapon.system.currentShots,45);assert.equal(s.events.filter(value=>value==='ammo:5').length,1);
+  assert.ok(s.notices.some(notice=>/Remaining projectiles were not resolved.*already-spent ammunition/.test(notice.text)));
 });
 
 test('AoE pool rechecks operator and source ownership after placement before ammunition commitment',async()=>{

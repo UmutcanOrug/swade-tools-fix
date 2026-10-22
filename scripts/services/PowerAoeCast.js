@@ -1,4 +1,5 @@
 import { placePowerAoeTemplate } from './PowerAoeTemplate.js';
+import {getPowerAoeSettings} from './AoeItemFlags.js';
 import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
 
 const pendingCasts = new WeakSet();
@@ -88,7 +89,8 @@ export const runPowerAoe = async (context, runtime = {}) => {
             }
         };
         checkPP();
-        placement = await place({actor, item, token, shape});
+        const customShape = shape === 'custom' ? {...getPowerAoeSettings(item).customShape} : null;
+        placement = await place({actor, item, token, shape, ...(customShape ? {customShape} : {})});
         if (!placement) return false;
         // The sheet or PP pool can change while the cursor is being placed.
         if (!item.isOwner || !actor.isOwner) throw new Error('Power ownership changed.');
@@ -97,7 +99,8 @@ export const runPowerAoe = async (context, runtime = {}) => {
         const snapshot = {
             sceneId: placement.sceneId, templateId: placement.templateDocument.id,
             sourceTokenId: placement.sourceToken.id,
-            targetIds: [...placement.targetIds], shape: placement.shape
+            targetIds: [...placement.targetIds], shape: placement.shape,
+            ...(customShape ? {customShape, geometry: {...placement.geometry}} : {})
         };
         const roll = createRoll();
         if (await prepareRoll(roll) === false) return false;

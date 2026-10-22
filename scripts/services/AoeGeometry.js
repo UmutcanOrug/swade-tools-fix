@@ -42,12 +42,51 @@ const polygonOverlapsRect = (polygon, rect) => {
         intersects(point, polygon[(i + 1) % polygon.length], corner, corners[(j + 1) % corners.length])));
 };
 
+/** Custom cones follow core flat/round and grid-template settings, not the SWADE rounded-cone preset. */
+const getNativeCustomConeShape = template => {
+    const document = template?.document ?? template;
+    const flags = document?.flags?.['swade-tools'];
+    if (document?.t !== 'cone' || flags?.templateType !== 'custom' || flags?.customShapeType !== 'cone' ||
+        !(flags.powerAoeTemplate === true || flags.weaponAoeTemplate === true)) return null;
+    const core = globalThis.foundry?.canvas?.placeables?.MeasuredTemplate;
+    if (typeof core?.getConeShape === 'function') {
+        try {
+            // Read current document dimensions/direction instead of a possibly stale rendered object.
+            return core.getConeShape(Number(document.distance), Number(document.direction ?? 0), Number(document.angle));
+        } catch (error) {
+            // Never substitute an approximate sector for a broken live scene/grid implementation.
+            if (globalThis.canvas?.ready && globalThis.canvas?.scene) throw error;
+            // Geometry-only fixtures and inactive canvases retain the deterministic fallback below.
+        }
+    }
+    return template?.shape ?? document.object?.shape ?? null;
+};
+
+const nativeShapePoints = shape => {
+    if (shape?.points?.length >= 6 && shape.points.length % 2 === 0) return shape.points;
+    if (finite(shape?.radius) && Number(shape.radius) > 0) {
+        return Array.from({length: 120}, (_, i) => {
+            const radians = i * Math.PI / 60;
+            return [Number(shape.x ?? 0) + Math.cos(radians) * Number(shape.radius),
+                Number(shape.y ?? 0) + Math.sin(radians) * Number(shape.radius)];
+        }).flat();
+    }
+    return null;
+};
+
+const circleOverlapsRect = (x, y, radius, rect) => {
+    const closestX = Math.min(Math.max(x, rect.x), rect.x + rect.width);
+    const closestY = Math.min(Math.max(y, rect.y), rect.y + rect.height);
+    return radius >= 0 && Math.hypot(closestX - x, closestY - y) <= radius + EPSILON;
+};
+
 /** Reproduce SWADE 5.x's native rounded-cone polygon, including its 3° arc steps. */
 export const getAoeTemplatePolygon = (template, {gridSize = 100, sceneDistance = 1} = {}) => {
     const document = template?.document ?? template;
     if (!document || !(gridSize > 0) || !(sceneDistance > 0)) return [];
     const origin = {x: Number(document.x), y: Number(document.y)};
-    const nativePoints = template?.shape?.points ?? document.object?.shape?.points;
+    const customCone = getNativeCustomConeShape(template);
+    const nativePoints = nativeShapePoints(customCone) ?? template?.shape?.points ?? document.object?.shape?.points;
     if (nativePoints?.length >= 6 && nativePoints.length % 2 === 0) {
         return Array.from({length: nativePoints.length / 2}, (_, i) =>
             ({x: origin.x + Number(nativePoints[i * 2]), y: origin.y + Number(nativePoints[i * 2 + 1])}));
@@ -87,10 +126,12 @@ export const tokenOverlapsAoeTemplate = (template, token, options = {}) => {
     if (!finite(rect.x) || !finite(rect.y)) return false;
     if (document.t === 'circle') {
         const radius = Number(document.distance) / sceneDistance * gridSize;
-        const x = Math.min(Math.max(Number(document.x), rect.x), rect.x + rect.width);
-        const y = Math.min(Math.max(Number(document.y), rect.y), rect.y + rect.height);
-        return radius >= 0 && Math.hypot(x - Number(document.x), y - Number(document.y)) <= radius + EPSILON;
+        return circleOverlapsRect(Number(document.x), Number(document.y), radius, rect);
     }
+    const nativeCone = getNativeCustomConeShape(template);
+    if (finite(nativeCone?.radius) && Number(nativeCone.radius) > 0) return circleOverlapsRect(
+        Number(document.x) + Number(nativeCone.x ?? 0), Number(document.y) + Number(nativeCone.y ?? 0),
+        Number(nativeCone.radius), rect);
     const polygon = getAoeTemplatePolygon(template, {gridSize, sceneDistance});
     return polygon.length >= 3 && polygonOverlapsRect(polygon, rect);
 };

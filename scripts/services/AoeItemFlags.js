@@ -1,10 +1,47 @@
 export const AOE_FLAG_SCOPE = 'swade-tools';
 export const AOE_ENABLED_FLAG = 'aoeEnabled';
 export const AOE_ITEM_TYPES = new Set(['weapon', 'consumable', 'gear', 'power']);
-export const POWER_AOE_SHAPES = Object.freeze(['small', 'medium', 'large', 'scone', 'cone', 'stream']);
+export const POWER_AOE_SHAPES = Object.freeze(['small', 'medium', 'large', 'scone', 'cone', 'stream', 'custom']);
 export const POWER_AOE_ORIGINS = Object.freeze(['caster', 'free']);
 export const AOE_TEMPLATE_SHAPES = POWER_AOE_SHAPES;
 export const AOE_TEMPLATE_ORIGINS = Object.freeze(['token', 'free']);
+export const AOE_CUSTOM_SHAPE_TYPES = Object.freeze(['circle', 'cone', 'ray', 'rect']);
+export const AOE_CUSTOM_SHAPE_DEFAULTS = Object.freeze({type: 'circle', distance: 2, width: 1, angle: 90});
+
+// Dimensions are grid-square counts, not scene distance units. Keep imported
+// data bounded before any template geometry or settings HTML can use it.
+export const normalizeAoeCustomShape = (input, {strict = false} = {}) => {
+    if (input !== undefined && (!input || typeof input !== 'object' || Array.isArray(input))) {
+        if (strict) throw new Error('Custom Shape settings must be an object.');
+        input = undefined;
+    }
+    const source = input ?? {};
+    const type = source.type === undefined ? AOE_CUSTOM_SHAPE_DEFAULTS.type : source.type;
+    if (strict && !AOE_CUSTOM_SHAPE_TYPES.includes(type)) {
+        throw new Error('Choose a valid Custom Shape type.');
+    }
+    const numeric = (key, minimum, maximum) => {
+        const raw = source[key];
+        if (raw === undefined) return AOE_CUSTOM_SHAPE_DEFAULTS[key];
+        const value = (typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== ''))
+            ? Number(raw) : NaN;
+        if (Number.isFinite(value) && value >= minimum && value <= maximum) return value;
+        if (strict) {
+            throw new Error(`Custom Shape ${key} must be a number between ${minimum} and ${maximum}.`);
+        }
+        return AOE_CUSTOM_SHAPE_DEFAULTS[key];
+    };
+    return {
+        type: AOE_CUSTOM_SHAPE_TYPES.includes(type) ? type : AOE_CUSTOM_SHAPE_DEFAULTS.type,
+        distance: numeric('distance', 0.1, 1000),
+        width: numeric('width', 0.1, 1000),
+        angle: numeric('angle', 1, 360)
+    };
+};
+
+export const isAoeTemplateDirectional = (shape, customShape) =>
+    ['cone', 'scone', 'stream'].includes(shape) ||
+    (shape === 'custom' && normalizeAoeCustomShape(customShape).type !== 'circle');
 
 export const canEnableAoe = item => Boolean(
     item && AOE_ITEM_TYPES.has(item.type)
@@ -56,6 +93,8 @@ const readFlag = (item, key) => typeof item?.getFlag === 'function'
     ? item.getFlag(AOE_FLAG_SCOPE, key)
     : item?.flags?.[AOE_FLAG_SCOPE]?.[key];
 
+export const getAoeCustomShape = item => normalizeAoeCustomShape(readFlag(item, 'aoeCustomShape'));
+
 export const getPowerAoeSettings = item => {
     const saved = readFlag(item, 'aoePowerShape');
     const origin = readFlag(item, 'aoePowerOrigin');
@@ -63,7 +102,8 @@ export const getPowerAoeSettings = item => {
         shape: POWER_AOE_SHAPES.includes(saved) ? saved
             : ['cone', 'scone', 'stream', 'small', 'medium', 'large']
                 .find(shape => item?.system?.templates?.[shape] === true) ?? 'medium',
-        origin: POWER_AOE_ORIGINS.includes(origin) ? origin : 'caster'
+        origin: POWER_AOE_ORIGINS.includes(origin) ? origin : 'caster',
+        customShape: getAoeCustomShape(item)
     };
 };
 
@@ -74,14 +114,19 @@ export const savePowerAoeSettings = async (item, settings = {}) => {
     if (!POWER_AOE_SHAPES.includes(settings.shape)) {
         throw new Error('Choose a valid power template shape.');
     }
-    const origin = settings.origin ?? getPowerAoeSettings(item).origin;
+    const previous = getPowerAoeSettings(item);
+    const origin = settings.origin ?? previous.origin;
     if (!POWER_AOE_ORIGINS.includes(origin)) {
         throw new Error('Choose a valid power template origin.');
     }
-    const saved = { shape: settings.shape, origin };
+    const customShape = settings.customShape === undefined ? previous.customShape
+        : normalizeAoeCustomShape(settings.customShape, {strict: true});
+    const saved = { shape: settings.shape, origin, customShape };
     await item.update({
         'flags.swade-tools.aoePowerShape': saved.shape,
-        'flags.swade-tools.aoePowerOrigin': saved.origin
+        'flags.swade-tools.aoePowerOrigin': saved.origin,
+        ...((saved.shape === 'custom' || settings.customShape !== undefined)
+            ? {'flags.swade-tools.aoeCustomShape': saved.customShape} : {})
     });
     return saved;
 };
@@ -117,7 +162,7 @@ const getWeaponShape = item => {
     if (AOE_TEMPLATE_SHAPES.includes(saved)) return saved;
     const legacy = readFlag(item, 'aoeBlastSize');
     if (['small', 'medium', 'large'].includes(legacy)) return legacy;
-    return AOE_TEMPLATE_SHAPES.find(shape => item?.system?.templates?.[shape] === true) ?? 'medium';
+    return AOE_TEMPLATE_SHAPES.find(shape => shape !== 'custom' && item?.system?.templates?.[shape] === true) ?? 'medium';
 };
 
 export const getAoeItemSettings = item => ({
@@ -128,6 +173,7 @@ export const getAoeItemSettings = item => ({
         ? readFlag(item, 'aoeBlastSize')
         : ['small', 'medium', 'large'].find(size => item?.system?.templates?.[size]) ?? 'medium',
     shape: getWeaponShape(item),
+    customShape: getAoeCustomShape(item),
     origin: AOE_TEMPLATE_ORIGINS.includes(readFlag(item, 'aoeTemplateOrigin'))
         ? readFlag(item, 'aoeTemplateOrigin') : 'token',
     autoEvade: readFlag(item, 'aoeAutoEvade') === true,
@@ -162,6 +208,8 @@ export const saveAoeItemSettings = async (item, settings) => {
     }
     const origin = settings?.origin ?? previous.origin;
     if (!AOE_TEMPLATE_ORIGINS.includes(origin)) throw new Error('Choose a valid template origin.');
+    const customShape = settings?.customShape === undefined ? previous.customShape
+        : normalizeAoeCustomShape(settings.customShape, {strict: true});
     const evadeModifier = Number(settings?.evadeModifier ?? previous.evadeModifier);
     if (!Number.isFinite(evadeModifier) || Math.abs(evadeModifier) > 20) {
         throw new Error('Evade Modifier must be a number between -20 and 20.');
@@ -188,7 +236,7 @@ export const saveAoeItemSettings = async (item, settings) => {
     const saved = {
         skill: String(item?.system?.actions?.trait ?? '').trim(),
         blastSize: ['small', 'medium', 'large'].includes(shape) ? shape : previous.blastSize,
-        shape, origin, autoEvade: settings.autoEvade ?? previous.autoEvade, evadeModifier,
+        shape, customShape, origin, autoEvade: settings.autoEvade ?? previous.autoEvade, evadeModifier,
         fire: {...fire, enabled: fire.enabled === true},
         consumeMode,
         consume: consumeMode !== 'none',
@@ -199,6 +247,8 @@ export const saveAoeItemSettings = async (item, settings) => {
         'flags.swade-tools.aoeBlastSize': saved.blastSize,
         'flags.swade-tools.aoeTemplateShape': saved.shape,
         'flags.swade-tools.aoeTemplateOrigin': saved.origin,
+        ...((saved.shape === 'custom' || settings.customShape !== undefined)
+            ? {'flags.swade-tools.aoeCustomShape': saved.customShape} : {}),
         'flags.swade-tools.aoeAutoEvade': saved.autoEvade === true,
         'flags.swade-tools.aoeEvadeModifier': saved.evadeModifier,
         'flags.swade-tools.aoeFireEnabled': saved.fire.enabled,

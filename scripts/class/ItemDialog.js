@@ -299,7 +299,7 @@ export default class ItemDialog {
             </div></div>`;
 
         if (powerAoePanel){
-            const labels={small:'Small Blast',medium:'Medium Blast',large:'Large Blast',scone:'Small Cone',cone:'Cone',stream:'Line'};
+            const labels={small:'Small Blast',medium:'Medium Blast',large:'Large Blast',scone:'Small Cone',cone:'Cone',stream:'Line',custom:'Custom Shape'};
             const selected=getPowerAoeSettings(item).shape;
             content+=`<div class="swadetools-mod-add"><label for="power-aoe-shape"><strong>Area</strong></label><select id="power-aoe-shape">${POWER_AOE_SHAPES.map(shape=>`<option value="${shape}" ${shape===selected?'selected':''}>${labels[shape]}</option>`).join('')}</select></div>`;
         } else if (item.type=='power' || item.type=='weapon'){

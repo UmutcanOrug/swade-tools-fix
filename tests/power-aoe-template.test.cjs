@@ -4,12 +4,13 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const service = import(pathToFileURL(path.join(__dirname, '../scripts/services/PowerAoeTemplate.js')).href);
 
-const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distance = 1,
+const fixture = ({shape = 'medium', customShape, point = {x: 250, y: 50}, range = '8', distance = 1,
     origin = 'caster', cancel = false, createError = null, onShow = null} = {}) => {
     const calls = [], previews = [];
     const actor = {id: 'caster', uuid: 'Actor.caster', isOwner: true};
     const item = {id: 'burst', uuid: 'Actor.caster.Item.burst', actor, isOwner: true,
-        type: 'power', name: 'Burst', system: {range}, flags: {'swade-tools': {aoePowerOrigin: origin}}};
+        type: 'power', name: 'Burst', system: {range}, flags: {'swade-tools': {aoePowerOrigin: origin,
+            ...(customShape ? {aoeCustomShape: structuredClone(customShape)} : {})}}};
     const scene = {id: 'scene', grid: {size: 100, distance},
         async createEmbeddedDocuments(type, data) {
             calls.push(['create', type, structuredClone(data)]);
@@ -31,16 +32,27 @@ const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distan
     }
     class CoreTemplate {
         destroy() { this.destroyed = true; calls.push(['destroy', this]); }
+        static getConeShape(length, direction, angle) {
+            calls.push(['core-cone', length, direction, angle]);
+            const radius = length / distance * 100;
+            return {contains(x, y) {
+                const offset = ((Math.atan2(y, x) * 180 / Math.PI - direction + 540) % 360) - 180;
+                return x * x + y * y <= radius * radius && Math.abs(offset) <= angle / 2;
+            }};
+        }
     }
     class Template extends CoreTemplate {
         constructor(document) { super(); this.document = document; this.controlIcon = {}; previews.push(this); }
         async draw() { calls.push(['draw', this]); this._refreshShape(); }
         _refreshPosition() {}
         _refreshShape() {
+            this.shape = this._computeShape();
+        }
+        _computeShape() {
             const doc = this.document;
             const pixels = 100 / distance;
             // This fake follows the native contract: direction is already baked into the shape's contains().
-            this.shape = {contains(x, y) {
+            return {contains(x, y) {
                 if (doc.t === 'circle') return x * x + y * y <= (doc.distance * pixels) ** 2;
                 const radians = doc.direction * Math.PI / 180;
                 const forward = x * Math.cos(radians) + y * Math.sin(radians);
@@ -92,7 +104,7 @@ const fixture = ({shape = 'medium', point = {x: 250, y: 50}, range = '8', distan
             return {x: point.x, y: point.y};
         }}};
     const notifications = {warn(message) { calls.push(['warn', message]); }};
-    return {input: {actor, item, token: source, shape}, runtime: {canvasRef, gameRef, configRef, sequencerRef,
+    return {input: {actor, item, token: source, shape, ...(customShape ? {customShape} : {})}, runtime: {canvasRef, gameRef, configRef, sequencerRef,
         constRef: {GRID_SNAPPING_MODES: {CENTER: 1, VERTEX: 2}, GRID_TYPES: {SQUARE: 1}},
         baseTemplateClass: CoreTemplate, notifications, wheelTarget},
         calls, previews, tokens, source, oldPreview, selectedTargets, wheelTarget, wheelListeners};
@@ -112,6 +124,146 @@ test('Power template presets scale circles and streams but keep SWADE rounded-co
         assert.equal(data.flags['swade-tools'].autoTarget, false);
         assert.equal(data.flags['swade-tools'].powerAoeTemplate, true);
         assert.equal(data.flags.swade, undefined);
+    }
+});
+
+test('custom AoE dimensions scale once from grid squares and rectangular areas retain exact rotatable dimensions', async () => {
+    const {buildPowerAoeTemplateData, buildWeaponAoeTemplateData, resolveAoeTemplateShape} = await service;
+    const common = {actor: {uuid: 'Actor.a'}, item: {uuid: 'Actor.a.Item.p'}, shape: 'custom',
+        source: {x: 50, y: 50}, target: {x: 50, y: 450}, scene: {grid: {distance: 5}}, user: {id: 'u'}};
+    for (const [type, t] of [['circle', 'circle'], ['cone', 'cone'], ['ray', 'ray'], ['rect', 'ray']]) {
+        const customShape = {type, distance: 6.5, width: 2.25, angle: 75};
+        const data = buildPowerAoeTemplateData({...common, customShape});
+        assert.equal(data.t, t); assert.equal(data.distance, 32.5);
+        assert.equal(data.direction, type === 'circle' ? 0 : 90);
+        assert.equal(data.width, ['ray', 'rect'].includes(type) ? 11.25 : undefined);
+        assert.equal(data.angle, type === 'cone' ? 75 : undefined);
+        assert.equal(data.flags['swade-tools'].customShapeType, type);
+        assert.deepEqual(data.flags['swade-tools'].customShape, customShape);
+        assert.equal(data.flags['swade-tools'].templateType, 'custom');
+        const resolved = resolveAoeTemplateShape('custom', customShape);
+        assert.equal(resolved.directional, type !== 'circle'); assert.equal(resolved.customType, type);
+        const weapon = buildWeaponAoeTemplateData({...common, customShape, origin: 'free', direction: 350});
+        assert.equal(weapon.direction, type === 'circle' ? 0 : 350);
+        assert.equal(weapon.flags['swade-tools'].weaponAoeTemplate, true);
+        assert.equal(weapon.flags['swade-tools'].powerAoeTemplate, undefined);
+        assert.deepEqual(weapon.flags['swade-tools'].customShape, customShape);
+        customShape.distance = 999;
+        assert.equal(data.flags['swade-tools'].customShape.distance, 6.5); // Never retain mutable item/form data.
+    }
+});
+
+test('custom template builder reads saved item configuration when no explicit snapshot is passed', async () => {
+    const {buildPowerAoeTemplateData} = await service;
+    const customShape = {type: 'circle', distance: 2.5, width: 1, angle: 60};
+    const data = buildPowerAoeTemplateData({shape: 'custom', item: {flags: {'swade-tools': {aoeCustomShape: customShape}}},
+        source: {x: 10, y: 20}, target: {x: 30, y: 40}, scene: {grid: {distance: 2}}});
+    assert.equal(data.t, 'circle'); assert.equal(data.distance, 5);
+    assert.deepEqual(data.flags['swade-tools'].customShape, customShape);
+});
+
+test('custom cone core compatibility patch is narrow, validates dimensions and registers idempotently', async () => {
+    const {registerCustomAoeTemplateGeometry} = await service;
+    const calls = [];
+    class Base {
+        static getConeShape(...args) { calls.push(['core', ...args]); return {custom: args}; }
+    }
+    class Swade extends Base {
+        _computeShape(...args) { calls.push(['original', this.document, ...args]); return 'original'; }
+    }
+    const runtime = {configRef: {MeasuredTemplate: {objectClass: Swade}}, baseTemplateClass: Base};
+    assert.equal(registerCustomAoeTemplateGeometry(runtime), true);
+    const patched = Swade.prototype._computeShape;
+    assert.equal(registerCustomAoeTemplateGeometry(runtime), true);
+    assert.equal(Swade.prototype._computeShape, patched);
+    const custom = {t: 'cone', distance: 30, direction: 125, angle: 60,
+        flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone', powerAoeTemplate: true}}};
+    const instance = new Swade(); instance.document = custom;
+    assert.deepEqual(instance._computeShape(), {custom: [30, 125, 60]});
+    assert.deepEqual(calls, [['core', 30, 125, 60]]);
+    for (const document of [{...custom, flags: {}}, {...custom, angle: 0}, {...custom, angle: 361},
+        {...custom, distance: NaN}, {...custom, direction: Infinity}, {...custom, t: 'ray'},
+        {...custom, flags: {'swade-tools': {templateType: 'cone', weaponAoeTemplate: true}}},
+        {...custom, flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone'}}}]) {
+        instance.document = document;
+        assert.equal(instance._computeShape('sentinel'), 'original');
+        assert.equal(calls.at(-1)[0], 'original'); assert.equal(calls.at(-1)[2], 'sentinel');
+    }
+    assert.equal(registerCustomAoeTemplateGeometry({configRef: {}, baseTemplateClass: Base}), false);
+});
+
+test('custom cone preview targets the configured native angle, not SWADE rounded-cone defaults', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'custom', customShape: {type: 'cone', distance: 4, width: 1, angle: 90}});
+    f.tokens.push({id: 'diagonal', actor: {}, center: {x: 250, y: 200}, document: {id: 'diagonal'}});
+    f.tokens.push({id: 'too-wide', actor: {}, center: {x: 150, y: 250}, document: {id: 'too-wide'}});
+    const result = await placePowerAoeTemplate(f.input, f.runtime);
+    assert.deepEqual(result.geometry, {t: 'cone', x: 50, y: 50, direction: 0, distance: 4, angle: 90});
+    assert.deepEqual(result.targetIds, ['inside', 'diagonal']);
+    assert.ok(f.calls.some(call => call[0] === 'core-cone' && call[1] === 4 && call[2] === 0 && call[3] === 90));
+    assert.equal(f.previews[0].destroyed, true);
+});
+
+test('custom cone placement fails closed if the native core geometry cannot be registered', async () => {
+    const {placePowerAoeTemplate} = await service;
+    const f = fixture({shape: 'custom', customShape: {type: 'cone', distance: 4, width: 1, angle: 90}});
+    f.runtime.baseTemplateClass = class {};
+    await assert.rejects(placePowerAoeTemplate(f.input, f.runtime), /custom cone geometry is unavailable/);
+    assert.equal(f.calls.length, 0); assert.equal(f.previews.length, 0);
+});
+
+test('custom rectangle preview preserves size and wheel rotation, source filtering and immutable placement snapshot', async () => {
+    const {placeWeaponAoeTemplatePoint} = await service;
+    const customShape = {type: 'rect', distance: 4, width: 2, angle: 60};
+    const f = fixture({shape: 'custom', customShape, point: {x: 250, y: 50}, distance: 5,
+        onShow({callbacks, wheelTarget}) {
+            customShape.distance = 99;
+            wheelTarget.rotate(1, true);
+            callbacks.move({document: {x: 250, y: 50}});
+        }});
+    f.input.item.type = 'weapon';
+    const result = await placeWeaponAoeTemplatePoint({...f.input, origin: 'free'}, f.runtime);
+    assert.deepEqual(result.geometry, {t: 'ray', x: 250, y: 50, direction: 15, distance: 20, width: 10});
+    assert.equal(f.previews[0].document.flags['swade-tools'].customShapeType, 'rect');
+    assert.equal(f.previews[0].document.flags['swade-tools'].customShape.distance, 4);
+    assert.equal(f.wheelListeners.size, 0); assert.equal(f.previews[0].destroyed, true);
+    assert.equal(f.calls.some(call => call[0] === 'create'), false);
+    const anchored = fixture({shape: 'custom', customShape: {...customShape, distance: 4}});
+    anchored.input.item.type = 'weapon';
+    const tokenResult = await placeWeaponAoeTemplatePoint({...anchored.input, origin: 'token'}, anchored.runtime);
+    assert.deepEqual(tokenResult.targetIds, ['inside']);
+    assert.equal(tokenResult.geometry.x, 50); assert.equal(tokenResult.geometry.y, 50);
+});
+
+test('custom circle placement uses configured radius while free directional placement still checks range and cleans up cancellation', async () => {
+    const {placePowerAoeTemplate, placeWeaponAoeTemplatePoint} = await service;
+    const circle = fixture({shape: 'custom', customShape: {type: 'circle', distance: 1.25, width: 1, angle: 60}});
+    circle.input.item.type = 'weapon';
+    const point = await placeWeaponAoeTemplatePoint(circle.input, circle.runtime);
+    assert.deepEqual(point.geometry, {t: 'circle', x: 250, y: 50, direction: 0, distance: 1.25});
+    assert.equal(circle.calls.find(call => call[0] === 'crosshair')[1].distance, 1.25);
+    for (const type of ['cone', 'ray', 'rect']) {
+        const customShape = {type, distance: 4, width: 2, angle: 70};
+        const canceled = fixture({shape: 'custom', customShape, origin: 'free', cancel: true});
+        assert.equal(await placePowerAoeTemplate(canceled.input, canceled.runtime), null);
+        assert.equal(canceled.wheelListeners.size, 0); assert.equal(canceled.previews[0].destroyed, true);
+        const outOfRange = fixture({shape: 'custom', customShape, origin: 'free', range: '1'});
+        assert.equal(await placePowerAoeTemplate(outOfRange.input, outOfRange.runtime), null);
+        assert.equal(outOfRange.wheelListeners.size, 0); assert.equal(outOfRange.previews[0].destroyed, true);
+        assert.equal(outOfRange.calls.some(call => call[0] === 'create'), false);
+    }
+});
+
+test('malformed explicit custom geometry fails before creating a preview or requesting a placement', async () => {
+    const {placePowerAoeTemplate, buildPowerAoeTemplateData} = await service;
+    for (const customShape of [{type: 'polygon', distance: 4, width: 1, angle: 60},
+        {type: 'circle', distance: 0, width: 1, angle: 60}, {type: 'ray', distance: 4, width: 0, angle: 60},
+        {type: 'cone', distance: 4, width: 1, angle: 361}, {type: 'rect', distance: Infinity, width: 2, angle: 60}]) {
+        const f = fixture({shape: 'custom', customShape});
+        await assert.rejects(placePowerAoeTemplate(f.input, f.runtime), /custom|shape|distance|width|angle|size/i);
+        assert.equal(f.calls.length, 0);
+        assert.throws(() => buildPowerAoeTemplateData({...f.input, source: {x: 0, y: 0}, target: {x: 0, y: 0},
+            scene: {grid: {distance: 1}}}), /custom|shape|distance|width|angle|size/i);
     }
 });
 

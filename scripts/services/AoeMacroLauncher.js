@@ -40,7 +40,11 @@ const authorizePoolAttack = (attack, scope, options) => {
     if (Object.entries(identities).some(([key, uuid]) => !uuid || attack[key] !== uuid)) {
         throw new Error('The AoE pool result no longer matches its weapon or operator.');
     }
-    const directional = ['cone', 'scone', 'stream'].includes(profile.getAoeItemSettings(scope.item).shape);
+    const settings = profile.getAoeItemSettings(scope.item);
+    if (options.expectedAoeSettings !== undefined && options.expectedAoeSettings !== JSON.stringify(settings)) {
+        throw new Error('AoE settings changed after pool placement. Remaining projectiles were not resolved.');
+    }
+    const directional = profile.isAoeTemplateDirectional(settings.shape, settings.customShape);
     if (directional && !Number.isFinite(options.attackPoint.direction)) {
         throw new Error('The directional AoE pool placement is incomplete.');
     }
@@ -53,6 +57,7 @@ const authorizePoolAttack = (attack, scope, options) => {
     });
     trustedAoePoolAttacks.set(normalized, {...identities,
         tokenUuid: contextUuid(scope.token?.document ?? scope.token),
+        templateSettings: JSON.stringify({shape: settings.shape, origin: settings.origin, customShape: settings.customShape}),
         x: Number(options.attackPoint.x), y: Number(options.attackPoint.y),
         ...(directional ? {direction: options.attackPoint.direction} : {}),
     });
@@ -63,12 +68,14 @@ const authorizePoolAttack = (attack, scope, options) => {
 // Only the launcher signs a resolved, identity-checked internal pool payload.
 export const isTrustedAoePoolAttack = (attack, {item, weaponOwner, operatorActor, token, point} = {}) => {
     const context = attack && trustedAoePoolAttacks.get(attack);
+    const settings = profile.getAoeItemSettings(item);
     return Boolean(context && attack.disableBenny === true &&
         attack.rawTotal === Number(attack.rawRoll?.total) &&
         context.weaponUuid === contextUuid(item) &&
         context.weaponActorUuid === contextUuid(weaponOwner) &&
         context.operatorActorUuid === contextUuid(operatorActor) &&
         context.tokenUuid === contextUuid(token?.document ?? token) && finitePoint(point) &&
+        context.templateSettings === JSON.stringify({shape: settings.shape, origin: settings.origin, customShape: settings.customShape}) &&
         context.x === Number(point.x) && context.y === Number(point.y) &&
         (context.direction === undefined || context.direction === point.direction));
 };
@@ -196,10 +203,11 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
         globalThis.ui?.notifications?.warn('This item’s configured AoE damage action no longer exists. Update AoE Settings before firing.');
         return [];
     }
-    const directional = ['cone', 'scone', 'stream'].includes(settings.shape);
+    const directional = profile.isAoeTemplateDirectional(settings.shape, settings.customShape);
     const blastSize = settings.blastSize;
     const sceneDistance = Number(globalThis.canvas?.scene?.grid?.distance) || 1;
-    const distance = ({small: 1, medium: 2, large: 3}[blastSize] ?? 2) * sceneDistance;
+    const distance = (settings.shape === 'custom' ? settings.customShape.distance :
+        ({small: 1, medium: 2, large: 3}[blastSize] ?? 2)) * sceneDistance;
     const rangeParts = String(item.system?.range ?? '').split('/').map(Number);
     const longRange = rangeParts[2];
     if (!directional && (!Number.isFinite(longRange) || longRange <= 0)) {
@@ -213,7 +221,7 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
             !Number.isFinite(Number(candidate?.modifier))) return [];
         if (directional) {
             const point = await placeWeaponAoeTemplatePoint({actor: owner, item,
-                token: scope.token, shape: settings.shape, origin: settings.origin});
+                token: scope.token, shape: settings.shape, origin: settings.origin, customShape: settings.customShape});
             if (!finitePoint(point) || !Number.isFinite(point.direction)) return [];
             points.push({candidateIndex, attackPoint: {x: point.x, y: point.y, direction: point.direction}});
             continue;
@@ -256,6 +264,7 @@ export const prepareAoePoolPoints = async ({actor, item, weaponOwner, token, can
         currentSettings.damageAction !== settings.damageAction ||
         currentSettings.blastSize !== settings.blastSize ||
         currentSettings.shape !== settings.shape || currentSettings.origin !== settings.origin ||
+        (settings.shape === 'custom' && JSON.stringify(currentSettings.customShape) !== JSON.stringify(settings.customShape)) ||
         currentSettings.consumeMode !== settings.consumeMode) {
         globalThis.ui?.notifications?.warn('AoE settings changed during placement. The volley was cancelled before consuming resources.');
         return [];

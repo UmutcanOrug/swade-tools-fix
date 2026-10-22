@@ -53,6 +53,74 @@ const bindAoeConsumptionChoices = html => {
         });
     }
 };
+const customShapeChoiceTargets = new WeakSet();
+const customShapeControls = settings => {
+    const custom = settings.customShape;
+    const active = settings.shape === 'custom';
+    const visible = field => active && (field === 'type' || field === 'distance' ||
+        (field === 'width' && ['ray', 'rect'].includes(custom.type)) ||
+        (field === 'angle' && custom.type === 'cone'));
+    const attrs = field => visible(field) ? '' : 'hidden style="display:none"';
+    const disabled = field => visible(field) ? '' : 'disabled';
+    return `<div data-aoe-custom-shape ${active ? '' : 'hidden style="display:none"'}>
+        <div class="form-group" data-aoe-custom-field="type" ${attrs('type')}><label>Custom Shape</label>
+            <div class="form-fields"><select name="aoeCustomType" ${disabled('type')}>${[
+                ['circle', 'Circle'], ['cone', 'Cone'], ['ray', 'Line / Beam'], ['rect', 'Rectangle']
+            ].map(([type, label]) => `<option value="${type}" ${custom.type === type ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-group" data-aoe-custom-field="distance" ${attrs('distance')}><label data-aoe-custom-distance-label>${custom.type === 'circle' ? 'Radius' : 'Length'} (grid squares)</label>
+            <div class="form-fields"><input name="aoeCustomDistance" type="number" min="0.1" max="1000" step="any" value="${custom.distance}" ${disabled('distance')}></div>
+        </div>
+        <div class="form-group" data-aoe-custom-field="width" ${attrs('width')}><label>Width (grid squares)</label>
+            <div class="form-fields"><input name="aoeCustomWidth" type="number" min="0.1" max="1000" step="any" value="${custom.width}" ${disabled('width')}></div>
+        </div>
+        <div class="form-group" data-aoe-custom-field="angle" ${attrs('angle')}><label>Cone Angle (degrees)</label>
+            <div class="form-fields"><input name="aoeCustomAngle" type="number" min="1" max="360" step="any" value="${custom.angle}" ${disabled('angle')}></div>
+        </div>
+        <p class="hint">Dimensions use grid squares and follow the scene grid scale.</p>
+    </div>`;
+};
+const bindAoeCustomShapeChoices = html => {
+    const root = asElement(html);
+    const shape = root?.querySelector?.('[name="aoeTemplateShape"], [name="aoePowerShape"]');
+    const type = root?.querySelector?.('[name="aoeCustomType"]');
+    const container = root?.querySelector?.('[data-aoe-custom-shape]');
+    if (!shape || !type || !container) return;
+    const sync = () => {
+        const active = shape.value === 'custom';
+        container.hidden = !active;
+        container.style.display = active ? '' : 'none';
+        for (const group of container.querySelectorAll('[data-aoe-custom-field]')) {
+            const field = group.dataset.aoeCustomField;
+            const visible = active && (field === 'type' || field === 'distance' ||
+                (field === 'width' && ['ray', 'rect'].includes(type.value)) ||
+                (field === 'angle' && type.value === 'cone'));
+            group.hidden = !visible;
+            group.style.display = visible ? '' : 'none';
+            for (const control of group.querySelectorAll('input, select')) control.disabled = !visible;
+        }
+        const label = container.querySelector('[data-aoe-custom-distance-label]');
+        if (label) label.textContent = `${type.value === 'circle' ? 'Radius' : 'Length'} (grid squares)`;
+    };
+    for (const control of [shape, type]) {
+        if (customShapeChoiceTargets.has(control)) continue;
+        customShapeChoiceTargets.add(control);
+        control.addEventListener('change', sync);
+    }
+    sync();
+};
+const readCustomShapeSettings = (form, shape, previous) => {
+    if (shape !== 'custom') return {};
+    const fields = form.elements;
+    const type = fields.aoeCustomType?.value ?? previous.type;
+    return {customShape: {
+        ...previous, type,
+        distance: fields.aoeCustomDistance?.valueAsNumber ?? previous.distance,
+        ...(['ray', 'rect'].includes(type)
+            ? {width: fields.aoeCustomWidth?.valueAsNumber ?? previous.width} : {}),
+        ...(type === 'cone' ? {angle: fields.aoeCustomAngle?.valueAsNumber ?? previous.angle} : {})
+    }};
+};
 const aoeItemNameSelector = [
     '.name[data-action="showItem"]', '.item-name', '.item-show',
     '.item-image', '.item-img'
@@ -92,7 +160,7 @@ export const showPowerAoeItemSettings = async item => {
     const shapes = [
         ['small', 'Small Blast Template'], ['medium', 'Medium Blast Template'],
         ['large', 'Large Blast Template'], ['scone', 'Small Cone Template'],
-        ['cone', 'Cone Template'], ['stream', 'Stream Template']
+        ['cone', 'Cone Template'], ['stream', 'Stream Template'], ['custom', 'Custom Shape']
     ];
     try {
         const result = await foundry.applications.api.DialogV2.prompt({
@@ -103,18 +171,21 @@ export const showPowerAoeItemSettings = async item => {
                     <div class="form-fields"><select name="aoePowerShape">${shapes.map(([shape, label]) =>
                         `<option value="${shape}" ${settings.shape === shape ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
                 </div>
+                ${customShapeControls(settings)}
                 <div class="form-group"><label>Template Origin</label>
                     <div class="form-fields"><select name="aoePowerOrigin">
                         <option value="caster" ${settings.origin === 'caster' ? 'selected' : ''}>Casting Token</option>
                         <option value="free" ${settings.origin === 'free' ? 'selected' : ''}>Place Freely</option>
                     </select></div>
                 </div>
-                <p class="hint">Cones and streams only. Free placement: mouse wheel rotates; Shift uses larger steps.</p>
+                <p class="hint">Directional shapes use the token or free placement; mouse wheel rotates, Shift uses larger steps.</p>
             </div>`,
             ok: { label: 'Save Settings', callback: (_event, button) => ({
                 shape: button.form.elements.aoePowerShape.value,
-                origin: button.form.elements.aoePowerOrigin.value
+                origin: button.form.elements.aoePowerOrigin.value,
+                ...readCustomShapeSettings(button.form, button.form.elements.aoePowerShape.value, settings.customShape)
             }) },
+            render: (_event, dialog) => bindAoeCustomShapeChoices(dialog.element),
             rejectClose: false,
             modal: false
         });
@@ -123,7 +194,7 @@ export const showPowerAoeItemSettings = async item => {
         ui.notifications.info('Power AoE settings saved.');
     } catch (error) {
         console.error('SWADE Tools | Power AoE settings could not be saved', error);
-        ui.notifications.error('The Power AoE settings could not be saved. Check the template shape and item ownership.');
+        ui.notifications.error(error?.message || 'The Power AoE settings could not be saved. Check the template shape and item ownership.');
     }
 };
 
@@ -146,15 +217,16 @@ export const showAoeItemSettings = async (actor, item) => {
                     <div class="form-fields"><select name="aoeTemplateShape">${[
                         ['small', 'Small Blast Template'], ['medium', 'Medium Blast Template'],
                         ['large', 'Large Blast Template'], ['scone', 'Small Cone Template'],
-                        ['cone', 'Cone Template'], ['stream', 'Stream Template']
+                        ['cone', 'Cone Template'], ['stream', 'Stream Template'], ['custom', 'Custom Shape']
                     ].map(([shape, label]) => `<option value="${shape}" ${settings.shape === shape ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
                 </div>
+                ${customShapeControls(settings)}
                 <div class="form-group"><label>Template Origin</label>
                     <div class="form-fields"><select name="aoeTemplateOrigin">
                         <option value="token" ${settings.origin === 'token' ? 'selected' : ''}>Firing Token</option>
                         <option value="free" ${settings.origin === 'free' ? 'selected' : ''}>Place Freely</option>
                     </select></div>
-                    <p class="hint">Cones and streams. Free placement: mouse wheel rotates.</p>
+                    <p class="hint">Directional shapes use the token or free placement; mouse wheel rotates.</p>
                 </div>
                 <div class="form-group"><label>Automatic Evade</label>
                     <div class="form-fields"><input name="aoeAutoEvade" type="checkbox" ${settings.autoEvade ? 'checked' : ''}></div>
@@ -194,6 +266,9 @@ export const showAoeItemSettings = async (actor, item) => {
                 label: 'Save Settings',
                 callback: (event, button) => ({
                     shape: button.form.elements.aoeTemplateShape?.value ?? button.form.elements.aoeBlastSize?.value,
+                    ...readCustomShapeSettings(button.form,
+                        button.form.elements.aoeTemplateShape?.value ?? button.form.elements.aoeBlastSize?.value,
+                        settings.customShape),
                     origin: button.form.elements.aoeTemplateOrigin?.value ?? settings.origin,
                     autoEvade: button.form.elements.aoeAutoEvade?.checked ?? settings.autoEvade,
                     evadeModifier: button.form.elements.aoeEvadeModifier?.valueAsNumber ?? settings.evadeModifier,
@@ -208,7 +283,10 @@ export const showAoeItemSettings = async (actor, item) => {
                     ammoCost: button.form.elements.aoeAmmoCost.valueAsNumber
                 })
             },
-            render: (_event, dialog) => bindAoeConsumptionChoices(dialog.element),
+            render: (_event, dialog) => {
+                bindAoeConsumptionChoices(dialog.element);
+                bindAoeCustomShapeChoices(dialog.element);
+            },
             rejectClose: false,
             modal: false
         });
@@ -217,7 +295,7 @@ export const showAoeItemSettings = async (actor, item) => {
         ui.notifications.info('AoE settings saved.');
     } catch (error) {
         console.error('SWADE Tools | AoE settings could not be saved', error);
-        ui.notifications.error('The AoE settings could not be saved. Check item ownership and try again.');
+        ui.notifications.error(error?.message || 'The AoE settings could not be saved. Check item ownership and try again.');
     }
 };
 

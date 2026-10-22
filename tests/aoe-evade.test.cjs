@@ -211,13 +211,33 @@ test('GM authority resolves stored-scene documents while the GM views a differen
 });
 
 test('a failed cone cannot gain a damage or defense workflow from a stale deviation flag', async () => {
-    const s = await fixture();
-    s.state.baseTotal = 3;
+    for (const settings of [
+        {shape: 'cone'},
+        ...['cone', 'ray', 'rect'].map(type => ({shape: 'custom',
+            customShape: {type, distance: 6, width: 2, angle: 60}})),
+    ]) {
+        const s = await fixture();
+        Object.assign(s.state, settings, {baseTotal: 3, deviationResolved: true});
+        const payload = {messageId: s.message.id, targetUuid: s.target.uuid};
+        assert.equal(await s.auth.validateAoeAuthorityContext(payload, s.player.id, s.runtime), null);
+        const result = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
+        assert.equal(result.allowed, false);
+        assert.equal(s.calls.length, 0);
+    }
+});
+
+test('custom circle authority allows a missed blast only after explicit GM deviation, without duplicate Evade', async () => {
+    const s = await fixture({total: 3});
+    Object.assign(s.state, {baseTotal: 3, shape: 'custom',
+        customShape: {type: 'circle', distance: 4.5, width: 2, angle: 60}});
+    const payload = {messageId: s.message.id, targetUuid: s.target.uuid};
+    assert.equal(await s.auth.validateAoeAuthorityContext(payload, s.player.id, s.runtime), null);
     s.state.deviationResolved = true;
-    s.state.shape = 'cone';
-    const result = await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime);
-    assert.equal(result.allowed, false);
-    assert.equal(s.calls.length, 0);
+    assert.ok(await s.auth.validateAoeAuthorityContext(payload, s.player.id, s.runtime));
+    assert.equal((await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime)).allowed, true);
+    assert.equal((await s.api.resolveAoeEvade(s.message, s.target.uuid, s.runtime)).allowed, true);
+    assert.equal(s.calls.filter(call => call[0] === 'roll').length, 1);
+    assert.equal(s.chat.length, 0);
 });
 
 test('targets without Agility keep a pending GM decision on the original attack without an extra card', async () => {

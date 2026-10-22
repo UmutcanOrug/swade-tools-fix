@@ -82,7 +82,7 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         Char:class {hasEdgeSetting(key){return key==='Rapid Fire' && rapidFire;} hasAbilitySetting(){return false;} getActualPP(){return 9;}},
         Dialog:class {constructor(config,options){dialogs.push({config,options});} render(){return this;}},
         isAoeItem:()=>aoe,getAoeItemSettings:()=>({consumeMode}),getInlineRofMaximum:()=>maxRof,
-        isPowerAoeItem:()=>aoe,getPowerAoeSettings:()=>({shape:'cone'}),POWER_AOE_SHAPES:['small','medium','large','scone','cone','stream'],
+        isPowerAoeItem:()=>aoe,getPowerAoeSettings:()=>({shape:'cone'}),POWER_AOE_SHAPES:(await load('AoeItemFlags')).POWER_AOE_SHAPES,
         runPowerAoe:async context=>events.push(['power-aoe',context]),
         getShotgunSettings:()=>({enabled:shotgun,doubleBarrel}),
         getShotgunDamageProfiles:()=>damageProfiles ?? {shot:{short:'3d6',medium:'2d6',long:'1d6'},slug:{short:'2d10',medium:'2d10',long:'2d10'}},

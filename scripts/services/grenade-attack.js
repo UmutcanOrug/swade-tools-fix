@@ -44,7 +44,7 @@ const aoeServices = macroScope.aoeServices ?? {
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeEvade.js")),
   ...await import(foundry.utils.getRoute("modules/swade-tools/scripts/services/AoeFire.js")),
 };
-const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, resolveAoeSkill, aoeResource, showAoeAttackDialog,
+const {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, isAoeTemplateDirectional, resolveAoeSkill, aoeResource, showAoeAttackDialog,
   playAoeAnimation, withSuppressedAoeAutomation, isTrustedAoePoolAttack,
   prepareWeaponDamageModifier, renderAoeAttackTargets, renderAoeDeviationControls, isAoeChatTransactionPending,
   placeWeaponAoeTemplatePoint, buildWeaponAoeTemplateData, collectAoeTemplateTargets,
@@ -125,7 +125,8 @@ const grenade = weaponActor.items.get(weaponChoice);
 if (!grenade) return ui.notifications.error("The selected AoE weapon could not be found.");
 const selectedAoeSettings = getAoeItemSettings(grenade);
 const templateShape = selectedAoeSettings.shape ?? selectedAoeSettings.blastSize;
-const directionalTemplate = ['scone', 'cone', 'stream'].includes(templateShape);
+const customShape = templateShape === 'custom' ? {...selectedAoeSettings.customShape} : null;
+const directionalTemplate = isAoeTemplateDirectional(templateShape, customShape);
 const templateOrigin = selectedAoeSettings.origin ?? 'token';
 if (selectedAoeSettings.damageAction && grenade.system.actions?.additional?.[selectedAoeSettings.damageAction]?.type !== "damage") {
   return ui.notifications.warn("This item's configured AoE damage action no longer exists. Update AoE Settings before firing.");
@@ -289,16 +290,17 @@ const blastSizeKey = ["small", "medium", "large"].includes(configuredBlastSize)
   ? configuredBlastSize
   : templateFlags.large ? "large" : templateFlags.medium ? "medium" : "small";
 const blastSize = blastSizeKey[0].toUpperCase() + blastSizeKey.slice(1);
-const blastRadiusSquares = {small: 1, medium: 2, large: 3}[blastSizeKey];
+const blastRadiusSquares = customShape?.type === 'circle' ? customShape.distance : {small: 1, medium: 2, large: 3}[blastSizeKey];
 const sceneDistance = Number(canvas.scene.grid.distance || 1);
 const blastRadius = blastRadiusSquares * sceneDistance;
 const templateLabel = ({small: 'Small Blast Template', medium: 'Medium Blast Template', large: 'Large Blast Template',
-  scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template'})[templateShape];
+  scone: 'Small Cone Template', cone: 'Cone Template', stream: 'Stream Template',
+  custom: `Custom ${customShape?.type === 'rect' ? 'Rectangle' : customShape?.type === 'ray' ? 'Line' : customShape?.type === 'cone' ? 'Cone' : 'Circle'}`})[templateShape];
 
 let cancelled = false;
 const target = poolAttack ? macroScope.attackPoint : directionalTemplate
   ? await placeWeaponAoeTemplatePoint({actor: weaponActor, item: grenade, token: selectedToken,
-      shape: templateShape, origin: templateOrigin}, {canvasRef: canvas, gameRef: game, sequencerRef: Sequencer,
+      shape: templateShape, origin: templateOrigin, customShape}, {canvasRef: canvas, gameRef: game, sequencerRef: Sequencer,
       configRef: CONFIG, constRef: CONST, notifications: ui.notifications,
       baseTemplateClass: foundry.canvas?.placeables?.MeasuredTemplate})
   : await Sequencer.Crosshair.show(
@@ -316,7 +318,7 @@ const target = poolAttack ? macroScope.attackPoint : directionalTemplate
       resolution: 1,
     },
     label: {
-      text: `${grenade.name} - ${blastSize} Blast`,
+      text: `${grenade.name} - ${customShape ? templateLabel : `${blastSize} Blast`}`,
     },
     location: {
       obj: selectedToken,
@@ -344,6 +346,12 @@ if (
   !Number.isFinite(target.y)
 ) {
   return;
+}
+
+const latestAoeSettings = getAoeItemSettings(grenade);
+if (latestAoeSettings.shape !== templateShape || latestAoeSettings.origin !== templateOrigin ||
+    (customShape && JSON.stringify(latestAoeSettings.customShape) !== JSON.stringify(customShape))) {
+  return ui.notifications.warn('AoE template settings changed during placement. Place the attack again.');
 }
 
 // Ammunition belongs to the weapon's owner, not the selected gunner. Commit
@@ -633,9 +641,9 @@ const getGrenadeBennyControlsHtml = () => {
 
 
 const templateColor = success ? "#ff6b35" : "#d62828";
-const weaponTemplateGeometry = directionalTemplate ? buildWeaponAoeTemplateData({actor: weaponActor, item: grenade,
+const weaponTemplateGeometry = directionalTemplate || customShape ? buildWeaponAoeTemplateData({actor: weaponActor, item: grenade,
     shape: templateShape, source: sourceCenter, target, scene: canvas.scene, user: game.user,
-    origin: templateOrigin, direction: target.direction ?? 0}) : {
+    origin: templateOrigin, direction: target.direction ?? 0, customShape}) : {
     t: "circle", x: target.x, y: target.y, distance: blastRadius, direction: 0
   };
 const templateData = {
@@ -667,7 +675,7 @@ const [templateDocument] = await canvas.scene.createEmbeddedDocuments(
 let throwMessage = null;
 const getBlastTargetsHtml = (targets) => renderAoeAttackTargets(targets,
   {baseTotal: total, criticalFailure, naturalOneFailure,
-    shape: templateShape, origin: templateOrigin,
+    shape: templateShape, origin: templateOrigin, ...(customShape ? {customShape} : {}),
     autoEvade: selectedAoeSettings.autoEvade,
     evadeResults: throwMessage?.flags?.world?.aoeEvadeResults,
     fireResults: throwMessage?.flags?.world?.aoeFireResults,
@@ -684,7 +692,8 @@ const updateBlastTargetText = async (targets) => {
 };
 
 const collectTokensInBlast = (centerX, centerY, notificationLabel) => {
-  const blastTargets = collectAoeTemplateTargets({...templateData, x: centerX, y: centerY},
+  const blastTargets = collectAoeTemplateTargets({...templateData, x: centerX, y: centerY,
+    object: templateDocument.object},
     canvas.tokens.placeables, {gridSize, sceneDistance, sourceTokenUuid: selectedToken.document.uuid,
       excludeSource: directionalTemplate && templateOrigin === 'token'});
 
@@ -930,6 +939,7 @@ const getGrenadeChatState = (targets = blastTargets) => ({
   templateId: templateDocument.id,
   originalPoint: {x: templateData.x, y: templateData.y},
   shape: templateShape,
+  ...(customShape ? {customShape: {...customShape}} : {}),
   origin: templateOrigin,
   geometry: Object.fromEntries(['t', 'x', 'y', 'direction', 'distance', 'width', 'angle']
     .filter(key => templateData[key] !== undefined).map(key => [key, templateData[key]])),

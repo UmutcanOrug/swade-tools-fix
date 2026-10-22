@@ -42,7 +42,8 @@ test('Power panel preserves Extra PP/native skill and replaces unsafe template-o
     assert.ok(p.config);assert.equal(p.events.length,0);
     assert.match(p.config.content,/id="extrapp"/);assert.match(p.config.content,/swadetools-power-modifiers/);
     assert.equal(p.html.nodes.get('power-aoe-shape').value,'cone');
-    assert.equal(p.html.nodes.get('power-aoe-shape').options.length,6);
+    assert.equal(p.html.nodes.get('power-aoe-shape').options.length,7);
+    assert.match(p.config.content,/<option value="custom"[^>]*>Custom Shape<\/option>/);
     assert.doesNotMatch(p.config.content,/data-template|rof-consume-ammo|rof-recoil/);
     assert.match(p.config.buttons.mainSkill.label,/Aetherics/);
     p.html.nodes.get('extrapp').value='3';p.html.nodes.get('power-aoe-shape').value='stream';
@@ -52,6 +53,20 @@ test('Power panel preserves Extra PP/native skill and replaces unsafe template-o
     const roll={addModifier:(...args)=>p.events.push(['mod',...args]),usePP:v=>p.events.push(['pp',v]),addFlag(){}};
     await context.prepareRoll(roll);assert.ok(p.events.some(e=>e[0]==='pp'&&e[1]==='3'));
     assert.equal(p.events.some(e=>e[0]==='aoe'),false);
+});
+
+test('custom Power casting passes and freezes dimensions with its existing single native cast',async()=>{
+    const {runPowerAoe}=await service(),f=fixture();
+    const shape={type:'cone',distance:7,width:2,angle:75};
+    f.context.shape='custom';f.item.flags={'swade-tools':{aoePowerShape:'custom',aoeCustomShape:shape}};
+    f.placement.shape='custom';f.placement.geometry={t:'cone',x:50,y:50,distance:35,direction:90,angle:75};
+    let placed;
+    f.runtime.place=async input=>{placed=input;f.item.flags['swade-tools'].aoeCustomShape={...shape,distance:20};return f.placement;};
+    assert.equal((await runPowerAoe(f.context,f.runtime)).success,true);
+    assert.deepEqual(placed.customShape,shape);
+    assert.deepEqual(f.rolls[0].flagUpdate.powerAoe.customShape,shape);
+    assert.deepEqual(f.rolls[0].flagUpdate.powerAoe.geometry,f.placement.geometry);
+    assert.equal(f.rolls.length,1);assert.equal(f.events.filter(value=>value==='roll').length,1);
 });
 
 test('ordinary powers remain unchanged, while AoE damage bypasses attack-only penalties',async()=>{

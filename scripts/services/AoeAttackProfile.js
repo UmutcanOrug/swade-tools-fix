@@ -1,6 +1,6 @@
 /** Pure attack-profile helpers shared by the AoE launcher and regression tests. */
 import {isLegacyGrenadeItem, isAoeItem} from './AoeItemFlags.js';
-export {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings} from './AoeItemFlags.js';
+export {isLegacyGrenadeItem, isAoeItem, getAoeItemSettings, isAoeTemplateDirectional} from './AoeItemFlags.js';
 const normalized = value => String(value ?? '').trim().toLowerCase();
 const normalizedSwid = value => normalized(value).replace(/[\s_]+/g, '-');
 
