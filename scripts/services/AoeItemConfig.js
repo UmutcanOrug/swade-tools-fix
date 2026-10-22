@@ -35,6 +35,32 @@ const asElement = html => {
     if (html?.jquery) return html[0];
     return html?.[0] ?? html;
 };
+const viewportBindings = new WeakMap();
+// DialogV2's footer must remain outside the scrolling content. Refit through
+// Foundry's own positioning when the viewport or conditional fields change.
+export const bindAoeSettingsViewport = dialog => {
+    const root = asElement(dialog?.element);
+    if (!root || typeof dialog?.setPosition !== 'function') return;
+    const previous = viewportBindings.get(dialog);
+    if (previous?.root === root) return;
+    previous?.cleanup();
+    const viewport = root.ownerDocument?.defaultView ?? globalThis.window;
+    const refit = () => {
+        if (root.isConnected === false) return;
+        dialog.setPosition({height: 'auto'});
+    };
+    const cleanup = () => {
+        root.removeEventListener?.('change', refit);
+        viewport?.removeEventListener?.('resize', refit);
+        dialog.removeEventListener?.('close', cleanup);
+        viewportBindings.delete(dialog);
+    };
+    viewportBindings.set(dialog, {root, cleanup});
+    root.addEventListener?.('change', refit);
+    viewport?.addEventListener?.('resize', refit);
+    dialog.addEventListener?.('close', cleanup, {once: true});
+    refit();
+};
 const isEditable = (sheet, item) => Boolean(
     item?.isOwner && sheet?.isEditable !== false
 );
@@ -164,6 +190,7 @@ export const showPowerAoeItemSettings = async item => {
     ];
     try {
         const result = await foundry.applications.api.DialogV2.prompt({
+            classes: ['dialog', 'swadetools-aoe-settings-dialog'],
             window: { title: `${item.name} - Power AoE Settings` },
             position: { width: 420 },
             content: `<div class="standard-form">
@@ -185,7 +212,10 @@ export const showPowerAoeItemSettings = async item => {
                 origin: button.form.elements.aoePowerOrigin.value,
                 ...readCustomShapeSettings(button.form, button.form.elements.aoePowerShape.value, settings.customShape)
             }) },
-            render: (_event, dialog) => bindAoeCustomShapeChoices(dialog.element),
+            render: (_event, dialog) => {
+                bindAoeCustomShapeChoices(dialog.element);
+                bindAoeSettingsViewport(dialog);
+            },
             rejectClose: false,
             modal: false
         });
@@ -208,6 +238,7 @@ export const showAoeItemSettings = async (actor, item) => {
         .map(([key, action]) => `<option value="${escape(key)}" ${settings.damageAction === key ? 'selected' : ''}>${escape(action.name || key)}</option>`).join('');
     try {
         const result = await foundry.applications.api.DialogV2.prompt({
+            classes: ['dialog', 'swadetools-aoe-settings-dialog'],
             window: { title: `${item.name} - AoE Settings` },
             position: { width: 480 },
             content: `<div class="standard-form">
@@ -286,6 +317,7 @@ export const showAoeItemSettings = async (actor, item) => {
             render: (_event, dialog) => {
                 bindAoeConsumptionChoices(dialog.element);
                 bindAoeCustomShapeChoices(dialog.element);
+                bindAoeSettingsViewport(dialog);
             },
             rejectClose: false,
             modal: false

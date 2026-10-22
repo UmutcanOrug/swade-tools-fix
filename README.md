@@ -5,6 +5,11 @@ SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
 ## Custom AoE shapes (2.2.3)
 
+The 2.2.4 layout fix keeps **Save Settings** visible on shorter screens.
+Only the settings fields scroll; both weapon and power dialogs refit when
+Custom Shape fields change or the browser viewport is resized. No attack,
+damage, resource or saved-setting behavior changes.
+
 Open the item's **Properties → Enable AoE ⚙ → Template Shape → Custom Shape**.
 Weapons and powers can choose Circle, Cone, Line or Rectangle, then configure
 radius, length/width or cone angle as appropriate. Dimensions are **grid squares**

@@ -1,3 +1,23 @@
+## SWADE Tools 2.2.4 — Keep AoE Save Settings Visible
+
+Normal stable update. Reload all GM and player clients after updating.
+
+- Fixed weapon and power AoE Settings clipping the Save Settings button on
+  short browser viewports. Only the fields scroll; the native footer stays
+  outside that scroll region and remains visible.
+- Scoped the layout to these two settings dialogs, preserving the existing
+  theme and other SWADE Tools windows. Uses native Foundry positioning to fit
+  conditional Custom Shape fields and browser resize/zoom changes.
+- Resize/change listeners are idempotent and cleaned up when the window
+  closes or its root is replaced. No combat, damage, consumption, permissions
+  or saved item settings changed.
+
+649 module tests pass. Native Foundry browser checks reproduce the old clipping
+and verify 50 weapon/power shape/viewport combinations down to 600×400,
+including stationary-footer scrolling, save/cancel and viewport resizing.
+A 2.2.3 module-source backup was retained separately;
+this is not a world-data backup.
+
 ## SWADE Tools 2.2.3 — Custom AoE Shapes
 
 Normal stable update. Back up the world and reload GM/player clients.

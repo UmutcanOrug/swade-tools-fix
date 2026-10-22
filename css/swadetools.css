@@ -530,3 +530,33 @@ li.chat-message footer.roll-interaction,
         margin:0;
         font-size:16px;
     }
+
+/* AoE Settings only: scroll the fields, not the native Save Settings footer. */
+.application.swadetools-aoe-settings-dialog {
+    max-height: min(800px, calc(100vh - 32px));
+    max-height: min(800px, calc(100dvh - 32px));
+    max-width: calc(100vw - 32px);
+}
+.swadetools-aoe-settings-dialog .window-content {
+    min-height: 0;
+    overflow: hidden;
+}
+.swadetools-aoe-settings-dialog .dialog-form {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+.swadetools-aoe-settings-dialog .dialog-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 6px;
+}
+.swadetools-aoe-settings-dialog .dialog-form > .form-footer {
+    flex: 0 0 auto;
+}
