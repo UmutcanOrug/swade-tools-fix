@@ -95,8 +95,17 @@ async function runAttack({vehicle = false, flags = {}, name = 'HE Cannon',
     name:'Other Grenade',system:{...weapon.system,damage:'9d6'}});
   const token = {id: 'source', actor: owner, x: 0, y: 0, w: 100, h: 100,
     center: {x: 50, y: 50}, document: {id: 'source', uuid: 'Scene.scene.Token.source'}};
-  const victims = targetTokens ?? ['one','two'].map(id => ({id, name: `Target ${id}`, isVisible: true,
-    actor: {name: id}, center: {x: 100, y: 100}, document: {uuid: `Scene.scene.Token.${id}`}}));
+  const victims = (targetTokens ?? ['one','two'].map(id => ({id, name: `Target ${id}`, isVisible: true,
+    actor: {name: id}, center: {x: 100, y: 100}, document: {uuid: `Scene.scene.Token.${id}`}})))
+    .map(target => {
+      // Real Foundry tokens always expose occupied pixel bounds, even when
+      // their art is circular. Keep older center-only test doubles realistic.
+      target.w ??= Number(target.document?.width ?? 1) * 100;
+      target.h ??= Number(target.document?.height ?? 1) * 100;
+      target.x ??= target.document?.x ?? Number(target.center?.x) - target.w / 2;
+      target.y ??= target.document?.y ?? Number(target.center?.y) - target.h / 2;
+      return target;
+    });
   const scene = {grid: {distance: 1, size: 100, units: 'in.'}, templates: new Map(),
     async createEmbeddedDocuments(_type, data) {
       events.push('template'); const doc = {...data[0], id: 'template',

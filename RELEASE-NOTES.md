@@ -1,3 +1,26 @@
+## SWADE Tools 2.2.5 — Circular Blast Boundary Targets
+
+Normal stable update. Reload GM/player clients and test a new attack.
+
+- Fixed circular blast templates including the untouched neighboring grid row
+  when token rectangles only touched the blast at an edge or corner. Targeting
+  now requires real positive overlap. Genuine partial coverage remains eligible;
+  the circle radius was not reduced and center-only targeting was not introduced.
+- Applies equally to Extras and Wild Cards, normal/custom circles and native
+  full-circle cones. Invalid or non-positive occupied token bounds fail closed.
+  Other cone/ray polygon behavior and grid-template policies are unchanged.
+- Added the reported four-token layout as a full attack regression, covering
+  scene scales, Extra/Wild Card targets, GM corrections, Benny success and
+  deviation. Only overlapping targets enter damage, Evade and Fire workflows;
+  ammunition and template creation remain one-time.
+- Updated synthetic token fixtures to include the occupied dimensions that
+  real Foundry tokens provide. All 657 module tests pass, along with native
+  geometry, GM correction, deviation and Fire damage-card browser checks.
+
+Existing stored chat target lists are not automatically rebuilt, and previously
+applied damage is not reversed. A fresh attack uses the corrected boundary.
+A 2.2.4 module-source backup was retained separately; it is not a world backup.
+
 ## SWADE Tools 2.2.4 — Keep AoE Save Settings Visible
 
 Normal stable update. Reload all GM and player clients after updating.

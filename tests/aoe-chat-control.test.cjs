@@ -28,7 +28,7 @@ async function fixture({gm = true, vehicle = false, total = 3,
     const owner = vehicle ? {uuid: 'Actor.vehicle', id: 'vehicle', type: 'vehicle', isOwner: true} : operator;
     const item = {id: 'item', uuid: `${owner.uuid}.Item.item`, actor: owner, parent: owner,
         type: 'weapon', isOwner: true, system: {damage: '3d6', actions: {additional: {}}}};
-    const target = {id: 'victim', uuid: 'Scene.scene.Token.victim', name: 'Victim',
+    const target = {id: 'victim', uuid: 'Scene.scene.Token.victim', name: 'Victim', x:50,y:50,width:1,height:1,
         actor: {name: 'Victim'}, object: null};
     const template = {id: 'template', t: 'circle', x: 200, y: 200, distance: 2,
         async update(change) { changes.push(change); Object.assign(this, change); }};
@@ -602,7 +602,8 @@ test('Resolve Deviation damages only visible actors inside the GM-selected blast
     const s = await fixture({total: 1});
     withDeviationPicker(s);
     const addTarget = (id, x, y, overrides = {}) => {
-        const document = {id, uuid: `Scene.scene.Token.${id}`, name: id, actor: {name: id}, hidden: false};
+        const document = {id, uuid: `Scene.scene.Token.${id}`, name: id, actor: {name: id}, hidden: false,
+            x:x-50,y:y-50,width:1,height:1};
         const token = {id, name: id, actor: document.actor, document,
             isVisible: true, visible: true, center: {x, y}, ...overrides};
         s.documents.set(document.uuid, document);

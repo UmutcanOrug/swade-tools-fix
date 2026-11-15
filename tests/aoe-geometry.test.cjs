@@ -9,13 +9,50 @@ const token = (id, x, y, width = 100, height = 100) => ({id, x, y, w: width, h: 
     setTarget() { throw new Error('AoE geometry must not change target rings'); }});
 const cone = {t: 'cone', x: 0, y: 0, distance: 9, width: 3, angle: 0, direction: 0};
 
-test('circle AoE includes partial rectangle overlap, including an edge touch, not only token centers', async () => {
+test('circle AoE includes positive partial overlap but excludes tangent edges and outside tokens', async () => {
     const {tokenOverlapsAoeTemplate} = await service;
     const area = {t: 'circle', x: 0, y: 0, distance: 2};
     assert.equal(tokenOverlapsAoeTemplate(area, token('partial', 180, -50)), true);
-    assert.equal(tokenOverlapsAoeTemplate(area, token('touch', 200, -20)), true);
+    assert.equal(tokenOverlapsAoeTemplate(area, token('touch', 200, -20)), false);
+    assert.equal(tokenOverlapsAoeTemplate(area, token('one-pixel-overlap', 199, -20)), true);
     assert.equal(tokenOverlapsAoeTemplate(area, token('outside', 201, -50)), false);
     assert.equal(tokenOverlapsAoeTemplate(area, token('diagonal-outside', 150, 150)), false);
+});
+
+test('grid-vertex blasts exclude the untouched outside row while retaining both partially covered tokens', async () => {
+    const {collectAoeTemplateTargets} = await service;
+    for (const sceneDistance of [1, 5]) for (const center of [{x:0,y:0},{x:500,y:500},{x:-250,y:175}]) {
+        const area = {t:'circle', x:center.x, y:center.y, distance:2*sceneDistance};
+        const targets = [
+            token('outside-left-extra', center.x-100, center.y-300),
+            token('outside-right-wildcard', center.x, center.y-300),
+            token('partial-left-extra', center.x-100, center.y-200),
+            token('partial-right-wildcard', center.x, center.y-200)
+        ];
+        targets.forEach((target,index) => {target.actor.system={wildcard:index%2===1};});
+        assert.deepEqual(collectAoeTemplateTargets(area,targets,{gridSize:100,sceneDistance})
+            .map(target=>target.id), ['partial-left-extra','partial-right-wildcard']);
+    }
+});
+
+test('circle corner tangency and a full grid gap never count as covered area', async () => {
+    const {tokenOverlapsAoeTemplate} = await service;
+    const area = {t:'circle',x:0,y:0,distance:Math.SQRT2};
+    assert.equal(tokenOverlapsAoeTemplate(area,token('corner-only',100,100)),false);
+    assert.equal(tokenOverlapsAoeTemplate(area,token('corner-partial',99,100)),true);
+    assert.equal(tokenOverlapsAoeTemplate(area,token('corner-outside',101,100)),false);
+    assert.equal(tokenOverlapsAoeTemplate({t:'circle',x:0,y:0,distance:2},token('one-grid-gap',300,-50)),false);
+});
+
+test('non-positive or non-finite occupied token bounds do not produce AoE hits', async () => {
+    const {tokenOverlapsAoeTemplate} = await service;
+    const area = {t:'circle',x:0,y:0,distance:2};
+    for (const [width,height] of [[0,100],[-100,100],[100,0],[100,-100],[NaN,100],[100,Infinity]]) {
+        assert.equal(tokenOverlapsAoeTemplate(area,token('invalid',0,0,width,height)),false);
+    }
+    for (const distance of [0,-1,NaN,Infinity]) {
+        assert.equal(tokenOverlapsAoeTemplate({...area,distance},token('valid',0,0)),false);
+    }
 });
 
 test('native rounded cone reproduces the SWADE 3-degree endcap polygon and scales length, not width', async () => {
@@ -106,7 +143,7 @@ test('flagged custom cones use fresh native flat/grid cone geometry without chan
     }
 });
 
-test('full-angle custom cones preserve exact native circular overlap, including edge touches', async () => {
+test('full-angle custom cones preserve exact native positive circular overlap without tangent hits', async () => {
     const {tokenOverlapsAoeTemplate, getAoeTemplatePolygon} = await service;
     const oldFoundry = globalThis.foundry;
     globalThis.foundry = {canvas: {placeables: {MeasuredTemplate: class {
@@ -118,7 +155,8 @@ test('full-angle custom cones preserve exact native circular overlap, including 
     try {
         const area = {t: 'cone', x: 100, y: 100, direction: 270, distance: 4, angle: 360,
             flags: {'swade-tools': {templateType: 'custom', customShapeType: 'cone', powerAoeTemplate: true}}};
-        assert.equal(tokenOverlapsAoeTemplate(area, token('edge', 500, 90, 20, 20)), true);
+        assert.equal(tokenOverlapsAoeTemplate(area, token('edge', 500, 90, 20, 20)), false);
+        assert.equal(tokenOverlapsAoeTemplate(area, token('partial-edge', 499, 90, 20, 20)), true);
         assert.equal(tokenOverlapsAoeTemplate(area, token('outside', 501, 90, 20, 20)), false);
         assert.equal(tokenOverlapsAoeTemplate(area, token('behind-origin', -200, 80, 20, 20)), true);
         assert.equal(getAoeTemplatePolygon(area).length, 120);

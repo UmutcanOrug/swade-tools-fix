@@ -5,6 +5,12 @@ SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
 ## Custom AoE shapes (2.2.3)
 
+The 2.2.5 circular blast fix excludes tokens whose occupied square only touches
+the circle at an edge or corner. Real partial coverage still counts; the radius
+is unchanged. Extras and Wild Cards use the same rule. Reload all clients and
+test a new attack: existing stored chat target lists and previously applied
+damage are not automatically rewritten or reversed.
+
 The 2.2.4 layout fix keeps **Save Settings** visible on shorter screens.
 Only the settings fields scroll; both weapon and power dialogs refit when
 Custom Shape fields change or the browser viewport is resized. No attack,

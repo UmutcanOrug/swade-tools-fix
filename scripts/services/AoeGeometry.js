@@ -77,7 +77,11 @@ const nativeShapePoints = shape => {
 const circleOverlapsRect = (x, y, radius, rect) => {
     const closestX = Math.min(Math.max(x, rect.x), rect.x + rect.width);
     const closestY = Math.min(Math.max(y, rect.y), rect.y + rect.height);
-    return radius >= 0 && Math.hypot(closestX - x, closestY - y) <= radius + EPSILON;
+    // A tangent edge/corner has no area beneath the template. Including it
+    // makes the next grid row appear affected when a blast is grid-snapped.
+    // Keep genuine partial overlap, without padding the blast outwards.
+    return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(radius) && radius > 0 &&
+        Math.hypot(closestX - x, closestY - y) < radius - EPSILON;
 };
 
 /** Reproduce SWADE 5.x's native rounded-cone polygon, including its 3° arc steps. */
@@ -123,7 +127,8 @@ export const tokenOverlapsAoeTemplate = (template, token, options = {}) => {
     const gridSize = Number(options.gridSize ?? 100), sceneDistance = Number(options.sceneDistance ?? 1);
     if (!document || !token || !(gridSize > 0) || !(sceneDistance > 0)) return false;
     const rect = tokenBounds(token, gridSize);
-    if (!finite(rect.x) || !finite(rect.y)) return false;
+    if (!finite(rect.x) || !finite(rect.y) || !finite(rect.width) || !finite(rect.height) ||
+        rect.width <= 0 || rect.height <= 0) return false;
     if (document.t === 'circle') {
         const radius = Number(document.distance) / sceneDistance * gridSize;
         return circleOverlapsRect(Number(document.x), Number(document.y), radius, rect);

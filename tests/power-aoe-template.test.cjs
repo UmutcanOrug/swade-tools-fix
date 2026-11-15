@@ -19,7 +19,8 @@ const fixture = ({shape = 'medium', customShape, point = {x: 250, y: 50}, range 
             return [document];
         }};
     const makeToken = (id, x, y, options = {}) => ({id, actor: {id: `actor-${id}`}, center: {x, y},
-        document: {id, parent: scene, hidden: false},
+        x:x-50,y:y-50,w:100,h:100,
+        document: {id, parent: scene, hidden: false, x:x-50,y:y-50,width:1,height:1},
         setTarget() { throw new Error('Power AoE must not change target rings'); }, ...options});
     const source = makeToken('source', 50, 50, {actor});
     const tokens = [source, makeToken('inside', 250, 50), makeToken('outside', 650, 650),
