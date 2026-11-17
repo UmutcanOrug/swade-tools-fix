@@ -3,6 +3,78 @@
 ## Compatibility 
 SWADE Tools v2 is only compatible with with Foundry v13 and SWADE system v5
 
+## Per-cast Power Modifiers (2.3.0)
+
+Open a power normally. Its **Power Modifiers** section now offers common
+modifiers, a live PP/damage/AP preview and the item's existing native modifiers.
+Choices apply to this casting only: opening, changing or canceling the panel
+does not write to the item or enable its effects permanently.
+
+**Blast, Bolt and Burst: Damage (+2 PP)** adds one damage d6, once per casting.
+The native Raise die remains separate, so 2d6 becomes 3d6, or 4d6 on a Raise.
+**Damage Field** instead upgrades its base 2d4 to 2d6. Core powers are identified
+by SWADE SWID or their canonical name, including a parenthesized Trapping.
+Renamed/custom powers without a recognizable SWID use their native item Power
+Modifiers; the module does not assume every Damage modifier means +1d6.
+Existing native Damage/AP/Heavy/Range modifiers are not offered a second time.
+
+Armor Piercing, Heavy Weapon and the chosen damage/action data are frozen in
+the original chat card and restored for target damage and Benny rerolls.
+Damage-only cards never cast again or spend PP. Failed activation costs 1 PP;
+a successful Benny/GM correction settles only the outstanding native cost.
+Natural-one Critical Failures cannot become successes through modifiers.
+The No Power Points rule includes the selected costs in its casting penalty.
+
+For automatic areas, enable the power's existing **Properties -> Enable AoE**
+and configure its shape/origin. **Selective (+1 PP)** offers affected-target
+checkboxes after placement, without changing target rings. Canceling placement
+or this selection spends no PP and leaves no abandoned template. Blast's Large
+area costs +1 PP unless a selected native Area Effect modifier already paid it.
+Range doubles/triples numeric ranges or recognized attribute ranges such as
+Smarts x2; attribute ranges scale by the scene's grid distance. Touch, Self and
+Cone Template cannot be extended. Existing AoE placement still needs Sequencer.
+
+Automatic target modifiers require an active primary GM viewing the original
+scene when the hit card resolves. They do not depend on Experimental Properties:
+
+- **Fatigue** adds a temporary native fatigue modifier, capped at Exhausted
+  rather than Incapacitated. A damaging power must actually affect the target:
+  another selected target effect qualifies immediately, otherwise native GM
+  Apply Damage/remaining Soak damage qualifies it. Repeated clicks do not stack it.
+- **Glow/Shroud** adjust an existing Stealth skill and native attack defenses;
+  Glow cancels one selected illumination penalty. Glow supplies small-blast
+  token light only when needed, restoring only unchanged module-owned values.
+  Independent casts retain their own duration without stacking Stealth bonuses.
+- **Hinder/Hurry** change ground Pace by -2/+2, best once per kind, never below 0.
+- **Lingering Damage** rolls base power damage one die type lower at the start
+  of that exact target token's next turn, once. A d4 loses one die instead.
+  The selected Damage upgrade is included; Raise/Joker/Conviction/global damage
+  bonuses are not repeated. Frozen power AP/Heavy remain; GM applies wounds
+  through a normal native damage card. No second activation or PP charge occurs.
+
+Instant target effects expire at the end of the target's next turn; timed
+powers expire at the caster's appropriate turn end. Out of combat they follow
+Foundry World Time, not a real-time timer. Special/unrecognized durations offer
+an explicit rounds/next-turn choice. **End Power Effects** lets the primary GM
+stop only that casting's managed effects, preserving unrelated effects/light.
+
+For non-damaging/resisted powers, native activation success is not proof that
+the defender was affected. The primary GM uses **Confirm Affected** after
+resolving that power's own resistance; modifier effects and expiry then run
+automatically. This release does not invent generic resistance rolls, automate
+every core power's main effect, support vehicle power-effect resolution, or
+change existing weapon AoE/Evade/Fire workflows. Lingering requires a plain
+dice base formula; unsupported formulas are rejected before PP commitment.
+
+Back up the world, update normally and reload every client. Test a fresh cast;
+older chat cards do not gain modifiers retroactively. End managed Power effects
+before downgrading to 2.2.5, which cannot manage their expiry. A module-source
+ZIP is not a world backup. [Turkce kullanim notlari](POWER-MODIFIERS-TR.md).
+
+Validated with 701 isolated automated tests and headless production-panel
+previews at desktop and narrow viewports. No live Foundry/Forge world was
+accessed or modified; a live-world integration check is still recommended.
+
 ## Custom AoE shapes (2.2.3)
 
 The 2.2.5 circular blast fix excludes tokens whose occupied square only touches

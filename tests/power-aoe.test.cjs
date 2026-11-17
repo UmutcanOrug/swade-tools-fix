@@ -50,7 +50,7 @@ test('Power panel preserves Extra PP/native skill and replaces unsafe template-o
     await p.config.buttons.mainSkill.callback(p.html);
     const context=p.events.find(e=>e[0]==='power-aoe')[1];
     assert.equal(context.extraPP,'3');assert.equal(context.shape,'stream');
-    const roll={addModifier:(...args)=>p.events.push(['mod',...args]),usePP:v=>p.events.push(['pp',v]),addFlag(){}};
+    const roll={addModifier:(...args)=>p.events.push(['mod',...args]),usePP:v=>p.events.push(['pp',v]),addFlag(){},setPowerModifiers(){}};
     await context.prepareRoll(roll);assert.ok(p.events.some(e=>e[0]==='pp'&&e[1]==='3'));
     assert.equal(p.events.some(e=>e[0]==='aoe'),false);
 });
@@ -81,7 +81,7 @@ test('ordinary powers remain unchanged, while AoE damage bypasses attack-only pe
     await p.config.buttons.mainDamage.callback(p.html);
     const context=p.events.find(e=>e[0]==='power-aoe')[1];
     assert.equal(context.actionType,'damage');
-    const mods=[];await context.prepareRoll({addModifier:(...args)=>mods.push(args),usePP(){},addFlag(){}});
+    const mods=[];await context.prepareRoll({addModifier:(...args)=>mods.push(args),usePP(){},addFlag(){},setPowerModifiers(){}});
     assert.deepEqual(mods.map(args=>args[0]),['0']);
 });
 
@@ -254,4 +254,39 @@ test('deleted synthetic power caster never falls back to another token or base a
     const control=new Control({rolls:[{}],flags:{'swade-tools':{powerAoe:{sceneId:'scene',sourceTokenId:'deleted'},usetoken:'deleted'}}},{},'player');
     assert.equal(control.getActor(),null);assert.equal(control.findActor(),false);assert.equal(warnings.length,1);
     delete global.game;delete global.ui;
+});
+
+test('Selective freezes only confirmed area targets in both native Power flags without changing target rings',async()=>{
+    const {runPowerAoe}=await service(),f=fixture();
+    Object.assign(f.actor,{uuid:'Actor.caster'});
+    Object.assign(f.item,{uuid:'Actor.caster.Item.power',name:'Burst',actor:f.actor,effects:[]});
+    Object.assign(f.item.system,{duration:'Instant',range:'12'});
+    const {preparePowerCast}=await import(pathToFileURL(path.join(scripts,'services/PowerModifiers.js')).href);
+    f.context.powerCast=preparePowerCast(f.item,{damage:true,selective:true}).snapshot;
+    f.context.prepareRoll=roll=>roll.addFlag('powerCast',structuredClone(f.context.powerCast));
+    f.runtime.selectTargets=async placement=>{assert.deepEqual(placement.targetIds,['target']);return [];};
+    await runPowerAoe(f.context,f.runtime);
+    assert.deepEqual(f.rolls[0].flagUpdate.powerAoe.targetIds,[]);
+    assert.deepEqual(f.rolls[0].flagUpdate.powerCast.targets,[]);
+    assert.equal(f.rolls[0].flagUpdate.powerCast.cost,5);assert.equal(f.rolls[0].usetarget,'');
+});
+
+test('Selective cancellation and invalid exclusions never cast, spend PP or leave confirmed templates',async()=>{
+    const {runPowerAoe}=await service();
+    for(const selected of [null,['outsider']]){
+        const f=fixture();f.context.powerCast={cost:4,choices:{selective:true},rangeMultiplier:1};
+        f.runtime.selectTargets=async()=>selected;
+        assert.equal(await runPowerAoe(f.context,f.runtime),false);
+        assert.deepEqual(f.events,['place','delete']);assert.equal(f.rolls.length,0);
+    }
+});
+
+test('declared modifier PP is checked before placement and prepared native Range is passed without item writes',async()=>{
+    const {runPowerAoe}=await service(),short=fixture();
+    short.context.powerCast={cost:10,choices:{},rangeMultiplier:2};
+    assert.equal(await runPowerAoe(short.context,short.runtime),false);assert.equal(short.events.length,0);
+    const f=fixture();f.context.powerCast={cost:5,choices:{},rangeMultiplier:2,rangeLimit:24,rangeSquares:null};
+    const prepared={...f.item,system:{...f.item.system,range:'24'}};f.context.powerItem=prepared;
+    f.runtime.place=async data=>{assert.equal(data.item,prepared);assert.equal(data.rangeMultiplier,2);assert.equal(data.rangeLimit,24);return f.placement;};
+    assert.ok(await runPowerAoe(f.context,f.runtime));assert.equal(f.item.system.range,undefined);
 });

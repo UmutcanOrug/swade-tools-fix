@@ -1,6 +1,7 @@
 import CharRoll from "./CharRoll.js";
 import * as gb from './../gb.js';
 import {getPropertyCombatModifiers} from '../services/PropertiesCombat.js';
+import {validatePowerCastSnapshot, powerDamageFormula, renderPowerCastSummary} from '../services/PowerModifiers.js';
 
 export default class ItemRoll extends CharRoll{
     constructor(actor,item){
@@ -32,7 +33,7 @@ export default class ItemRoll extends CharRoll{
 
 
     async rollAction(actionId){
-        let action=this.actions[actionId];
+        let action=this.powerCast?.damageActions?.[actionId] ?? this.actions[actionId];
 
         this.defineAction(actionId);
 
@@ -45,7 +46,7 @@ export default class ItemRoll extends CharRoll{
                   
           
            if (this.consumeWeaponAmmunition!==false && gb.realInt(action.resourcesUsed)>0){
-            this.useShots(action.resourcesUsed);
+            this.useShots(this.powerCast?.cost ?? action.resourcesUsed);
             } 
             
             
@@ -80,7 +81,7 @@ export default class ItemRoll extends CharRoll{
 
         } else if (action.type=='damage'){
             this.addModifier(action.modifier,action.name);
-            let damage=this.item.system?.damage;      
+            let damage=this.powerCast?.damage ?? this.item.system?.damage;
             
             
 
@@ -95,7 +96,7 @@ export default class ItemRoll extends CharRoll{
            
 
             this.addDmgMod();
-            await this.rollDamage(damage,this.getApInfo(action),this.raiseDie());
+            await this.rollDamage(this.powerCast ? powerDamageFormula(this.powerCast,damage) : damage,this.getApInfo(action),this.raiseDie());
         }
 
         
@@ -114,6 +115,19 @@ export default class ItemRoll extends CharRoll{
     }
 
     /// universal mods
+    setPowerModifiers(snapshot,item=this.item){
+        if (item.type!=='power') throw new Error('Power Modifiers require a power.');
+        this.powerCast=validatePowerCastSnapshot(snapshot);
+        this.item=item;
+        this.data=item.system.actions;
+        this.actions=this.data.additional;
+        this.addFlag('powerCast',this.powerCast);
+        this.addFlavor(renderPowerCastSummary(this.powerCast),true);
+        this.useShots(this.powerCast.cost);
+        if (this.powerCast.cost===0) this.manageshots=false;
+        this.useTarget(this.powerCast.targets.map(target=>target.uuid.split('.').at(-1)).join(','));
+    }
+
     setWeaponDamageModifier(formula){
         this.weaponDamageModifier=String(formula ?? '').trim();
         this.addFlag('weaponDamageModifier',this.weaponDamageModifier);
@@ -162,7 +176,7 @@ export default class ItemRoll extends CharRoll{
             this.reasons.push(`Damage Mod: ${modifier}`);
             this.weaponDamageModifierApplied=true;
         }
-        this.addModifier(this.data.dmgMod,gb.trans('ModItem'));        
+        this.addModifier(this.powerCast?.dmgMod ?? this.data.dmgMod,gb.trans('ModItem'));
        
         if (this.actor?.system?.stats?.globalMods?.damage && this.actor?.system?.stats?.globalMods?.damage.length > 0) {
             this.actor?.system?.stats?.globalMods?.damage.forEach(el => {
@@ -185,6 +199,7 @@ export default class ItemRoll extends CharRoll{
 
     usePP(extraPP){
         if (this.item.type=='power'){
+            if (this.powerCast){this.useShots(this.powerCast.cost);return;}
             let usepp=gb.getPPCostMod(this.item)+gb.realInt(extraPP);
             if (usepp<0){ /// min 0
                 usepp=0
@@ -229,10 +244,10 @@ export default class ItemRoll extends CharRoll{
     getApInfo(action=false){
         let extrainfo='';
 
-        let finalAp=this.item.system.ap;
+        let finalAp=this.powerCast?.ap ?? this.item.system.ap;
 
         if (action && action?.ap){
-            finalAp=action.ap;
+            finalAp=Number(action.ap)+(this.powerCast?.choices.ap ?? 0)*2;
         }
         let reason=[];
 
@@ -247,7 +262,7 @@ export default class ItemRoll extends CharRoll{
             }
         }
 
-        if (this.item.system.ap){
+        if (this.item.system.ap || (this.powerCast && finalAp)){
             extrainfo+=` [${gb.trans('Ap','SWADE')}: ${finalAp}`;
         
 
@@ -295,7 +310,8 @@ export default class ItemRoll extends CharRoll{
 
         
         
-        await this.rollDamage(override ?? this.item.system.damage,this.getApInfo(),this.raiseDie());
+        const damage=override ?? this.powerCast?.damage ?? this.item.system.damage;
+        await this.rollDamage(this.powerCast ? powerDamageFormula(this.powerCast,damage) : damage,this.getApInfo(),this.raiseDie());
     }
 
     

@@ -1,6 +1,22 @@
 ## NEW UPDATES
 Check the Releases!
 
+## 2.3.0
+
+- Added per-cast Power Modifiers with live cost/damage/AP, unsaved native
+  modifier selection, core Blast/Bolt/Burst Damage and Damage Field upgrades.
+- Froze selected damage/actions/AP/Heavy through target damage and Benny;
+  preserved failed-activation PP debt, GM correction and No Power Points.
+- Added Selective target confirmation, Large Blast cost and extended numeric/
+  attribute Power range while preserving native area placement and cancellation.
+- Added primary-GM target effects for capped Fatigue, Glow/Shroud, nonstacking
+  Hinder/Hurry, exact-token one-time Lingering damage and managed expiry/end.
+- Native Apply Damage/Soak gates damaging-power Fatigue; resisted non-damaging
+  powers require GM Confirm Affected. Existing weapon AoE/Fire stays separate.
+- Added permission, duplicate, late-card, lighting, duration, range, PP, damage
+  and cancellation regressions. All 701 isolated module tests pass. Production
+  panel previews passed desktop/narrow checks; no live world was accessed.
+
 ## 2.1.13
 
 - Removed long AoE/Shotgun Properties explanations and the Attack Options foldout.

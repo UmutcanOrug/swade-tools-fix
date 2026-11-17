@@ -4,6 +4,25 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const service = import(pathToFileURL(path.join(__dirname, '../scripts/services/PowerAoeTemplate.js')).href);
 
+test('Range modifier doubles numeric placement reach without changing template dimensions or original range',async()=>{
+    const {placePowerAoeTemplate}=await service;
+    const ordinary=fixture({range:'4',point:{x:650,y:50}});
+    assert.equal(await placePowerAoeTemplate(ordinary.input,ordinary.runtime),null);
+    const extended=fixture({range:'4',point:{x:650,y:50}});extended.input.rangeMultiplier=2;
+    const placed=await placePowerAoeTemplate(extended.input,extended.runtime);
+    assert.ok(placed);assert.equal(placed.templateDocument.distance,2);
+    assert.equal(extended.calls.find(call=>call[0]==='crosshair')[1].location.limitMaxRange,8);
+    assert.equal(extended.input.item.system.range,'4');
+});
+
+test('Smarts-based frozen Power range uses grid-square scene conversion once',async()=>{
+    const {placePowerAoeTemplate}=await service;
+    const f=fixture({range:'Smarts x2',distance:2,point:{x:650,y:50}});
+    f.input.rangeSquares=8;f.input.rangeLimit=null;
+    assert.ok(await placePowerAoeTemplate(f.input,f.runtime));
+    assert.equal(f.calls.find(call=>call[0]==='crosshair')[1].location.limitMaxRange,16);
+});
+
 const fixture = ({shape = 'medium', customShape, point = {x: 250, y: 50}, range = '8', distance = 1,
     origin = 'caster', cancel = false, createError = null, onShow = null} = {}) => {
     const calls = [], previews = [];

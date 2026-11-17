@@ -1824,6 +1824,9 @@ const collectTargetAttackProfile = (targetToken) => {
       (left, right) =>
         Number(left.value) - Number(right.value)
     )[0];
+  const powerDefense=!isInlineAoe ? rofServices.powerTargetDefense?.(targetActor,
+    Math.max(0,-Number(bestIllumination?.value ?? 0))) ?? 0 : 0;
+  if(powerDefense)additionalMods.push({label:"Power Modifiers: Defense",value:-powerDefense});
 
   for (const targetItem of targetActor?.items ?? []) {
     const rawCover = Number(targetItem.system?.cover);

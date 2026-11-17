@@ -13,6 +13,7 @@ import { prepareWeaponDamageModifier } from '../services/WeaponDamageModifier.js
 import { isPowerAoeItem, getPowerAoeSettings, POWER_AOE_SHAPES } from '../services/AoeItemFlags.js';
 import { runPowerAoe } from '../services/PowerAoeCast.js';
 import {canUsePropertiesCombat} from '../services/PropertiesCombat.js';
+import {renderPowerModifiers, readPowerModifiers, preparePowerCast, bindPowerModifierPreview, frozenPowerTargets, selectPowerTargets} from '../services/PowerModifiers.js';
 
 export default class ItemDialog {
     constructor(actor,itemId,operator=null,options={}){
@@ -55,16 +56,37 @@ export default class ItemDialog {
     }
 
     async executePowerAoe(html,actionType='skill',actionId='',damageOverride=null){
+        let power;
+        try { power=this.preparePower(html,actionId); }
+        catch(error){ui.notifications.warn(error.message);return false;}
+        power.snapshot.activation=actionType!=='damage';
         return runPowerAoe({actor:this.actor,item:this.item,token:this.options.token,
+            powerCast:power.snapshot,
+            powerItem:power.item,
             shape:html.find('#power-aoe-shape')[0]?.value ?? getPowerAoeSettings(this.item).shape,
             extraPP:html.find('#extrapp')[0]?.value ?? 0,actionType,actionId,
             noPowerPoints:gb.systemSetting('noPowerPoints'),
             getActualPP:()=>new Char(this.actor).getActualPP(this.item.system.arcane),
             createRoll:()=>new ItemRoll(this.actor,this.item),
-            prepareRoll:roll=>this.processItemFormDialog(html,roll,actionType),
+            prepareRoll:roll=>this.processItemFormDialog(html,roll,actionType,undefined,null,power),
             performRoll:roll=>actionId ? roll.rollAction(actionId)
                 : actionType==='damage' ? roll.rollBaseDamage(damageOverride) : roll.rollBaseSkill()
         });
+    }
+
+    preparePower(html,actionId=''){
+        const prepared=preparePowerCast(this.item,readPowerModifiers(html,this.item),{
+            extraPP:html.find('#extrapp')[0]?.value ?? 0, actionId,damageAction:html.find('#actiondmg')[0]?.value ?? '',
+            shape:html.find('#power-aoe-shape')[0]?.value ?? '', targets:frozenPowerTargets()});
+        const canvasRef=globalThis.canvas;
+        const token=this.options.token ?? this.actor.token ??
+            (canvasRef?.tokens?.controlled ?? []).find(token=>token.actor?.uuid===this.actor.uuid);
+        prepared.snapshot.sourceTokenUuid=token?.document?.uuid ?? token?.uuid ?? '';
+        const gameRef=globalThis.game,c=prepared.snapshot.choices;
+        if(gameRef?.users && (c.fatigue || c.light || c.pace || c.lingering) &&
+            !Array.from(gameRef.users.values()).some(user=>user.isGM && user.active))
+            throw new Error('An active GM is required for automatic Power Modifier effects.');
+        return prepared;
     }
 
     async executeSystemItemAction(actionId){
@@ -414,30 +436,7 @@ export default class ItemDialog {
 
         /// ==> START POWER MODIFIERS
 
-        if (item.type=='power'){
-
-            const modifiers = item.effects.filter(e => e.type === "modifier");
-
-            if (modifiers){
-
-            content+=`<div class="swadetools-damage-actions swadetools-mod-add swadetools-mid-title"><h3>${gb.trans('PPMods','SWADE')}</h3></div>`; 
-            
-            content+=`<div class="swadetools-power-modifiers">`;
-
-            for (const e of modifiers) {
-            content += `
-                <label>
-                <input type="checkbox" class="swadetools-powermod-check" ${e.disabled ? "" : "checked"} data-id="${e.id}">
-                ${e.name}
-                </label>
-            `;
-            }   
-
-            content+='</div>';
-
-            }
-
-        }
+        if (item.type=='power') content+=renderPowerModifiers(item);
         
 
         /// ==> END POWER MODIFIERS
@@ -870,7 +869,8 @@ export default class ItemDialog {
                                 return this.executePowerAoe(html,action.type,id);
                             }
                             let itemRoll=new ItemRoll(this.actor,this.item)
-                            if (await this.processItemFormDialog(html,itemRoll,action.type)===false) return;
+                            if (await this.processItemFormDialog(html,itemRoll,action.type,undefined,null,
+                                item.type==='power' ? id : null)===false) return;
                             await itemRoll.rollAction(id);
                             itemRoll.display();
                         }
@@ -905,29 +905,10 @@ export default class ItemDialog {
                    
                 })
 
-                html.on('click','.swadetools-powermod-check', async ev => {
-                   
-      const id = ev.target.dataset.id;
-      const enabled = ev.target.checked;
-
-       gb.log(ev,id,enabled);
-
-      const effect = item.effects.get(id);
-      if(!effect) return;
-
-      await effect.update({ disabled: !enabled });
-
-      const cost = effect.system.cost ?? 0;
-
-    // span com valor original
-    html.find("span.swadetools-powercost").text(gb.getPPCostMod(item));
-   // const baseCost = Number(span.data("basecost"));
-
-
-    });
+                if (item.type==='power') bindPowerModifierPreview(html,item);
                 
             }
-        },{classes:['dialog swadetools-vertical']}).render(true);
+        },{classes:['dialog swadetools-vertical',...(item.type==='power'?['swadetools-power-window']:[])]}).render(true);
         }
         
     }
@@ -979,7 +960,28 @@ export default class ItemDialog {
         charRoll.display();
     } */
 
-    async processItemFormDialog(html,charRoll,actionType,modifierOverride,preparedWeaponDamage){
+    async processItemFormDialog(html,charRoll,actionType,modifierOverride,preparedWeaponDamage,preparedPower){
+        if (this.item.type==='power'){
+            try {
+                const power=typeof preparedPower==='string' ? this.preparePower(html,preparedPower) : preparedPower ?? this.preparePower(html);
+                power.snapshot.activation=actionType!=='damage';
+                if(power.snapshot.choices.selective && !isPowerAoeItem(this.item) && power.snapshot.targets.length){
+                    const ids=power.snapshot.targets.map(target=>target.uuid.split('.').at(-1));
+                    const selected=await selectPowerTargets({targetIds:ids,sceneId:globalThis.canvas?.scene?.id});
+                    if(selected===null)return false;
+                    power.snapshot.targets=power.snapshot.targets.filter(target=>selected.includes(target.uuid.split('.').at(-1)));
+                }
+                charRoll.setPowerModifiers(power.snapshot,power.item);
+                if (actionType!=='damage' && !gb.systemSetting('noPowerPoints') &&
+                    new Char(this.actor).getActualPP(this.item.system.arcane)<power.snapshot.cost){
+                    ui.notifications.warn(`Not enough Power Points (${power.snapshot.cost} required).`);
+                    return false;
+                }
+                if (gb.systemSetting('noPowerPoints') && actionType!=='damage'){
+                    charRoll.addModifier(Math.ceil(Number(this.item.system.pp || 0)/2)-Math.ceil(power.snapshot.cost/2),'Power Modifiers');
+                }
+            } catch(error){ui.notifications.warn(error.message);return false;}
+        }
         const source=this.options.propertiesSource;
         if (actionType==='damage' && source?.version===1 && canUsePropertiesCombat(this.item) &&
             source.actorUuid===this.actor?.uuid && source.itemUuid===this.item?.uuid){
@@ -1077,6 +1079,7 @@ export default class ItemDialog {
                 }
             }
             if (html.find('#illumination')[0] && !(weaponPanel && actionType==='damage') && !powerAoeDamage){
+                charRoll.addFlag('illuminationPenalty',({Dim:2,Dark:4,Pitch:6})[html.find('#illumination')[0].value] ?? 0);
                 switch (html.find('#illumination')[0].value) {
                     case 'Dim':
                         charRoll.addModifier(-2,gb.trans('Illumination.Dim','SWADE'));

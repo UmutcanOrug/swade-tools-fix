@@ -1,6 +1,7 @@
 
 import BasicRoll from './BasicRoll.js';
 import * as gb from './../gb.js';
+import {powerActivationCritical} from '../services/PowerModifiers.js';
 import Char from './Char.js';
 import {getPropertyStrength} from '../services/PropertiesCombat.js';
 
@@ -341,7 +342,7 @@ export default class CharRoll extends BasicRoll{
 
         if (this.item && this.manageshots){
            
-            if (this.flagUpdate?.powerAoe) {
+            if (this.flagUpdate?.powerAoe || this.flagUpdate?.powerCast) {
                 await this.countShots();
                 if (!this.canCast) return;
             } else this.countShots();
@@ -537,7 +538,7 @@ export default class CharRoll extends BasicRoll{
     powerCount(){
 
         // AoE damage cards (including innate powers) are not another casting.
-        if (this.item?.type==='power' && this.flagUpdate?.powerAoe &&
+        if (this.item?.type==='power' && (this.flagUpdate?.powerAoe || this.flagUpdate?.powerCast) &&
             (this.rolltype==='damage' || this.shotsUsed===0)) return;
 
        // console.log(this.rolltype);
@@ -549,7 +550,8 @@ export default class CharRoll extends BasicRoll{
 
            // let arcane=this.item.system.arcane
 
-            if (this.item.system?.innate || this.raiseCount()>=0){
+            if (this.item.system?.innate || (this.raiseCount()>=0 &&
+                !(this.flagUpdate?.powerCast && powerActivationCritical(this.roll,this.actor)))){
                 ppspent=this.shotsUsed;
             } else {
                 this.flavorAdd.end+=`<div>${gb.trans('FailedPP')}</div>`

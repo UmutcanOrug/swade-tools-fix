@@ -24,7 +24,7 @@ test('actual ESM startup graph loads with Properties opt-out and native Applicat
         }};
       (async()=>{
         await import(${JSON.stringify(entry)});
-        assert.equal(registrations.get('applyActiveEffect').length,1,'die steps register before actor preparation');
+        assert.equal(registrations.get('applyActiveEffect').length,2,'Properties die steps and Power Modifier changes register before actor preparation');
         await (await import(${JSON.stringify(settings)})).registerSettings();
         assert.equal(schemas.get('propertiesEnabled').default,false);
         assert.equal(schemas.get('propertiesEnabled').scope,'world');

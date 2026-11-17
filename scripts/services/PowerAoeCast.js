@@ -1,6 +1,7 @@
 import { placePowerAoeTemplate } from './PowerAoeTemplate.js';
 import {getPowerAoeSettings} from './AoeItemFlags.js';
 import { playAoeAnimation, withSuppressedAoeAutomation } from './AoeAnimationService.js';
+import {selectPowerTargets} from './PowerModifiers.js';
 
 const pendingCasts = new WeakSet();
 const pendingCorrections = new WeakSet();
@@ -35,7 +36,7 @@ export const settlePowerAoeCorrection = async ({message, rawTotal, modifier, cri
     const value=Number(modifier);
     if (!Number.isFinite(value)) throw new Error('Enter a numeric GM modifier.');
     const update={'flags.swade-tools.gmmod':value};
-    if (!flags?.powerAoe || flags.rolltype!=='skill' || Number(rawTotal)+value<4) return update;
+    if (!(flags?.powerAoe || flags?.powerCast) || flags.rolltype!=='skill' || Number(rawTotal)+value<4) return update;
     if (criticalFailure) throw new Error('A Critical Failure cannot be changed into a hit by a modifier.');
     const debt=flags.arcanefail;
     if (!debt?.arcaneItem) return update;
@@ -62,7 +63,7 @@ export const settlePowerAoeCorrection = async ({message, rawTotal, modifier, cri
 // Benny bookkeeping are deliberately not duplicated by this adapter.
 export const runPowerAoe = async (context, runtime = {}) => {
     const {actor, item, token, shape, extraPP = 0, actionType = 'skill', actionId = '',
-        createRoll, prepareRoll, performRoll, getActualPP, noPowerPoints = false} = context;
+        createRoll, prepareRoll, performRoll, getActualPP, noPowerPoints = false, powerCast} = context;
     const notify = runtime.notify ?? (message => globalThis.ui?.notifications?.warn(message));
     const place = runtime.place ?? placePowerAoeTemplate;
     const suppress = runtime.suppress ?? withSuppressedAoeAutomation;
@@ -80,7 +81,7 @@ export const runPowerAoe = async (context, runtime = {}) => {
     let placement;
     let rollStarted = false;
     try {
-        let cost = damageOnly || noPowerPoints ? 0 : getPowerAoeCost(item, extraPP, actionId);
+        let cost = damageOnly || noPowerPoints ? 0 : powerCast?.cost ?? getPowerAoeCost(item, extraPP, actionId);
         const checkPP = () => {
             if (damageOnly || noPowerPoints) return;
             const available = Number(getActualPP());
@@ -90,11 +91,20 @@ export const runPowerAoe = async (context, runtime = {}) => {
         };
         checkPP();
         const customShape = shape === 'custom' ? {...getPowerAoeSettings(item).customShape} : null;
-        placement = await place({actor, item, token, shape, ...(customShape ? {customShape} : {})});
+        placement = await place({actor, item:context.powerItem ?? item, token, shape,
+            rangeMultiplier:powerCast?.rangeMultiplier ?? 1,
+            ...(powerCast ? {rangeLimit:powerCast.rangeLimit,rangeSquares:powerCast.rangeSquares} : {}),
+            ...(customShape ? {customShape} : {})});
         if (!placement) return false;
+        if (powerCast?.choices.selective){
+            const selected=await (runtime.selectTargets ?? selectPowerTargets)(placement,runtime);
+            if (selected===null) return false;
+            if (!Array.isArray(selected) || selected.some(id=>!placement.targetIds.includes(id))) throw new Error('Selective targets changed.');
+            placement={...placement,targetIds:[...new Set(selected)]};
+        }
         // The sheet or PP pool can change while the cursor is being placed.
         if (!item.isOwner || !actor.isOwner) throw new Error('Power ownership changed.');
-        cost = damageOnly || noPowerPoints ? 0 : getPowerAoeCost(item, extraPP, actionId);
+        cost = damageOnly || noPowerPoints ? 0 : powerCast?.cost ?? getPowerAoeCost(item, extraPP, actionId);
         checkPP();
         const snapshot = {
             sceneId: placement.sceneId, templateId: placement.templateDocument.id,
@@ -103,6 +113,12 @@ export const runPowerAoe = async (context, runtime = {}) => {
             ...(customShape ? {customShape, geometry: {...placement.geometry}} : {})
         };
         const roll = createRoll();
+        if (powerCast){
+            const canvasRef=runtime.canvasRef ?? globalThis.canvas;
+            powerCast.sourceTokenUuid=placement.sourceToken.document?.uuid ?? `Scene.${snapshot.sceneId}.Token.${snapshot.sourceTokenId}`;
+            powerCast.targets=snapshot.targetIds.map(id=>canvasRef?.tokens?.get(id)).filter(token=>token?.actor)
+                .map(token=>({uuid:token.document?.uuid ?? `Scene.${snapshot.sceneId}.Token.${token.id}`,actorUuid:token.actor.uuid}));
+        }
         if (await prepareRoll(roll) === false) return false;
         roll.addFlag('powerAoe', snapshot);
         roll.useTarget(snapshot.targetIds.join(','));
@@ -119,6 +135,8 @@ export const runPowerAoe = async (context, runtime = {}) => {
         // with the frozen area targets, without charging a second casting cost.
         if (innate && item.system?.damage) {
             const damage = createRoll();
+            if (powerCast) damage.setPowerModifiers(roll.flagUpdate.powerCast);
+            if (powerCast) damage.addFlag('powerCastActivation',true);
             damage.addFlag('powerAoe', snapshot);
             damage.useTarget(snapshot.targetIds.join(','));
             damage.manageshots = false;

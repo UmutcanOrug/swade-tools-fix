@@ -189,7 +189,7 @@ const destroyPreview = (preview, baseTemplateClass, configRef) => {
  * The caller owns casting/PP and chat cards; this service never rolls, spends resources, or targets tokens.
  */
 const placeNativeAoeTemplate = async ({actor, item, token, shape, customShape, origin: explicitOrigin,
-    weapon = false, createDocument = true}, runtime = {}) => {
+    weapon = false, createDocument = true, rangeMultiplier = 1, rangeLimit, rangeSquares}, runtime = {}) => {
     const canvasRef = runtime.canvasRef ?? globalThis.canvas;
     const gameRef = runtime.gameRef ?? globalThis.game;
     const sequencerRef = runtime.sequencerRef ?? globalThis.Sequencer;
@@ -285,7 +285,11 @@ const placeNativeAoeTemplate = async ({actor, item, token, shape, customShape, o
             data = buildData(target);
             if (preview) refreshPreview(preview, data);
         };
-        const range = weapon || directional && !freeOrigin ? null : getNumericPowerRange(item);
+        const baseRange = weapon || directional && !freeOrigin ? null : getNumericPowerRange(item);
+        if (![1,2,3].includes(rangeMultiplier)) throw new Error('Choose a valid Power range multiplier.');
+        const overrideRange=Number.isFinite(rangeSquares) ? rangeSquares*Number(scene.grid.distance)
+            : Number.isFinite(rangeLimit) ? rangeLimit : null;
+        const range = weapon || directional && !freeOrigin ? null : overrideRange ?? (baseRange === null ? null : baseRange * rangeMultiplier);
         const radius = directional ? Number(scene.grid.distance) * 0.05 : data.distance;
         const crosshairConfig = {
             t: 'circle', distance: radius, distanceMin: radius, distanceMax: radius,

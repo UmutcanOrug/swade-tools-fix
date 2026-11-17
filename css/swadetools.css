@@ -394,6 +394,32 @@ width: calc(100% - 47px);
             display: flex;
             align-items: center;
         }
+        .swadetools-power-cast {
+            border-top: 1px solid #888;
+            margin-top: 8px;
+            padding-top: 6px;
+            min-width: 0;
+        }
+        .swadetools-power-cast h3,
+        .swadetools-power-preview { grid-column: 1 / -1; margin: 2px 0; }
+        .swadetools-power-cast .swadetools-power-choice {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            min-width: 0;
+            text-align: left;
+        }
+        .swadetools-power-choice select { width: 100%; min-width: 0; }
+        .swadetools-power-check { gap: 4px; font-size: 12px; overflow-wrap: anywhere; }
+        .swadetools-power-check input { flex: 0 0 16px; }
+        .swadetools-power-preview { font-size: 12px; padding: 4px 0; border-top: 1px solid #999; }
+        .swadetools-power-cast-summary { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+        .swadetools-power-window .window-content { max-height: calc(100vh - 90px); overflow-y: auto; }
+        .swadetools-power-window .dialog-buttons { position: sticky; bottom: 0; background: var(--color-bg, #e5e2d5); padding-top: 5px; z-index: 1; }
+        .swadetools-selective-targets { display: flex; flex-direction: column; gap: 4px; }
+        @media (max-width: 420px) {
+            .swadetools-power-cast { grid-template-columns: minmax(0, 1fr); }
+        }
 
         .swadetools-damage-actions.swadetools-mid-title {
             grid-column: span 2;

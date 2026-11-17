@@ -11,6 +11,8 @@ import {canUsePropertiesCombat, getPropertyTargetModifiers, getPropertySoakModif
     propertyAttackType, propertySourceForTarget} from '../services/PropertiesCombat.js';
 import {registerPropertyCandidate, renderPropertyCandidates, applyPropertiesForEvent, getResolvedPropertyOutcome} from '../services/PropertiesEffects.js';
 import {isPropertiesEnabled} from '../services/PropertiesRules.js';
+import {resolvePowerModifierTarget, resolvePowerModifierDamage, powerTargetDefense, endPowerModifierCast} from '../services/PowerModifierEffects.js';
+import {escapePowerHTML, powerActivationCritical} from '../services/PowerModifiers.js';
 
 export default class RollControl {
     
@@ -102,7 +104,7 @@ export default class RollControl {
                               
                                         
                                         update['flags.swade-tools.gmmod']=gmmod;
-                                        if (this.chat.flags['swade-tools']?.powerAoe){
+                                        if (this.chat.flags['swade-tools']?.powerAoe || this.chat.flags['swade-tools']?.powerCast){
                                             const caster=this.getActor();
                                             const item=caster?.items.get(this.chat.flags['swade-tools'].itemroll);
                                             if (!caster || !item){ui.notifications.warn('The original power caster is no longer available.');return;}
@@ -476,6 +478,7 @@ export default class RollControl {
 
    async findTargets(){
         this.propertiesInputs=[];
+        this.powerModifierInputs=[];
         if (this.chat.flags["swade-tools"]?.itemroll || this.rolltype=='soak' ||
             this.chat.flags['swade-tools']?.aoeFireDamage){
 
@@ -490,7 +493,7 @@ export default class RollControl {
             if (areaFlags.aoeFireDamage){
                 const target=getAoeFireDamageTarget(this.chat);
                 this.targets=target ? [target] : [];
-                if (!target) this.html.append('<div class="swadetools-fire-unavailable">Fire target unavailable. Open the original scene to apply damage.</div>');
+                if (!target) this.html.append(`<div class="swadetools-fire-unavailable">${areaFlags.aoeFire?.kind==='powerLingering'?'Lingering Damage':'Fire'} target unavailable. Open the original scene to apply damage.</div>`);
             } else if (powerArea || weaponArea){
                 const area=powerArea ?? weaponArea;
                 const ids=powerArea ? area.targetIds ?? [] : (area.targets ?? [])
@@ -499,6 +502,11 @@ export default class RollControl {
                 this.targets=area.sceneId===canvas.scene?.id ? [...new Set(ids)]
                     .map(id=>canvas.tokens.get(id)).filter(token=>token?.actor) : [];
                 if (powerArea && globalThis.game?.scenes?.get && !this.getActor()) this.targets=[];
+            } else if (areaFlags.powerCast){
+                this.targets=areaFlags.powerCast.targets.filter(bound=>bound.uuid.startsWith(`Scene.${canvas.scene?.id}.Token.`))
+                    .map(bound=>({bound,token:canvas.tokens.get(bound.uuid.split('.').at(-1))}))
+                    .filter(({bound,token})=>token?.actor?.uuid===bound.actorUuid && token.document?.uuid===bound.uuid)
+                    .map(({token})=>token);
             } else if (this.chat.flags["swade-tools"].usetarget){
 
                 let usetargets=this.chat.flags["swade-tools"].usetarget.split(',');
@@ -554,6 +562,11 @@ export default class RollControl {
 
                     } else if (rolltype=='damage'){
                         this.damageTarget(target);
+                        if (areaFlags.powerCastActivation && areaFlags.powerCast?.innate){
+                            const owner=this.getItemOwner();
+                            this.powerModifierInputs.push({message:this.chat,actor:this.getActor(),
+                                item:owner.items.get(areaFlags.itemroll),target,outcome:'hit',total:this.roll.total,critical:false,innate:true});
+                        }
                         
 
                         
@@ -750,6 +763,31 @@ export default class RollControl {
         for (const input of this.propertiesInputs) await registerPropertyCandidate(input);
         const effects=renderPropertyCandidates(this.chat);
         if (effects && !this.html.find('.swadetools-properties-chat').length) this.html.append(effects);
+        let canEndPower=false;
+        for (const input of this.powerModifierInputs){
+            try {
+                const result=await resolvePowerModifierTarget(input);
+                if(result && !['ended','review'].includes(result.status))canEndPower=true;
+                if (result?.status==='pending'){
+                    const id=input.target.id;
+                    this.html.append(`<div class="swadetools-power-effect-result"><button type="button" data-power-confirm="${id}"><i class="fas fa-check"></i> ${escapePowerHTML(input.target.name)}: Confirm Affected</button></div>`);
+                    this.html.on('click',`[data-power-confirm="${id}"]`,async event=>{
+                        event.currentTarget.disabled=true;
+                        try {const result=await resolvePowerModifierTarget({...input,confirmed:true});
+                            event.currentTarget.textContent=result?.status==='applied'?'Effects Applied':'Needs Review';}
+                        catch(error){ui.notifications.warn(error.message);event.currentTarget.disabled=false;}
+                    });
+                } else if (result?.status==='applied') this.html.append(`<div class="swadetools-power-effect-result">${result.fatiguePending?'Effects Active; Fatigue Pending Damage':'Power Modifiers Applied'}</div>`);
+            } catch(error){console.warn('SWADE Tools | Power Modifiers',error);ui.notifications.warn(error.message);}
+        }
+        if (canEndPower){
+            this.html.append('<button type="button" data-power-end-effects><i class="fas fa-stop"></i> End Power Effects</button>');
+            this.html.on('click','[data-power-end-effects]',async event=>{
+                event.currentTarget.disabled=true;
+                try {await endPowerModifierCast(this.chat);event.currentTarget.textContent='Effects Ended';}
+                catch(error){ui.notifications.warn(error.message);event.currentTarget.disabled=false;}
+            });
+        }
     }
 
 
@@ -798,6 +836,18 @@ export default class RollControl {
                 const document=game.scenes?.get(area.sceneId)?.tokens?.get(area.sourceTokenId);
                 return orToken ? document?.object ?? null : document?.actor ?? null;
             }
+            const cast=this.chat.flags['swade-tools']?.powerCast;
+            if(cast){
+                const parts=/^Scene\.([^.]+)\.Token\.([^.]+)$/.exec(cast.sourceTokenUuid ?? '');
+                if(parts){
+                    const document=game.scenes?.get(parts[1])?.tokens?.get(parts[2]);
+                    if(document?.actor?.uuid!==cast.actorUuid)return null;
+                    return orToken ? document.object ?? null : document.actor;
+                }
+                const actor=game.actors?.get(this.chat.flags['swade-tools'].useactor);
+                if(actor?.uuid!==cast.actorUuid)return null;
+                return orToken ? canvas.tokens?.placeables?.find(token=>token.actor?.uuid===actor.uuid) ?? null : actor;
+            }
         
             if (this.chat.flags["swade-tools"]?.usetoken){
                 let tokenid=this.chat.flags["swade-tools"].usetoken
@@ -838,7 +888,7 @@ export default class RollControl {
             this.powerfail=true;
             
             if (rof<2){
-                const powerArea=this.chat.flags['swade-tools']?.powerAoe;
+                const powerArea=this.chat.flags['swade-tools']?.powerAoe || this.chat.flags['swade-tools']?.powerCast;
                 if (!(powerArea && this.isCritical()) && gb.raiseCount(this.roll.total+(powerArea ? this.gmmod : 0),4)>=0){
                     this.powerfail=false;
                 } 
@@ -1181,6 +1231,10 @@ export default class RollControl {
         targetNumber-=propertiesAdjustment;
         targetInfo+=`<li>Properties: ${propertiesAdjustment>0 ? '+' : ''}${propertiesAdjustment}</li>`;
     }
+    if (Array.from(target.actor.effects?.values?.() ?? target.actor.effects ?? []).some(effect=>effect.flags?.['swade-tools']?.powerModifier)){
+        targetNumber+=powerTargetDefense(target.actor,this.chat.flags['swade-tools']?.illuminationPenalty,
+            this.chat.flags['swade-tools']?.powerCast?.id);
+    }
 
     if (powertype!='template' && char.is('isVulnerable')){
         targetInfo+=`<li>${target.name} ${gb.trans('IsVulnerable')}: +2</li>`;
@@ -1240,6 +1294,11 @@ export default class RollControl {
                 outcome:addTarget,hitKey:String(rofnumb),attackType:propertiesAttackType,range:propertiesRange});
         }
 
+        if (this.chat.flags['swade-tools']?.powerCast){
+            if (this.isCritical()){addTarget='miss';rollDmg=false;raise=0;}
+            if (rollDmg) (this.powerModifierInputs ??= []).push({message:this.chat,actor:this.getActor(),item,target,
+                outcome:addTarget,total,critical:this.isCritical()});
+        }
         print+=`<div class="swadetools-targetwrap  swadetools-term-${addTarget}">`
 
        
@@ -1332,6 +1391,10 @@ export default class RollControl {
       
            
             let charRoll=new ItemRoll(shotgunDamage ? this.getActor() : this.getItemOwner(),item);
+            if (shotgunFlags?.powerCast){
+                charRoll.setPowerModifiers(shotgunFlags.powerCast);
+                charRoll.manageshots=false;
+            }
 
             if (shotgunFlags?.powerAoe){
                 if (shotgunFlags.powerAoe.sceneId!==canvas.scene?.id || !canvas.tokens.get(targetid)?.actor) return false;
@@ -1441,8 +1504,15 @@ export default class RollControl {
       
         let itemid=this.chat.flags["swade-tools"].itemroll;
         let item=this.chat.flags['swade-tools']?.aoeFireDamage
-            ? {system:{ap:0,isHeavyWeapon:false,actions:{additional:{}}}}
+            ? {system:{ap:this.chat.flags['swade-tools'].aoeFireDamage.ap ?? 0,isHeavyWeapon:this.chat.flags['swade-tools'].aoeFireDamage.heavyWeapon===true,actions:{additional:{}}}}
             : this.getItemOwner().items.get(itemid);
+        if (this.chat.flags['swade-tools']?.powerCast){
+            const cast=this.chat.flags['swade-tools'].powerCast;
+            item={...item,system:{...item.system,ap:cast.ap,isHeavyWeapon:cast.heavyWeapon,
+                actions:{...item.system.actions,additional:cast.damageActions}}};
+            item.system.actions.additional=Object.fromEntries(Object.entries(cast.damageActions).map(([id,action])=>
+                [id,{...action,ap:action.ap>0 ? action.ap+cast.choices.ap*2 : 0}]));
+        }
       
 
 
@@ -1488,7 +1558,7 @@ export default class RollControl {
      
      /// adds AP
         let apextra=0;
-        if (item.system.ap){
+        if (item.system.ap || this.chat.flags['swade-tools']?.powerCast){
 
             let useAp=item.system.ap
 
@@ -1503,7 +1573,7 @@ export default class RollControl {
 
             let useactor=this.getItemOwner();
 
-            if (useactor?.system?.stats?.globalMods?.ap && useactor?.system?.stats?.globalMods?.ap.length > 0) {
+            if (!this.chat.flags['swade-tools']?.aoeFireDamage && useactor?.system?.stats?.globalMods?.ap && useactor?.system?.stats?.globalMods?.ap.length > 0) {
                 useactor?.system?.stats?.globalMods?.ap.forEach(el => {
                     apextra=apextra+el.value
                 });
@@ -1715,8 +1785,12 @@ export default class RollControl {
                     charRoll.addFlag('propertiesSource',this.chat.flags['swade-tools'].propertiesSource);
                     charRoll.addFlag('propertiesRootId',this.chat.flags['swade-tools'].propertiesRootId);
                 }
+                const power=this.chat.flags['swade-tools']?.powerCast ?? this.chat.flags['swade-tools']?.powerModifierSource?.cast;
+                if(power)charRoll.addFlag('powerModifierSource',{cast:power});
                 if (this.chat.flags['swade-tools']?.aoeFireDamage){
                     charRoll.addFlag('aoeFireDamage',this.chat.flags['swade-tools'].aoeFireDamage);
+                    if(this.chat.flags['swade-tools']?.aoeFire?.kind==='powerLingering')
+                        charRoll.addFlag('aoeFire',this.chat.flags['swade-tools'].aoeFire);
                     charRoll.addFlag('aoeFireSoakActorUuid',tactor.uuid);
                     charRoll.addFlag('useactor',tactor.id);
                 }
@@ -1804,7 +1878,15 @@ export default class RollControl {
                 }
                 
             }
-            if (raisecount>=0) await this.applyPropertyDamageEvents(target,appliedPropertyWounds);
+            if (raisecount>=0){
+                await this.applyPropertyDamageEvents(target,appliedPropertyWounds);
+                if (this.chat.flags['swade-tools']?.powerCast || this.chat.flags['swade-tools']?.powerModifierSource ||
+                    this.chat.flags['swade-tools']?.aoeFire?.kind==='powerLingering'){
+                    try {await resolvePowerModifierDamage({message:this.chat,target});}
+                    catch(error){console.error('SWADE Tools | Damage applied; Power Modifiers need review',error);
+                        ui.notifications.warn('Damage was applied. Review Power Modifier effects before retrying.');}
+                }
+            }
         }
     }
 
@@ -2021,7 +2103,8 @@ export default class RollControl {
 
    // console.log(chatflags);
         
-        if (gb.raiseCount(roll.total)>=0 && chatflags?.arcanefail?.arcaneItem){
+        if (gb.raiseCount(roll.total)>=0 && chatflags?.arcanefail?.arcaneItem &&
+            !(chatflags.powerCast && powerActivationCritical(roll,actor))){
 
        //     console.log('pass');
 
@@ -2066,6 +2149,8 @@ export default class RollControl {
     }
 
     isCritical(){
+        if (this.rolltype!=='damage' && this.chat.flags['swade-tools']?.powerCast)
+            return powerActivationCritical(this.roll,this.getActor());
        // let rolltype=this.chat.data.flags?.["swade-tools"]?.rolltype;
 
         if (this.rolltype!='damage' && this.roll){

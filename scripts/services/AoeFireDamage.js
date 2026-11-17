@@ -27,7 +27,7 @@ export const getAoeFireDamageTarget = (message, runtime = {}) => {
 };
 
 export const createAoeFireDamageCard = async ({actor, targetUuid, damage, flavor = '', content = '',
-    privacy = {}, fireFlags = {}}, runtime = {}) => {
+    privacy = {}, fireFlags = {}, damageContext = {}}, runtime = {}) => {
     const match = TOKEN_UUID.exec(String(targetUuid ?? ''));
     const game = runtime.gameRef ?? globalThis.game;
     const ChatMessage = runtime.ChatMessageClass ?? globalThis.ChatMessage;
@@ -58,5 +58,6 @@ export const createAoeFireDamageCard = async ({actor, targetUuid, damage, flavor
         flavor: String(flavor), content: body, rolls: [messageRoll], whisper, blind: privacy?.blind === true,
         flags: {[SCOPE]: {rolltype: 'damage', userof: 1, useactor: actor.id,
             aoeFire: {...fireFlags}, aoeFireDamage: {version: 1, actorUuid: actor.uuid,
-                targetUuid: String(targetUuid), sceneId: match[1], targetId: match[2]}}}});
+                targetUuid: String(targetUuid), sceneId: match[1], targetId: match[2],
+                ...(fireFlags.kind==='powerLingering' ? {ap:Number(damageContext.ap)||0,heavyWeapon:damageContext.heavyWeapon===true} : {})}}}});
 };

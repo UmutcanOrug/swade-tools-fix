@@ -1,3 +1,50 @@
+## SWADE Tools 2.3.0 - Per-cast Power Modifiers
+
+Normal stable update for Foundry 13 / SWADE 5.x. Back up the world and reload
+all GM/player clients. Existing weapon AoE, Evade, Fire and Properties remain.
+
+- Added common Power Modifiers and live PP/damage/AP to the normal power panel.
+  Choices are per casting, including existing native item modifiers: opening,
+  changing and canceling no longer writes their enabled state to the item.
+- Blast/Bolt/Burst Damage adds +1d6 for +2 PP once, separate from Raise damage.
+  Damage Field upgrades to 2d6. SWIDs and canonical names/Trappings identify core
+  powers; custom powers retain native modifiers instead of a guessed upgrade.
+- Frozen damage/action/AP/Heavy choices survive target damage, item edits and
+  Benny cards. Damage does not recast or charge PP. Failed activation, remaining
+  Benny/GM-correction PP debt and No Power Points penalties retain native flows;
+  natural-one Critical Failures remain failures even with positive modifiers.
+- Selective offers target checkboxes after native area placement; cancel spends
+  nothing and cleans up. Large Blast costs +1 unless paid by a native modifier.
+  Range extends numeric and recognized attribute-based ranges, with scene scaling
+  for attribute distances. Touch/Self/Cone Template cannot gain Range extension.
+- Added primary-GM native target effects: capped Fatigue, Glow/Shroud Stealth
+  and defense, reversible Glow light, and best-only Hinder/Hurry ground Pace.
+  Damaging-power Fatigue waits for actual applied/remaining Soak damage unless
+  another selected target effect already affects that recipient.
+- Lingering rolls reduced base damage once at the exact target token's next
+  turn. Its selected Damage upgrade and AP/Heavy remain; Raise, Joker, Conviction
+  and global damage bonuses are not repeated. The GM applies native damage;
+  no extra PP, ammo, attack roll or automatic wounds are introduced.
+- Instant and timed expiry follow target/caster turns, with World Time outside
+  combat. Special durations expose bounded rounds/next-turn choices. Independent
+  casts retain their own effects; End Power Effects removes only that casting.
+  Durable claims guard simultaneous renders, Benny, repeated Apply/Soak and turn
+  replay. Late cards cannot add expired Fatigue; interrupted claims need GM review.
+
+Automatic target effects require the active primary GM to view the original
+scene for initial hit resolution. Non-damaging/resisted powers require that
+GM's Confirm Affected after the power's own resistance, then automate modifiers
+and expiry. This is not every power's main effect/resistance automation. Vehicle
+power effects are unsupported. Lingering requires a plain base dice formula;
+unsupported formulas fail before casting. AoE still requires Sequencer.
+
+All 701 isolated module tests pass. Headless production-panel previews passed
+at 1280x900, 390x640 and 360x400, including dynamic cost and visible footer.
+No live Foundry/Forge world was accessed or modified; perform a fresh test cast
+before play. The local rules PDF is not included in source or release assets.
+End managed Power effects before downgrading to 2.2.5, which cannot expire them.
+A separate 2.2.5 source ZIP is not a world-data backup.
+
 ## SWADE Tools 2.2.5 — Circular Blast Boundary Targets
 
 Normal stable update. Reload GM/player clients and test a new attack.

@@ -40,7 +40,7 @@ const mockHtml = content => {
 
 async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel=false,
     restoreLast=false, damageOnly=false, damageOverride, maxRof=3, rapidFire=false, consumeMode='ammo',
-    cache, tokenId='source',translations,missingVehicleOperator=false,damageProfiles,power=false}={}) {
+    cache, tokenId='source',translations,missingVehicleOperator=false,damageProfiles,power=false,noPowerPoints=false,gameRef}={}) {
     const [helpers,memory] = await Promise.all([load('WeaponPanelSettings'),load('LastWeaponSettings')]);
     const events=[], notices=[], dialogs=[];
     const item={id:'weapon',uuid:'Actor.shooter.Item.weapon',name:'Test Weapon',type:'weapon',isOwner:true,
@@ -68,6 +68,7 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         setWeaponDamageModifier(value){events.push(['damage-modifier',value]);}
         setConsumeAmmunition(value){events.push(['consume-ammunition',value]);}
         setWeaponTheDrop(value){events.push(['the-drop',value]);}
+        setPowerModifiers(value){events.push(['power-modifiers',value]);}
         usePP(value){events.push(['extra-pp',value]);}
         usingVehicle(){} raiseDmg(){events.push(['raise']);} useTarget(){}
         async rollBaseSkill(...args){events.push(['native-skill',...args]);}
@@ -76,9 +77,9 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
     }
     const gb=new Proxy({setting:key=>({unifiedRofExperimental:experimental,selectModifiers:true,
             askCalledShots:true,wildAttackSkills:'',shootingSkill:'Shooting',fightingSkill:'Fighting'}[key] ?? ''),
-        trans:(key,scope='SWADETOOLS')=>translations?.[`${scope}.${key}`] ?? key,systemSetting:()=>false,stringMod:()=>'',itemSkillMod:()=>0,realInt:value=>Number(value)||0,
+        trans:(key,scope='SWADETOOLS')=>translations?.[`${scope}.${key}`] ?? key,systemSetting:key=>key==='noPowerPoints' && noPowerPoints,stringMod:()=>'',itemSkillMod:()=>0,realInt:value=>Number(value)||0,
         getTemplatesHTML:()=>power ? '<button data-template="cone">Cone</button>' : '',getPPCostMod:()=>2,log(){},modButtons(){}}, {get:(object,key)=>object[key] ?? (()=>'')});
-    const ItemDialog=vm.runInNewContext(`${source}\nItemDialog;`,{gb,ItemRoll,CharRoll:class {},
+    const ItemDialog=vm.runInNewContext(`${source}\nItemDialog;`,{gb,ItemRoll,game:gameRef,CharRoll:class {},
         Char:class {hasEdgeSetting(key){return key==='Rapid Fire' && rapidFire;} hasAbilitySetting(){return false;} getActualPP(){return 9;}},
         Dialog:class {constructor(config,options){dialogs.push({config,options});} render(){return this;}},
         isAoeItem:()=>aoe,getAoeItemSettings:()=>({consumeMode}),getInlineRofMaximum:()=>maxRof,
@@ -89,7 +90,7 @@ async function panel({experimental=false, aoe=false, shotgun=false, doubleBarrel
         prepareWeaponDamageModifier:value=>value==='invalid' ? {ok:false,reason:'Invalid damage modifier.'} : {ok:true,formula:String(value??'').trim()},
         resolveWeaponSettingsContext:context=>memory.resolveWeaponSettingsContext({...context,userId:'test-user'}),
         getLastWeaponSettings:memory.getLastWeaponSettings,saveLastWeaponSettings:memory.saveLastWeaponSettings,
-        ...helpers,ui:{notifications:{warn:message=>notices.push(message)}},
+        ...helpers,...await load('PowerModifiers'),ui:{notifications:{warn:message=>notices.push(message)}},
         launchRofMacro:async(...args)=>events.push(['pool',...args]),
         launchAoeMacro:async(...args)=>events.push(['aoe',...args]),
         prepareNativeShotgunAttack:async setup=>{events.push(['shotgun-prepare',setup]);return {ok:true,

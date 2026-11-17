@@ -6,6 +6,9 @@ import {PropertiesLibraryMenu} from './services/PropertiesUI.js';
 import {synchronizePropertyEffects} from './services/PropertiesEffects.js';
 
 export const registerSettings=async()=>{
+    game.settings.register(gb.moduleName,'powerModifierLedger',{
+        default:{version:1,events:{}},scope:'world',type:Object,config:false
+    });
 
     const synchronizeProperties = () => {
         void synchronizePropertyEffects().catch(error => console.error('SWADE Tools | Properties synchronization failed', error));

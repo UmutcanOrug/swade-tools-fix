@@ -136,6 +136,30 @@ test('native fire damage applies AP zero against normal armor, never actor AP or
     assert.deepEqual([...f.game.user.targets], [f.other]);
 });
 
+test('Lingering native damage applies its frozen AP/Heavy Weapon and never borrows the victim AP bonuses',async()=>{
+    const f=await fixture(13);Object.assign(f.binding,{ap:2,heavyWeapon:true});
+    f.chat.flags['swade-tools'].aoeFire={kind:'powerLingering'};
+    f.context.gb.isHeavyArmor=()=>true;
+    await f.control.findTargets();
+    assert.doesNotMatch(f.control.targetShow,/HeavyArmorWarn/);
+    assert.match(f.control.targetShow,/1 Targetwound/);
+    await f.control.targetFunction(f.target.id,1);
+    assert.deepEqual(f.calls.wounds,[['Actor.victim',1]]);
+});
+
+test('ordinary Power damage uses cast AP/Heavy rather than subsequently edited power item values',async()=>{
+    const f=await fixture(18);
+    f.actor.system.stats.toughness={value:16,armor:10};
+    const item={id:'power',type:'power',system:{ap:9,isHeavyWeapon:false,actions:{additional:{}}}};
+    const caster={id:'caster',uuid:'Actor.caster',system:{stats:{globalMods:{ap:[]}}},items:new Map([['power',item]])};
+    delete f.chat.flags['swade-tools'].aoeFireDamage;
+    Object.assign(f.chat.flags['swade-tools'],{itemroll:'power',powerCast:{id:'cast',ap:2,heavyWeapon:true,
+        choices:{ap:1},damageActions:{},targets:[{uuid:f.target.document.uuid,actorUuid:f.actor.uuid}]}});
+    f.control.getActor=()=>caster;f.control.getItemOwner=()=>caster;f.context.gb.isHeavyArmor=()=>true;
+    await f.control.findTargets();assert.doesNotMatch(f.control.targetShow,/HeavyArmorWarn/);
+    assert.match(f.control.targetShow,/1 Targetwound/);assert.doesNotMatch(f.control.targetShow,/2 Targetwounds/);
+});
+
 test('native fire damage retains wound, soak, and GM apply controls without an inventory item', async () => {
     const f = await fixture(18);
     await f.control.findTargets();
